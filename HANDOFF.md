@@ -381,7 +381,7 @@ host's 0.5, pressed the canvas centre, and the page recorded `{ x: 201, y: 151, 
 1402 frames. This is loopback evidence only. It is not a LAN row.
 
 The relay last answered with `{"rooms":{"lan":1},"forwarded":18373}` during the window. A
-read after it returned `{"rooms":{},"forwarded":18577}`, so no client was left and the host
+read after it returned `{"rooms":{},"forwarded":18577}`, so no client remained and the host
 side was gone. No click row exists for this window.
 
 ## Two tasks for the Mac
