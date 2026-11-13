@@ -6,6 +6,49 @@ The Mac asked Windows for a LAN measurement. Two two-machine LAN windows and a L
 on 13 November 2026. This note records the results,
 the work that remains, and the next steps for both machines.
 
+## Request for Windows: one instrumented presence run
+
+The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
+whole LAN hour, while presence read 46 ms p50. The peer journal now records each sender's
+presence p50 beside the clock offset, in `presenceByPeer` and `clockOffset`. This run names the
+sender.
+
+The relay did not answer on port 8787 when I checked, so start it again first.
+
+1. Start the relay on Windows, in Git Bash:
+
+```
+cd spike
+HOST=0.0.0.0 node relay.js
+```
+
+2. Open the host page and hold it for 600 s:
+
+```
+http://192.168.8.161:8787/room-b.html?role=host&room=diag&peer=host&host=host&name=Host
+```
+
+3. Open a second page as `win2`, so the journal can separate two senders:
+
+```
+http://192.168.8.161:8787/room-b.html?role=peer&room=diag&peer=win2&host=host&name=Win2
+```
+
+4. Tell the Mac when both pages are live. The Mac runs this command from `spike`:
+
+```
+node peer.mjs --relay=192.168.8.161 --room=diag --peer=mac --seconds=600 --out=.runtime/diag-mac.json
+```
+
+5. Leave both pages alone for the 600 s, then stop them.
+
+Report the host start and end in UTC, and each page's presence p50, p95 and sample count. The
+host column is loopback, so it is a control and not a LAN figure. Do not scroll or edit during
+the run, because a game frame or a reload muddies a 46 ms figure.
+
+The Mac journal holds one row per second. Each row carries `rtt`, `clockOffset`, `latency` and
+`presenceByPeer` keyed by sender. I will read it and write the answer in this file.
+
 ## Task for Windows, 13 November 2026, now complete
 
 Both tasks ran and both journals exist. The rows below carry both halves.
@@ -914,7 +957,7 @@ node run.mjs --only=input    # one lane
 node run.mjs --soak=3600     # the hour run, loopback only
 node run.mjs --only=game --game=600   # two windows on one machine
 node --test relay.test.mjs   # room isolation
-cd ../core && npm test       # 65 unit tests
+cd ../core && npm test       # 66 unit tests
 ```
 
 The Zen check runs from the repo root:
