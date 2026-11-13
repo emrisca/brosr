@@ -53,6 +53,15 @@ test('a pong with no start stamp is dropped', () => {
   assert.equal(clock.offset(), 0);
 });
 
+test('a pong with no reply stamps is dropped', () => {
+  const clock = new ClockEstimator();
+  // The host reply carries t1 and t2 as zero. The round trip then looks tiny
+  // while the offset shifts by the whole wall clock, which is a broken sample.
+  assert.equal(clock.onPong({ type: 'pong', t0: 1000, t1: 0, t2: 0 }, 1005), null);
+  assert.equal(clock.samples, 0);
+  assert.equal(clock.offset(), 0);
+});
+
 test('a new measurement is due after the interval only', () => {
   // The fake clock starts at a real wall-clock value, because a start stamp of
   // zero means the reply lost it and the estimator drops that sample.

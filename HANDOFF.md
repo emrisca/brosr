@@ -156,7 +156,7 @@ sender's presence p50 next to the clock offset, so the next LAN hour names the s
   recorded `open-room-panel`. The Mac still has no proof from a frontmost window. See the two
   shortcut notes below.
 - **The suite.** Ten harness checks pass with `--soak=60`. Q7 held 527 samples at 2 ms p95, and
-  the soak held 2 ms p95. 66 core tests pass.
+  the soak held 2 ms p95. 67 core tests pass.
 
 ## The LAN hop, Windows half
 
@@ -942,7 +942,7 @@ match, in that order. Each one fails quietly.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
   The check drives the real buttons against a second peer. The Windows console proved the
   Ctrl+Alt+B chord from a foreground window. Spaces stay manual.
-- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 66 core
+- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 67 core
   tests pass. Three relay tests pass, including one for a busy relay port.
 
 ## Run it

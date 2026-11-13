@@ -34,7 +34,9 @@ export class ClockEstimator {
     const t3 = local;
     // A reply that lost its start stamp reads as a round trip of the whole wall
     // clock, and that bogus sample can then win the minimum for the session.
-    if (!(t0 > 0) || !Number.isFinite(t1) || !Number.isFinite(t2)) return null;
+    // A reply with no start stamp, or one with zero reply stamps, reads as a
+    // round trip of the whole wall clock and can win the minimum instead.
+    if (!(t0 > 0) || !(t1 > 0) || !(t2 > 0)) return null;
     const rtt = t3 - t0 - (t2 - t1);
     if (!(rtt >= 0)) return null;
     const offset = (t1 - t0 + (t2 - t3)) / 2;
