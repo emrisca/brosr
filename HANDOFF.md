@@ -114,9 +114,10 @@ clock reported 0, 154 and -1794600007694 ms for this pair, which was process sta
 hour's 46 ms is consistent with the old stamp, and this window does not reproduce it.
 
 The pages opened at 20:22:38 and stayed to 20:37:36, so both halves cover 20:25:41 to 20:32:41.
-Their counters in the section below stop at 20:23, before `mac` joined, so those samples are
-loopback only. The two Windows pages read an offset of 0 against each other, and one machine
-explains it. This run is 420 s, not 600 s, and room `diag` still holds its dead `mac` socket.
+The live-page table below stops at 20:23, before `mac` joined. The Windows half of the measured
+window is in the next section, and it runs every second from 20:25:42 to 20:35:43. The two
+Windows pages read an offset of 0 against each other, and one machine explains it. This run is
+420 s, not 600 s, and room `diag` still holds its dead `mac` socket.
 
 The loopback room lane also ran with the wall clock, in room `soak` on the Mac. It gave 374
 presence samples at 5 ms p50, 10 ms p95 and 52 ms worst, with 3 cursors per peer. That is one
@@ -142,6 +143,43 @@ and no longer a page start time. Neither page scrolls, and neither one reloads d
 The two pages stay open until the runner stops, no later than 20:37:36 UTC. Run the peer when
 you read this. Your journal is the one that names the sender, because the Windows pages see
 only each other until `mac` joins.
+
+### Windows half of the `diag2` run, 13 November 2026
+
+Your peer was in room `diag2` at 20:25:42 UTC, so the runner took that second as the window
+start and ran to 20:35:43 UTC. Both Windows pages held the room for the whole window.
+
+| Item | Host page | `win2` page |
+| --- | --- | --- |
+| Window | 20:25:42 to 20:35:43 UTC | same |
+| Peers | 2 (`win2`, `mac`) | 3 (host, `mac`, self) |
+| Presence samples | 200, the page cap | 200, the page cap |
+| Merged p50, p95, max, ms | 0, 1, 2 | 0, 2, 2 |
+| `host` sender p50, p95, max, ms | not listed | 0, 1, 2 |
+| `win2` sender p50, p95, max, ms | 0, 1, 2 | not listed |
+| `mac` sender p50, p95, max, ms | 1, 2, 3 | 1, 2, 3 |
+| Clock offset, ms | 0 | 0 |
+| Reconnects | 0 | 0 |
+| Scroll | 0 | 0 |
+| Error | none | none |
+
+The `mac` row is the one this run was for. Both pages read it at 1 ms p50, 2 ms p95 and 3 ms
+worst. That fits the 3 to 4 ms clock round trip from the soak hour, so the sender carries no
+46 ms here.
+
+The reading moved during the window. At 20:28:30 the host page's last 200 samples still read
+`mac` at 71 ms p50, 72 ms p95 and 73 ms worst. The same counter read 1 to 3 ms at 20:35:43.
+Both readings come from the runner's own writes, and the saved file holds the second one. Your
+journal shows the same settling, with 153 and 101 ms in its first rows.
+
+The clock is the difference from the 20:00 run. That run read `mac` at 3 to 4 ms on the host
+and 5 to 6 ms on `win2`. Its page clock offsets read 0 and 154 ms, because a page that starts its
+clock at zero puts the bias in the offset. `core/browser-entry.mjs` now stamps `Date.now()`, so
+both pages report a real 0 offset and the presence figure lands on the transit time.
+
+The relay forwarded 44,576 frames in total and listed no room after the runner stopped both
+pages at 20:35:43. I stop the relay now. The inbound rule `Brosr relay 8787` stays absent, and
+the Mac still reached the room, so do not read the absent rule as a block.
 
 ## Task for Windows, 13 November 2026, now complete
 
@@ -1078,8 +1116,9 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
    does a figure get quoted. The page clock is wall time now. The 20:25 window reads 4 to 5 ms
-   per sender, so the 46 ms figure no longer holds. The Windows page counters for that window
-   stop before `mac` joined, so they add no LAN row.
+   per sender on the Mac and 1 to 2 ms on the Windows pages. The 46 ms figure no longer holds.
+   The hour is what is still missing. M1 asks for four peers under 80 ms p95 for one hour. That
+   window holds 420 s of journal and 600 s of pages, with three clients.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A

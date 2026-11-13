@@ -328,9 +328,9 @@ window is 420 s rather than 600 s, and it is not a WAN window.
   build needs a signed XPI, which is M6.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
-- A LAN latency number for the hour. The 20:25 window reads 4 to 5 ms p50 on the Mac, and it
-  no longer disagrees with the clock exchange. That window is 420 s, and the Windows page
-  counters stop before `mac` joined.
+- A LAN latency number for the hour. The 20:25 window reads 4 to 5 ms p50 on the Mac and 1 to
+  2 ms on the Windows pages. It no longer disagrees with the clock exchange. That window is
+  420 s of journal and 600 s of pages with three clients, so M1 still waits on the hour.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
