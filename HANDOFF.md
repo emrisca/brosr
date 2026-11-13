@@ -1075,8 +1075,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
-   does a figure get quoted. The page clock is wall time now, and the 20:25 window reads 4 to
-   5 ms per sender, so the 46 ms figure is retired. The Windows half of that window is open.
+   does a figure get quoted. The page clock is wall time now. The 20:25 window reads 4 to 5 ms
+   per sender, so the 46 ms figure no longer holds. The Windows half of that window is open.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
