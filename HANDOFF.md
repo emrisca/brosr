@@ -1455,7 +1455,7 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - `tauri-releases` for the M6 packaging work.
 - `handoff` when you stop.
 
-## The `lan1` window, stopped at 22:14 UTC
+## The `lan1` window, still open at 22:19 UTC
 
 Room `lan1` held four clients across two machines from 21:47:42.034 UTC. The host page and `win2`
 ran on Windows, and `mac1` and `mac2` ran on the Mac.
@@ -1464,18 +1464,41 @@ The relay read four sockets in `lan1` at 22:09:48 and two at 22:13:00, 22:13:23,
 22:13:27. The Mac journals pin the cause. `mac2` reconnected at 22:11:15.573 and `mac1` at
 22:11:28.035, so the room held three for about three minutes and not for good.
 
-I read two samples as a departure and stopped the runner at 22:14, which was my mistake. Both
-peers read four again at 22:15:02 and 22:15:03, after the runner was gone. The window therefore
-ended early by my hand, and no LAN hour exists.
+### The 22:14 stop was Windows only
 
-Both readings stand, because they measure different layers. The relay table lost two sockets across
-four one-second samples. The Mac log counted one reconnect per peer, with no gap between its own
-samples.
+At 22:14 I read four relay samples as a departure and stopped the Windows reporters. That stop was
+my mistake, and it did not touch the Mac peers. PIDs `72741` and `72982` kept sampling without a
+break, so the window did not end at 22:14.
+
+The Mac counters at 22:19 read 1930 four-peer samples on each peer. No sample after 21:47:42 read
+fewer than four peers. The largest gap between samples was 1.12 s, and each peer reconnected once.
+
+Windows stopped its own reporters at 22:13:58, so its column covers about 26 minutes. I keep the
+Mac and Windows columns apart.
+
+A four-peer count from the Mac is not a live socket count. The relay table read two sockets at
+22:13, and `curl` to `/stats` now times out from the Mac. The live count is unknown, so the hour
+closes without it unless the relay answers again.
+
+The two datasets measure different layers. `/stats` counts live sockets, because `relay.js` deletes
+a client on close or error. A page's `peers` field is `state.peers.size`. `Room.leave` is the only
+thing that deletes an entry, so that map survives a dropped socket.
+
+The relay held the two Windows pages alone for at least 27 s. The Mac page kept reading four peers
+because nothing deleted `mac2` from its map. My earlier line that the room held three clients was
+wrong arithmetic, and this paragraph replaces it.
 
 Four-peer presence at 21:57 read p95 6 ms for `mac1` and 5 ms for `mac2` on the host page. The
 `win2` page read 7 ms and 6 ms. Reconnects read 0 and the clock offset read 0 and 1.
 
-No LAN hour exists. The four-peer span is shorter than 3600 s, so M1 stays partial.
+The four-peer span reaches 3600 s at 22:47:42 UTC. That span alone will not settle M1. The Mac map
+and the relay table disagree on the live count.
+
+Across the 1930 four-peer samples so far, the median p95 is 6 ms. The 95th percentile of p95 is
+35 ms.
+
+The worst sample read 3049 ms for `mac1` and 3048 ms for `mac2`. It sits at 21:51:07, when the
+ignore rewrite forced a Syncthing rebuild.
 
 The `.stignore` copies now match at 1509 bytes and md5 `283eba58`, taken from commit `d7e4ea0`.
 That file ignores `.git`, so the stray `~syncthing~main.tmp` refs are gone and `git for-each-ref`
