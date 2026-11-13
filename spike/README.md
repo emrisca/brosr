@@ -102,7 +102,18 @@ followed the ratio and held it.
 
 The Mac held 0.5 from 08:26:42 to its last two-peer sample at 08:39:12 UTC. The Windows row
 covers its first window, 08:26:38 to 08:30:43 UTC. No canvas click happened in either window,
-because the host opened `tall.html` and the peer driver clicks only on `board.html`.
+because the host opened `tall.html` and the peer driver then pressed only `board.html`.
+
+A third window paired the two. The Windows host opened `tall.html?grant=mac` at 09:05:31 UTC,
+the Mac joined at 09:05:32, and the host scrolled to 0.5 at 09:05:35. The Mac's last sample
+holds 0.5 with two peers and a granted click. The click did not land. At 0.5 the `#board`
+canvas sat above the viewport, so BiDi refused the press at (225, -986) in a 935 by 815
+viewport. The driver stopped on that error after 1184 samples, so this window gives no click
+row. `tall.html` now pins the canvas so a later window can land one.
+
+The same click path passed on loopback after that change. A local relay, a fake host at 0.5
+and the same driver produced `clickAt.scroll: 0.5` and `{ x: 201, y: 151, trusted: true }` in
+38 samples. The relay forwarded 1402 frames. That is loopback evidence, not a LAN number.
 
 This proves one LAN hop, one grant, one canvas click, one applied record and one followed
 scroll. It does not prove a WAN, an hour, or more than two machines.

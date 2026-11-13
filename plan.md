@@ -517,10 +517,10 @@ the grant book scoped by peer, tab and origin. It also holds the origin allowlis
 sensitive-field guard, CSS-path targeting and canvas fractions, and replay. In the spike a granted peer
 clicked a canvas, and the host drew the same point as a synthetic event. That click crossed the
 LAN on 13 November 2026, where the host applied one record and dropped none. A password field
-on the peer stayed local, and the host's copy stayed empty. A later window scrolled to 0.5 and
-drew no click, because the host opened `tall.html` and the peer had no reason to press there.
-Still missing from M4: a two-machine game, a click that pairs with a followed scroll, pointer
-lock, a wheel test, and the grant UI.
+on the peer stayed local, and the host's copy stayed empty. A later window held the host's 0.5 on the peer, and the peer pressed the canvas. BiDi refused
+the press because the canvas sat above the viewport. `tall.html` now pins the canvas,
+and the same click path passed on loopback. Still missing from M4: a two-machine game, a LAN
+click that pairs with a followed scroll, pointer lock, a wheel test, and the grant UI.
 
 ### M5 · Sidebar and onboarding
 

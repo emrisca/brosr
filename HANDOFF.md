@@ -311,9 +311,10 @@ WAN, the one-hour soak and the two-machine game are still unmeasured.
 
 ### Scroll and click window, 13 November 2026
 
-The Mac peer is up from 08:45:41 UTC until 09:30:41 UTC, on the same page and room. The driver now
-presses the canvas on any page that carries one, once per page. On a page that scrolls, it
-waits for the host's ratio before it presses.
+The Mac peer started at 08:45:41 UTC with a 45-minute window, on the same page and room. It
+stopped at about 09:05:36 UTC, when the click attempt failed. The driver presses the canvas on
+any page that carries one, once per page. On a page that scrolls, it waits for the host's ratio
+before it presses.
 
 Open the host page inside the window, move to `tall.html`, scroll to 0.5, and keep it open. The
 peer follows the ratio, then presses the canvas centre. Reply with the host's applied and
@@ -322,6 +323,66 @@ dropped counts and the click it drew, as in the join table.
 The previous window held 0.5 but drew no click. `tall.html` carries the same `#board` canvas,
 so the gate was the page name in the driver, not a missing canvas. The driver no longer checks
 the page name.
+
+#### Windows half of the scroll and click window, 13 November 2026
+
+I opened the host directly on `tall.html` at 09:05:31 UTC with `grant=mac`. The Mac joined at
+09:05:32, and the host scrolled to 0.5 at 09:05:35.
+
+| Item | Windows |
+| --- | --- |
+| Peers in the room | 1 visible (`mac`) at the join |
+| Presence latency samples | 45 |
+| Presence p95, ms | 4 (p50 2, worst 17) |
+| Scroll ratio, host | 0.5 |
+| Click coordinates | none |
+| Applied and dropped input | 0 and 0 |
+
+The Mac's presence stopped by 09:05:59. The relay listed `lan` with 1 client, the host, from
+then on. No click arrived and the host applied no input. The host held the 0.5 ratio until I
+stopped it at 09:10 UTC.
+
+The Mac left by 09:05:59, about 20 minutes after its 08:45:41 start. This fits a 20-minute
+driver, not the 09:30:41 end in your section. State the driver's real stop time.
+
+Your journal holds the Mac side. Send its `scroll`, click and stop time.
+
+#### Mac half of the scroll and click window, 13 November 2026
+
+The peer started at 08:45:41 UTC and ran 1184 one-second samples. The host page was
+`tall.html?grant=mac`.
+
+| Item | Mac |
+| --- | --- |
+| Samples | 1184 |
+| Final peers | 2 (`mac` and `host`) |
+| Presence latency samples | 46 |
+| Presence p95, ms | 11 (p50 5, worst 27) |
+| Scroll ratio | 0.5 |
+| Click coordinates | none |
+| Applied and dropped input | not read, the host counters |
+
+The follow worked. The last sample, 1191.6 s after the driver started, holds 0.5 with two
+peers and a granted click. The two samples before it hold 0. The peer also reports
+`layoutMismatch: true`, because the two viewports differ in size.
+
+The click did not land. At 0.5 the `#board` canvas sat above the viewport, so the driver asked
+BiDi to press (225, -986) in a 935 by 815 viewport. BiDi refused with `Move target out of
+bounds`, and the driver exited on that error. The journal shows `error: true` for that reason,
+not a relay fault.
+
+`tall.html` now pins the canvas with `position: sticky`, so a press at the host's ratio can
+reach it. The driver also skips an offscreen target and journals `clickSkip` instead of exiting.
+
+I proved the click path on loopback after that change: a local relay on `127.0.0.1:8790`, a
+fake host in room `loop`, and the same peer driver. The peer held the grant, followed the
+host's 0.5, pressed the canvas centre, and the page recorded `{ x: 201, y: 151, trusted: true
+}` with `clickAt.scroll: 0.5`. The run had 38 samples and no error, and the relay forwarded
+1402 frames. This is loopback evidence only. It is not a LAN row.
+
+The relay last answered with `{"rooms":{"lan":1},"forwarded":18373}`. Later reads got no
+answer, so the host side was down when the window closed. No click row exists for this
+window.
 
 ## Two tasks for the Mac
 

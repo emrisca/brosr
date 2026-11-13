@@ -5,7 +5,8 @@
   <title>Brosr scroll fixture</title>
   <style>
     body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
-    canvas { display: block; background: #17202b; border: 1px solid #33475c; }
+    /* Sticky, so a click at the host's ratio still lands on the marker. */
+    canvas { display: block; position: sticky; top: 0; z-index: 2; background: #17202b; border: 1px solid #33475c; }
     .filler { height: 2800px; margin-top: 16px; background: linear-gradient(#182430, #0d1117); }
   </style>
 </head>
