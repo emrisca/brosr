@@ -335,17 +335,16 @@ I opened the host directly on `tall.html` at 09:05:31 UTC with `grant=mac`. The 
 | Presence latency samples | 45 |
 | Presence p95, ms | 4 (p50 2, worst 17) |
 | Scroll ratio, host | 0.5 |
+| Layout mismatch | false |
 | Click coordinates | none |
 | Applied and dropped input | 0 and 0 |
 
-The Mac's presence stopped by 09:05:59. The relay listed `lan` with 1 client, the host, from
-then on. No click arrived and the host applied no input. The host held the 0.5 ratio until I
-stopped it at 09:10 UTC.
+The Mac's presence stopped at 09:05:36, when its click attempt failed. The relay listed `lan`
+with 1 client, the host, from then on. No click arrived and the host applied no input. The
+host held the 0.5 ratio until I stopped it at 09:10 UTC.
 
-The Mac left by 09:05:59, about 20 minutes after its 08:45:41 start. This fits a 20-minute
-driver, not the 09:30:41 end in your section. State the driver's real stop time.
-
-Your journal holds the Mac side. Send its `scroll`, click and stop time.
+The Mac's driver ended on a BiDi error, not a 20-minute timer. Its half below records the
+cause. This window's LAN click is still unmeasured.
 
 #### Mac half of the scroll and click window, 13 November 2026
 
@@ -383,6 +382,58 @@ host's 0.5, pressed the canvas centre, and the page recorded `{ x: 201, y: 151, 
 The relay last answered with `{"rooms":{"lan":1},"forwarded":18373}` during the window. A
 read after it returned `{"rooms":{},"forwarded":18577}`, so no client remained and the host
 side was gone. No click row exists for this window.
+
+#### Windows note on the scroll and click window, 13 November 2026
+
+I read your half. The cause is clear: at 0.5 the canvas sat above the viewport, so BiDi refused
+the press at y = -986. The host drew no click and applied no input. My earlier line blamed a
+20-minute driver. The driver had a 45-minute window and ended on the BiDi error, so I rewrote
+that line.
+
+The host stayed until 09:10, so your empty relay read came after my stop, not during your
+window.
+
+The host's `layoutMismatch` read `false`. Your half read `true`. The two fields disagree, so
+record both and do not combine them.
+
+Your last sample at 1191.6 s lands about 3 s before the host's 09:05:35.765 scroll by your
+08:45:41 start. The y = -986 point is the canvas at the 0.5 scroll, so the follow is real. The
+clocks differ by a few seconds.
+
+The host's 45 samples and your 46 presence samples cover different windows. Keep both p95
+values, 4 ms and 11 ms.
+
+Your loopback click proves the actuator path. It is loopback, not a LAN row. I see the sticky
+canvas in `tall.html`.
+
+Start a new peer window and state its start and end times. I will open the host on
+`tall.html`, scroll to 0.5, and hold it. The host will record the click and the applied and
+dropped counts.
+
+#### Peer window for the tall page, 13 November 2026
+
+The Mac peer is up before the host, as Windows asked. It started at 09:24:46 UTC and stops at
+09:54:46 UTC, a 30-minute window.
+
+| Item | Mac |
+| --- | --- |
+| Start | 09:24:46 UTC |
+| End | 09:54:46 UTC |
+| Samples | 10 in the first ten seconds |
+| Socket | 1 |
+| Peers | 0, the host has not opened |
+| Relay | `lan` with 1 client |
+
+The page is
+`http://192.168.8.161:8787/tall.html?role=peer&room=lan&peer=mac&host=host&name=Mac&capture=1&relay=8787`.
+`scroll` reads 0 and `granted` reads false until the host opens.
+
+Open the host on `tall.html?grant=mac` before 09:54:46 UTC. Scroll to 0.5 and hold it. The
+peer follows the ratio and presses the canvas centre. The sticky canvas keeps that point on
+screen, so BiDi should accept the press.
+
+Reply with the host's start time, its applied and dropped counts, the click it drew and its
+`layoutMismatch` value. The journal is `spike/.runtime/lan-mac-tall.json`.
 
 ## Two tasks for the Mac
 
