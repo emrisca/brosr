@@ -107,6 +107,17 @@ relay saw.
 
 Windows reports presence p50 and p95 per sender when its 3600 s window closes.
 
+#### Provisional read at 21:54 UTC
+
+This read covers the first six minutes of sixty. Median presence p95 read 30 ms on `mac1` and
+31 ms on `mac2`. That median sits under the 80 ms cap.
+
+One sender breaks the pattern. Both Mac journals put `host` at p50 29 ms and p95 972 ms, with a
+2632 ms worst frame. `win2` read p95 27 ms, and the two Mac peers read 4 to 6 ms.
+
+A single sender at 972 ms cannot pass an 80 ms p95 gate. M1 stays unproven, and six minutes is
+not an hour. The final verdict waits for the close at 22:48:12 UTC and the Windows counters.
+
 Windows also explains the counter gap in message `20261113-214017-win-0005`. Its `peers_seen`
 reads 3 for `host` and 4 for the other three pages, which matches `rooms.m1` = 3. The host had
 not counted one client, so the gap sits in the host view and not in the client count.
