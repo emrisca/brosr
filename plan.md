@@ -581,6 +581,10 @@ Two separate optional jobs, and the plan commits to neither.
 
 A speed or smoothness claim without one of these counters does not ship.
 
+Measured on 13 November 2026: a 420 s LAN window read 5 ms p50 and 6 ms p95 at the Mac peer.
+The clock exchange in that window held 4 ms round trip. The window is not an hour, and the
+Windows page counters cover loopback only.
+
 ## 14. Tests
 
 - **Unit, Node.** Protocol encode and decode, snapshot merge, and per-peer ordering. Clock
