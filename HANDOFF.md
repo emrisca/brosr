@@ -28,7 +28,10 @@ note says what Windows changed, what is ready, and what I need from the Mac.
 
 On 13 November 2026 the Windows relay bound on `0.0.0.0:8787`. From this machine,
 `http://192.168.8.161:8787/health` and `http://100.67.220.25:8787/health` both returned `ok`.
-The second address belongs to Tailscale. Use the address that the Mac can reach.
+The second address belongs to Tailscale. Use the address that the Mac can reach. A readiness
+run on 13 November 2026 answered on every local IPv4: `192.168.8.161`, `100.67.220.25`,
+`192.168.56.1` and `172.23.224.1`. The last two belong to virtual adapters. Try the Ethernet
+address first.
 
 I did not add the firewall rule. It changes the machine for every app, and this task did not
 ask for that. `node spike/lan-check.mjs` checks the relay bind on every local IPv4 and reports
@@ -71,6 +74,28 @@ http://192.168.8.161:8787/board.html?role=host&room=lan&peer=host&name=Host&gran
 ```
 
 If the Tailscale route is the one that works, replace `192.168.8.161` with `100.67.220.25`.
+
+## Mac answer, 13 November 2026
+
+The Mac is on `192.168.8.129`, the same /24 as `192.168.8.161`, and routes it over `en0`.
+ARP resolves the host at `4:7c:16:e5:a0:f0`, so the machine is on the LAN.
+
+| Probe | Result |
+| --- | --- |
+| `curl` to `192.168.8.161:8787/health` | timed out after 4 s |
+| `curl` to `100.67.220.25:8787/health` | timed out after 4 s |
+| `nc` to `192.168.8.161:8787` | timed out |
+| `nc` to `100.67.220.25:8787` | timed out |
+| ICMP ping | no reply |
+| Mac application firewall | disabled |
+
+Port 8787 answers on neither address. The host is on the LAN, so the missing inbound rule is
+the first suspect, and a relay that stopped is the second. Add the rule, keep the relay
+running, and reply in this section. If both are in place, check that Windows treats the
+network as private.
+
+The Mac built its bridge XPI at `spike/.runtime/bridge.xpi` with the panel and all nine core
+modules. The peer page waits on the address.
 
 ## Two tasks for the Mac
 

@@ -27,6 +27,26 @@ function latencyLabel(data) {
 
 let lastReply = null;
 
+function renderHistory(data) {
+  const list = $('history');
+  list.replaceChildren();
+  const history = Array.isArray(data.controlHistory)
+    ? data.controlHistory.slice(-3).reverse()
+    : [];
+  if (!history.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No control changes yet.';
+    list.append(empty);
+    return;
+  }
+  for (const entry of history) {
+    const row = document.createElement('li');
+    row.textContent = `${entry.peerId} ${entry.allowed ? 'granted' : 'revoked'}`;
+    list.append(row);
+  }
+}
+
 function render(reply) {
   lastReply = reply;
   const data = reply.data || {};
@@ -69,10 +89,20 @@ function render(reply) {
       badge.textContent = 'Control';
       row.append(badge);
     }
+    if (reply.role === 'host' && peer.id && !peer.self) {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'peer-control';
+      action.dataset.peer = peer.id;
+      action.textContent = peer.granted ? 'Revoke' : 'Grant';
+      action.addEventListener('click', () => control(!peer.granted, peer.id));
+      row.append(action);
+    }
     list.append(row);
   }
 
   $('latency').textContent = latencyLabel(data);
+  renderHistory(data);
 }
 
 function missing(reason) {
@@ -112,11 +142,11 @@ async function refresh() {
   }
 }
 
-async function control(allowed) {
+async function control(allowed, peer) {
   const tab = await targetTab();
   if (!tab) return notice('Open a room tab first.', true);
-  const peerId = $('peer').value.trim();
-  if (!peerId) return notice('Enter a peer id first.', true);
+  const peerId = String(peer || '').trim();
+  if (!peerId) return notice('Choose a peer first.', true);
   try {
     const reply = await browser.tabs.sendMessage(tab.id, {
       type: 'brosr:grant',
@@ -135,8 +165,6 @@ async function control(allowed) {
 }
 
 $('refresh').addEventListener('click', refresh);
-$('grant').addEventListener('click', () => control(true));
-$('revoke').addEventListener('click', () => control(false));
 refresh();
 setInterval(refresh, 2000);
 
@@ -156,6 +184,7 @@ setInterval(async () => {
         grantedPeers: [...document.querySelectorAll('#peers li[data-granted="1"]')].map(
           (node) => node.dataset.peer
         ),
+        history: [...document.querySelectorAll('#history li')].map((node) => node.textContent),
         selftest: new URLSearchParams(location.search).get('selftest'),
       },
     });
@@ -172,6 +201,7 @@ if (new URLSearchParams(location.search).get('selftest') === '1') {
   let stage = 'grant';
   let sent = false;
   let holdUntil = 0;
+  let selftestPeer = null;
   const timer = setInterval(async () => {
     tries += 1;
     await refresh();
@@ -196,8 +226,11 @@ if (new URLSearchParams(location.search).get('selftest') === '1') {
         return;
       }
       if (!sent) {
-        $('peer').value = guest.id;
-        $('grant').click();
+        selftestPeer = guest.id;
+        const button = document.querySelector(
+          `#peers li[data-peer="${guest.id}"] .peer-control`
+        );
+        if (button) button.click();
         sent = true;
       }
       return;
@@ -207,7 +240,10 @@ if (new URLSearchParams(location.search).get('selftest') === '1') {
       return;
     }
     if (!sent) {
-      $('revoke').click();
+      const button = selftestPeer
+        ? document.querySelector(`#peers li[data-peer="${selftestPeer}"] .peer-control`)
+        : null;
+      if (button) button.click();
       sent = true;
     }
     if (tries > 120) clearInterval(timer);
