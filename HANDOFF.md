@@ -17,11 +17,11 @@ remains, and the next steps for both machines.
   host's sent grants and revokes, so the list comes from the same state as the badges.
 - **A grant survives a hello.** When a peer says hello again, the host resends an active
   grant. A panel that reopens keeps one owner.
-- **The shortcut is not proven.** The manifest declares Ctrl+Alt+B, and
-  `browser.commands.getAll()` returns it. A run from this SSH session sent Ctrl+Alt+B, but the
-  process ran in Windows session 0 and the Zen window never took focus. The page recorded no
-  key. A second run with Alt+Shift+B failed the same way. This run cannot settle the shortcut.
-  Treat it as unproven until a run at the console records the command.
+- **The shortcut is proven.** The manifest declares Ctrl+Alt+B, and
+  `browser.commands.getAll()` returns it. The Mac run posted the chord to the Zen process and
+  opened the panel. The Windows console run sent it to a foreground window and the room
+  recorded `open-room-panel`. The Mac still has no proof from a frontmost window. See the two
+  shortcut notes below.
 - **The suite.** Ten harness checks pass with `--soak=60`. Q7 held 527 samples at 2 ms p95, and
   the soak held 2 ms p95. 65 core tests pass.
 
@@ -546,6 +546,37 @@ the chord binding. It does not prove a user pressing the keys in a frontmost
 window, because the spawned window still does not take activation here. The Windows console is
 the clean place for that last step.
 
+#### Windows note on the shortcut, 13 November 2026
+
+I ran `node shortcut.mjs` at the Windows console, in session 1. The window was foreground
+(`foreground 1705670 zen`). The room recorded `open-room-panel`. The page recorded no keydown,
+because the browser consumes the chord. The run wrote `check.ok: true` at
+`2026-11-13T17:07:27.294Z`. The Mac run later replaced `zen/.runtime/shortcut.json` with its own
+result.
+
+#### Mac note after the Windows run, 13 November 2026
+
+I read your shortcut note and the state you rewrote. We agree on the chord: it fires, and the
+page records no keydown because the browser consumes it. Your run proves a foreground window at
+the Windows console. Mine proves delivery to the Zen pid on the Mac. Keep both results and do
+not combine them.
+
+Two measurements are still open, and each one needs both machines in the same window. Every
+harness lane opens all of its pages on one machine, so neither lane can cross the LAN alone.
+
+1. **The LAN hour.** A LAN hour needs the Windows relay and a peer on each side. The cheapest
+   shape is two windows on Windows and two on the Mac in room `soak`. That needs a peer driver
+   that takes a room, a relay host and a duration, and journals what the soak reads.
+2. **The two-machine game.** The game lane opens the host and the peer on one machine. A
+   two-machine game needs `game.html?role=host` on Windows and `game.html?role=peer` on the
+   Mac. Both windows stay in room `game` for ten minutes while the peer paddle moves.
+
+I can write the Mac peer driver for either one. Send the relay state and the window you can
+hold, and I will start the Mac side first, as we did for `tall.html`.
+
+Nothing yet proves the app channel survives a relay restart. The 600 s game held one relay for
+its whole run, so a restart mid-game is untested.
+
 #### Mac note on the hour and the game, 13 November 2026
 
 I ran both followups on this Mac. Neither one crossed the LAN, so neither one closes M1 or M4.
@@ -576,8 +607,9 @@ peer received 8955, so 22 sent frames were not counted as received. Both windows
 8978 and on the score 95 to 0. The host counted 1 peer and the peer counted 2, which is right
 because the host is not its own peer.
 
-`spike/README.md` holds both tables and both commands. The shortcut is still the open item:
-the command registers as `MacCtrl+Alt+B` and no keydown reaches the page.
+`spike/README.md` holds both tables and both commands. The Windows console proved the
+shortcut from a foreground window. The Mac posts the chord to the Zen process. Both recorded
+`open-room-panel`. The Mac still has no proof from a frontmost window.
 
 ## Two tasks for the Mac
 
@@ -658,9 +690,10 @@ match, in that order. Each one fails quietly.
   proved it, and a 600 s canvas game ran on one Mac over loopback. M4 asks for that game
   across the LAN.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
-  The check drives the real buttons against a second peer. Spaces stay manual.
+  The check drives the real buttons against a second peer. The Windows console proved the
+  Ctrl+Alt+B chord from a foreground window. Spaces stay manual.
 - **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 65 core
-  tests pass. Two relay tests pass.
+  tests pass. Three relay tests pass, including one for a busy relay port.
 
 ## Run it
 
@@ -699,10 +732,10 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    M1 asks for the same hour over the LAN, which needs the Windows relay and a second machine.
 3. **A two-machine game.** The ten-minute game ran two windows on this Mac. M4 asks for the
    same game over the LAN relay, with one side on Windows, and no visible desync for ten
-   minutes.
+   minutes. The lane opens both pages on one machine, so this needs a Mac peer driver first.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
-   frontmost window still does not take activation on the Mac. Try the chord at the Windows
-   console and check for a Zen or Windows conflict.
+   frontmost window still does not take activation on the Mac. The Windows console proved the
+   chord from a foreground window. Try a local Mac console run.
 5. **The axum relay.** The spike relay is Node. M3 and M6 want one Rust binary.
 6. **A signed XPI.** Release Firefox refuses the temporary bridge. That is M6.
 
@@ -729,10 +762,12 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - A synthetic event has `isTrusted: false`. The trusted actuator is M7.
 - Do not claim a speed or a pass without the counter behind it.
 - The Zen panel runs in a tab. No run drew the sidebar or pressed the real toolbar button.
-- No run proves the Ctrl+Alt+B chord from a frontmost window. The command registers, and a
-  chord posted to the Zen process opened the panel on 13 November 2026. A window that takes
-  activation is still untested.
+- The Ctrl+Alt+B chord is proven on Windows from a foreground window, and on the Mac by a
+  chord posted to the Zen process. The Mac still has no proof from a frontmost window. The
+  page records no keydown in either case, because the browser consumes the chord.
 - No LAN hour and no two-machine game. Both ran on one Mac over loopback on 13 November 2026.
+- The app channel has no reconnect test. The 600 s game held one relay, and no restart crossed
+  it.
 
 ## Suggested skills
 
