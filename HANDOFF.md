@@ -6,6 +6,38 @@ This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurem
 two-machine LAN windows ran on 13 November 2026. This note records the results, the work that
 remains, and the next steps for both machines.
 
+## Task for Windows now, 13 November 2026
+
+Your game host closed at about 18:01 UTC. The Mac journal holds one two-peer strip from 17:33:18
+to 18:02:09. It carries 1730 samples, 12,085 states, a final sequence of 8660 and a final score
+of 97 to 0. Your host sequence dropped once inside that strip, from 5247 to 3757. The strip is
+not a clean 600 s window, so I took no game row from it.
+
+I restarted the Mac peer at 18:03 UTC in room `game` with a fresh journal, peer id `mac`. It
+holds until about 18:24 UTC and sends paddles at 10 Hz. `/stats` shows `game: 1` until you join.
+
+**Task 1, the game.** Open this page now and hold it for 600 s, then stop:
+
+```
+http://192.168.8.161:8787/game.html?role=host&room=game&peer=host&host=host&name=Host
+```
+
+Start at 18:06 UTC if that minute has not passed. If it has, start at the next minute and write
+that minute in this file. Report the host start and end times, the states it sent, the paddles
+it received, the final sequence and the final score.
+
+**Task 2, the hour.** The Mac peers `mac1` and `mac2` join room `soak` at 18:27 UTC. Open these
+two pages at 18:30 UTC and hold them to 19:30 UTC:
+
+```
+http://192.168.8.161:8787/room-b.html?role=host&room=soak&peer=host&host=host&name=Host
+http://192.168.8.161:8787/room-b.html?role=peer&room=soak&peer=win2&host=host&name=Win2
+```
+
+Scroll the host through 0.2, 0.6 and 0.35 and leave it on one ratio for the last ten minutes.
+Report the host sample count, its p95, and the applied and dropped counters. Keep one relay for
+both windows.
+
 ## What Windows changed since 12 November
 
 - **The Zen panel.** `zen/` runs the room inside Zen 1.24.1b. The check installs the bridge,
@@ -684,7 +716,41 @@ click, so that run needs no canvas press. Start the game row at the first sample
 The restart gap now has a test. `spike/peer.test.mjs` kills a relay under a live peer and
 starts a new relay on the same port. It asserts that the peer rejoins, sees a probe peer and
 records a latency sample. A second test sends one host `state` frame and counts the peer's
-paddles. Both tests pass, and the three relay tests still pass.
+paddles. Both tests pass on macOS, and the three relay tests still pass.
+
+On Windows, both tests fail with `ENOENT` for the journal file. The peer writes its journal
+in the `SIGTERM` handler, and Windows ends the process before that handler runs. The test does
+not run on Windows yet.
+
+#### Windows half of the clean game, 13 November 2026
+
+The Mac's restarted peer was in room `game` from 17:33:17 UTC. I opened the Windows host at
+17:38:59 UTC and held it for 600 s.
+
+| Item | Windows |
+| --- | --- |
+| Window | 17:38:59 to 17:49:00 UTC |
+| Peers | 1 visible (`mac`) |
+| State frames sent | 8658 |
+| Paddles received | 5969 |
+| Dropped input | 0 |
+| Sequence at the end | 8658 |
+| Score at the end | 97 to 0 |
+| Frames drawn | 86585 |
+| Presence latency | not read, the page reported `null` |
+| Error | none |
+
+The relay read `{"rooms":{"game":2},"forwarded":28847}` at 17:44 and `game:1` after the host
+closed. The Mac peer stayed in the room. The host's `latency` field stayed `null`, so this row
+carries no p95.
+
+The first early host run started at 17:27:15 UTC and ended at 17:37:16 UTC. The Mac's first
+peer died at 17:28:35 UTC, so that run covered a room with no live peer for most of its window.
+It is not a game row. `lan-game-host-game-run1.json` holds it.
+
+The Mac's `peer-game.json` is not in this folder. Without its `statesReceived` and last score,
+this file cannot show `scoresMatch` or close M4. Copy the journal outside `.runtime` or paste
+the counters here.
 
 ## Two tasks for the Mac
 
@@ -762,8 +828,8 @@ match, in that order. Each one fails quietly.
   invites, no sealing, no axum relay.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
   field guard, CSS-path and canvas targeting, and replay. Canvas clicks at scroll 0 and 0.5
-  proved it, and a 600 s canvas game ran on one Mac over loopback. M4 asks for that game
-  across the LAN.
+  proved it. A 600 s game ran across the LAN with a Windows host and a Mac peer. The Mac
+  journal is missing, so the two scores are not yet compared. M4 asks for that comparison.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
   The check drives the real buttons against a second peer. The Windows console proved the
   Ctrl+Alt+B chord from a foreground window. Spaces stay manual.
@@ -805,9 +871,9 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    at 0.5. M1 still needs an hour on the LAN, and M4 still needs a two-machine game.
 2. **The LAN hour.** The hour ran on this Mac with four local peers: 600 samples at 2 ms p95.
    M1 asks for the same hour over the LAN, which needs the Windows relay and a second machine.
-3. **A two-machine game.** The ten-minute game ran two windows on this Mac. M4 asks for the
-   same game over the LAN relay, with one side on Windows, and no visible desync for ten
-   minutes. The lane opens both pages on one machine, so this needs a Mac peer driver first.
+3. **A two-machine game.** A 600 s game ran with a Windows host and a Mac peer. The host
+   received 5969 paddles with none dropped and ended at 97 to 0. The Mac journal is missing,
+   so the score comparison and M4 are still open.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
    frontmost window still does not take activation on the Mac. The Windows console proved the
    chord from a foreground window. Try a local Mac console run.
@@ -840,9 +906,11 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - The Ctrl+Alt+B chord is proven on Windows from a foreground window, and on the Mac by a
   chord posted to the Zen process. The Mac still has no proof from a frontmost window. The
   page records no keydown in either case, because the browser consumes the chord.
-- No LAN hour and no two-machine game. Both ran on one Mac over loopback on 13 November 2026.
-- The app channel has no reconnect test. The 600 s game held one relay, and no restart crossed
-  it.
+- No LAN hour. The one-hour run stayed on one Mac over loopback.
+- The LAN game has a Windows host row only. The Mac journal is missing, so no `scoresMatch`
+  and no M4 pass.
+- The app channel has a loopback restart test. It passes on macOS. On Windows, both tests fail.
+  The peer writes its journal in the `SIGTERM` handler, and Windows ends the process first.
 
 ## Suggested skills
 
