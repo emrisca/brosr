@@ -173,8 +173,9 @@ Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each
 `.agents/skills` and carry a write time of 21:51:07 or 21:51:08 UTC. The presence peak of
 2785 ms landed at 21:51:07.322 on `mac1` and 2789 ms at 21:51:07.203 on `mac2`.
 
-The two times agree to the second. A Syncthing write of hundreds of files is the leading cause
-of the burst. That is a correlation and not proof, so the next hour should run with sync idle.
+The two times agree to the second. Syncthing wrote 203 of the temps at 21:51:07 and 275 at
+21:51:08. None is zero length, so every temp received bytes before it stopped.
+
 #### Two write storms, 104 s apart
 
 Windows answered in `win-0026` and `win-0028`. Its own command cleared `apps/brosr/.agents/skills`, and
@@ -185,21 +186,47 @@ The Mac wrote 478 temp files at 21:51:07 and 21:51:08. That is 104 s before Wind
 command at 21:52:51. Windows reads the two events as one, and the clock says they are two storms.
 
 The earlier storm owns the 2785 ms peak. The later one owns the 972 ms spell. Neither cause is
-the relay, and storm A still has no named trigger.
+the relay. Storm A now has a named trigger, recorded below.
 
 The Mac now holds 478 temps and 0 conflict copies, with
 `.agents` present and 61 skill folders. Windows holds 26 temps and 4
 conflict copies. Neither side has a quiet tree.
+
+#### Storm A: the ignore file was rewritten six seconds before
+
+The Mac `.stignore` carries mtime 21:51:01 UTC. The first temp carries 21:51:07, so that file was
+rewritten six seconds before the storm. Commit `d7e4ea0` landed at 21:51:01 UTC, the same second
+as that mtime. So the Mac's own commit rewrote the file and added the `.agents` rule. The
+rewrite reproduced the committed bytes exactly: 1509 bytes, 45 lines, no carriage returns, and no
+diff against `HEAD`.
+
+Syncthing reloads ignores when that file changes and can rebuild the index. That reload is the
+work storm A records. It needs no restart, and no delete from Windows.
+
+The evidence rules out a restart. The Mac Syncthing is PID 18025, started Thu 12 Nov 14:38:53, thirty
+hours before the storm. PID 18033 is its child at the same second, so the Mac runs one install
+and not two. The suggestion of a Mac restart near 21:50 does not hold.
+
+The 478 temps still sit there 75 minutes later and none is zero length. A finished apply renames
+a temp onto its target, so this batch stalled and left the tree half applied.
 #### The ignore rules may not be in force
 
-Windows reports `.stignore` at 1010 bytes and md5 `e4f1e9e9`. The Mac copy reads 1509 bytes
-at `283eba58`, so the two files differ and each side filters what the other does not.
+Both files equal their own `HEAD`, so neither is stale. The Mac blob is 1509 bytes at
+`283eba58` and carries `.agents`, added in commit `d7e4ea0`. The Windows blob is 1010 bytes at
+`e4f1e9e9` and carries no `.agents` rule. The two machines sit on different commits.
 
-The Mac `.stignore` names `.agents` as ignored, and 478 temps sit under `.agents/skills`. A path
-that should be out of scope carried sync temps, so the running instance may not read this file.
+Line endings do not explain the 499 byte gap. The Mac file holds 0 carriage returns, and Windows
+reports 33. CRLF accounts for 33 to 44 bytes at most, so the content itself differs.
+
+Windows offers `.agents` because its file holds no rule for it. The Mac applied that tree because
+its index still held it. The batch landed six seconds after the Mac rewrote the very file that
+names `.agents` as ignored.
 
 Windows reports that its command left no skill folder under `.agents`. The Mac still holds 61. The
 two machines disagree about a tree that at least one of them treats as local.
+
+The bus folders hold 57 more sync temps: 21 in `inbox`, 19 in `done` and 17 in `processing`.
+None of them ran an experiment, and each sits beside a message that already arrived.
 
 
 
@@ -498,7 +525,7 @@ address first.
 
 I added the inbound rule on 13 November 2026. It allows TCP 8787 on the **Public** profile,
 which is the profile on the Ethernet adapter `Emrys-5G`. `node spike/lan-check.mjs` checks the
-relay bind on every local IPv4 and reports whether the rule exists. Remove the rule after the
+relay bind on every local IPv4 and reports whether the rule exists. Delete the rule after the
 test:
 
 ```powershell
@@ -1334,7 +1361,7 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - uBlock Origin sideloads from an AMO XPI into a fresh profile. Check for `signedState: 2`.
 - An input frame must carry `peerId`, or the receiver refuses the grant lookup.
 - Two room tabs both say hello. The background must keep the host tab for control messages.
-- A reused Zen profile restores the old panel, and the old panel also drives control. Remove
+- A reused Zen profile restores the old panel, and the old panel also drives control. Delete
   the profile before a check run.
 - BiDi needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` to read an extension page.
 - A headful Zen build hangs on `browsingContext.create`. Reuse the window's own tab.
