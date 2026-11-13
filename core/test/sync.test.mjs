@@ -309,6 +309,24 @@ test('the published layout notice clears once the layouts agree again', () => {
   assert.equal(client.publish().layoutNotice.at, 1400);
 });
 
+test('two peers in a room report their ids, so a count is never a guess', () => {
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 1000,
+    send: () => {},
+  });
+  client.receive(encode({ type: 'hello', peerId: 'p2', name: 'P', colour: '#fff' }), 1000);
+  client.receive(encode({ type: 'hello', peerId: 'p3', name: 'Q', colour: '#eee' }), 1000);
+
+  // The journal reads peerIds off this roster, so the ids have to be here.
+  const listed = client.publish().peerList;
+  assert.deepEqual(listed.map((peer) => peer.id).sort(), ['p2', 'p3']);
+  assert.equal(listed.find((peer) => peer.id === 'p2').name, 'P');
+  assert.equal(listed.find((peer) => peer.id === 'p2').self, false);
+});
+
 test('a late joiner gets the page and the scroll from the host', () => {
   const view = { url: 'http://x/a.html', scroll: 0.4, fingerprint };
   const { client, sent, at } = hostWithView(() => view);
