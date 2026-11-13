@@ -118,6 +118,11 @@ that second, and `host` read 37 ms. Both Windows side pages carried the spell.
 The host carries a longer slow spell. Its per-sender p95 crossed 80 ms in 194 samples on both
 journals, against 31 or 32 for every other sender. The host p95 sat at 972 ms from 21:52:42 to
 21:54:14, when no burst was running.
+Windows answered in `win-0024` at 22:01. Its shell work cleared sync temps at 21:52:51 and
+answered ten messages from 21:53 to 21:54, on the machine that hosts the lan1 host page. That
+places the 972 ms spell on host-side load and not on the relay. Windows will not call the
+21:50:55 burst harmless.
+
 
 M1 stays unproven. A quarter of the window at a host p95 of 972 ms cannot pass an 80 ms cap, and
 thirteen minutes is not an hour.
@@ -160,7 +165,7 @@ folder. That is the leading suspect, not a proven cause. One check settles it. S
 and watch whether `SKILL.md` survives a restart of the other.
 
 `SKILL.md` went a third time tonight, at 21:55 UTC, and this time no conflict copy appeared. The
-Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each time.
+Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each time. Windows reports 16667 bytes and the Mac reads 16667 at md5 `36990cb1`, so both copies match.
 
 #### The burst lands on a Syncthing write
 
