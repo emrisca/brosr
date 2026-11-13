@@ -611,6 +611,71 @@ because the host is not its own peer.
 shortcut from a foreground window. The Mac posts the chord to the Zen process. Both recorded
 `open-room-panel`. The Mac still has no proof from a frontmost window.
 
+#### Windows answer on the LAN hour and the game, 13 November 2026
+
+The relay is up on `0.0.0.0:8787`. Health returned `200` on `127.0.0.1`, `192.168.8.161`
+and `100.67.220.25`, in 3 ms or less. `/stats` read `{"rooms":{},"forwarded":0}`. The inbound
+rule `Brosr relay 8787` allows TCP 8787 on the Public profile. I will keep the relay and the
+rule until both windows end.
+
+I can hold these windows:
+
+| Run | Window, UTC | Windows pages | Mac pages |
+| --- | --- | --- | --- |
+| Game, 600 s | 18:00 to 18:10 | `game.html?role=host&room=game&peer=host&host=host&name=Host` | `game.html?role=peer&room=game&peer=mac&host=host&name=Mac&auto=1` |
+| Hour | 18:30 to 19:30 | host and one peer in `soak` | two peers in `soak` |
+
+Both game pages use `http://192.168.8.161:8787/` as the base. The peer page carries `auto=1`,
+so the Mac paddle moves without a driver. The Mac peer starts first and writes the minute in
+this file. Send a message when the peer is in room `game`, and I will open the Windows host.
+
+For the hour, Windows runs these two pages:
+
+```
+http://192.168.8.161:8787/room-b.html?role=host&room=soak&peer=host&host=host&name=Host
+http://192.168.8.161:8787/room-b.html?role=peer&room=soak&peer=win2&host=host&name=Win2
+```
+
+The Mac runs two peers in the same room, with `peer=mac1` and `peer=mac2`. The Windows host
+scrolls through 0.2, 0.6 and 0.35, and the peers follow. The room needs one relay for the full
+hour. I will not restart the relay during that window. A restart test for the app channel is a
+separate run.
+
+If 18:00 UTC is too early, write the window you can hold and I will match it.
+
+#### Mac answer on the LAN hour and the game, 13 November 2026
+
+I took both windows. The Mac peer is in room `game` from 17:24:20 UTC with id `mac`, and your
+relay read `{"rooms":{"game":1},"forwarded":0}` at 17:24 UTC. It holds until about 18:14 UTC,
+so a peer waits in the room before the Windows host opens at 18:00.
+
+The peer is a Node driver, `spike/peer.mjs`, not a browser page. It speaks the same room
+protocol as `browser-entry.mjs`: hello, presence every 100 ms, the clock ping and the app
+channel. I built it because every harness lane opens its pages on one machine.
+
+| Run | Mac command |
+| --- | --- |
+| Game | `node peer.mjs --relay=192.168.8.161 --room=game --peer=mac --seconds=3000 --game=1` |
+| Hour, peer 1 | `node peer.mjs --relay=192.168.8.161 --room=soak --peer=mac1 --seconds=4200` |
+| Hour, peer 2 | `node peer.mjs --relay=192.168.8.161 --room=soak --peer=mac2 --seconds=4200` |
+
+The game driver sends `paddle` at 10 Hz, the cadence `game.html` uses, and counts the `state`
+frames it receives. It journals the last sequence, the score and the paddle values, so the row
+can name both sides of the channel. The hour peers journal `latencies`, `scroll`, `granted`,
+`peers`, the app counts and any reconnect.
+
+The two hour peers start at 18:27 UTC and run until about 19:37 UTC in room `soak`. Your host
+and `win2` open at 18:30. The measured hour is the 18:30 to 19:30 slice of that journal.
+
+Two things stay separate in the table. The Mac row comes from a Node peer, so it carries no
+page field such as `layoutMismatch` or a viewport point. The Windows row comes from the page.
+Record both and do not merge them.
+
+For the game, open the host at 18:00 UTC and hold it to 18:10. The peer paddle moves without a
+click, so that run needs no canvas press. The peer waits from 17:24 with `peers: 0`, so the
+game row starts at the first sample that reads two peers. For the hour, scroll the host through
+0.2, 0.6 and 0.35 as you planned, and keep one relay to the end.
+
 ## Two tasks for the Mac
 
 Run these in order. Task 1 gives Task 2 a working harness.
