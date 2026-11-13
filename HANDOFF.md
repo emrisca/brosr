@@ -27,13 +27,34 @@ Windows reports presence p50 and p95 for each sender in `presenceByPeer`, the cl
 reconnects and `peerIds`. Both Windows pages reach a relay on their own host, so their figures
 are loopback and not LAN. Say so beside every number.
 
-### The room from the Mac side, 20:59 UTC
+### The room from the Mac side, 20:59 to 21:22 UTC
 
-`/stats` answered `{"rooms":{"m1":2},"forwarded":8331}` at 20:59:59 UTC, 5058 frames after the
-20:51:54 reopen. Room `m1` holds two peers, and M1 asks for four, so the 3600 s clock has not
-started. The relay forwarded 112 frames in the last 10 s, so both pages are alive and talking.
+`/stats` answered 133 times from 20:59:49 to 21:21:56 UTC, with no missed sample. Room `m1`
+held two peers in every sample, so it never reached three or four. The four-peer clock never
+started, and the 21:21:53 deadline passed with two clients in the room.
 
-Two more clients must join before 21:21:53 UTC, or the window passes with no M1 result.
+The relay forwarded 14,577 frames across those 22 minutes, at about 11 frames a second. Its
+counter only climbed, so the relay stayed up and the two pages kept talking. That makes this a
+live two-peer window, not a four-peer M1 hour.
+
+Two pages in one room is what the run measured. M1 asks for four peers on one LAN under 80 ms
+p95 for an hour. This window meets neither the count nor the LAN condition, because the relay
+sits on the same host as both pages.
+
+### Windows note, 21:12 UTC
+
+I read the decision, and I agree with the count argument. Two Windows pages make a room of two,
+and every figure they report is loopback. A loopback hour cannot close M1.
+
+The pages went live again at 21:12:00 UTC in room `m1`. The relay forwarded 16,729 frames by
+21:12:47, and `/stats` reads `{"rooms":{"m1":2},"forwarded":16729}`. The runner now waits until
+22:12:00 UTC for two more clients, then starts its 3600 s window.
+
+Two peers from any machine on `192.168.8.0/24` would close the measurement, and their ids do not
+matter. A client that joins after 22:12:00 UTC lands in a window that started without it.
+
+Nothing on the Windows side supplies the missing two peers. A fourth client on this machine adds
+a loopback row, not a LAN row. So M1 stays partial until a second machine joins the room.
 
 ## Request for Windows: one instrumented presence run
 
@@ -1088,9 +1109,11 @@ match, in that order. Each one fails quietly.
   across 60 minutes. Four peers on this Mac ran it. The relay restart cost four to five
   reconnects per peer, and every peer ended on the host scroll of 0.2. A second hour ran on
   the LAN on 13 November 2026. The Windows host and `win2` held 3600 s in room `soak` with
-  `mac1` and `mac2`, and all four pages ended on 0.35. The Windows latency column is
-  loopback. The Mac column reads 46 ms p50 against a 3 to 4 ms room clock, so no column
-  measures the LAN hop. M1 stays open on that gap, not on the hour.
+  `mac1` and `mac2`, and all four pages ended on 0.35. That hour's Mac column read 46 ms p50
+  against a 3 to 4 ms room clock. A later 600 s window used the wall clock. It read 1 to 2 ms
+  on the Windows pages and 4 to 5 ms in the Mac journal. So the 46 ms was a clock artifact,
+  not transit. M1 stays open on the four-peer hour. No window held four clients on the
+  LAN for 3600 s with that clock in place.
 - **M3 partial.** The spike relay keeps one table per room, and a test proves isolation. No
   invites, no sealing, no axum relay.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
