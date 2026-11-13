@@ -1522,6 +1522,19 @@ the child holds port 8384. The earlier note that called them two installs is wro
 The temp files fit other causes. `.git` sits inside the synced folder, the ignore rewrite at 21:51:01
 forced a rebuild, and one checkout wrote CRLF. Nothing needs stopping.
 
+## The m1 loopback control
+
+Windows ran one hour of four pages on a single host, with every face on loopback. It closed at
+22:37:49 UTC after 3600 s. All four pages held, with 0 reconnects and worst p95 2 ms. The worst
+single sample was 236 ms, from win4 to win2.
+
+This row is a control, not a LAN measurement. One host and a loopback path say nothing about two
+machines on a shared network. M1 stays partial, and this row never enters the Mac or Windows
+latency columns.
+
+It does bound the code. With no network in the way, the room protocol held four peers for an hour
+without a reconnect or a stall.
+
 ## Syncthing over the tailnet
 
 Both devices carried `dynamic` only, so sync depended on discovery. The Windows side now lists
@@ -1533,7 +1546,20 @@ Windows to the Mac returned in 5 ms over a direct path.
 
 The GUI stays on `127.0.0.1:8384`. Tailscale Serve publishes it at
 `https://emrys-3.tailde46b4.ts.net/` for the tailnet only. One attempt set the GUI to `0.0.0.0`,
-which opened it on every interface, and I reverted it.
+which opened it on every interface, and I reverted it. The proxy hostname failed the Syncthing host
+check with 403, so the GUI config carries `insecureSkipHostcheck`. The listener is still loopback.
+
+## The `m1` control window
+
+Room `m1` ran four pages in one headless Zen on the Windows host for 3600 s, from 21:37:48.611.
+Every page read 0 reconnects. Every face read p95 2 ms or less. The worst single sample read 236 ms,
+from `win4` to `win2`.
+
+The host page listed three peers and the other pages listed four. That difference comes from the
+page counting its own entry.
+
+Four pages on one host exchange over loopback. This row is the control beside `lan1`, and it cannot
+close M1 on its own.
 
 ### Mac pin applied
 
@@ -1541,8 +1567,12 @@ The Mac now lists three addresses for the device `emrys`: `tcp://100.67.220.25:2
 `quic://100.67.220.25:22000` and `dynamic`. The write returned HTTP 200. The connection stayed up at
 `[fd7a:115c:a1e0::e035:dc19]:22000` with `isLocal false`.
 
-The Windows side still owes the reverse. It should hold `tcp://100.85.253.36:22000` and
-`quic://100.85.253.36:22000` for the device `5DM7YBB`, which is the Mac.
+Windows finished the reverse. Its `MacOS` device lists `dynamic`, `tcp://100.85.253.36:22000` and
+`quic://100.85.253.36:22000`. Its connections list reads the Mac at
+`[fd7a:115c:a1e0::501:fd24]:22000` over `tcp-server`.
+
+Both sides now name the other by tailnet address, so discovery is no longer the only path. The IPv4
+addresses are 100.67.220.25 for `emrys-3` and 100.85.253.36 for `4831`.
 
 ## Peer counts now expire
 
