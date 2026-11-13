@@ -678,7 +678,7 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 3. **A two-machine game.** The ten-minute game ran two windows on this Mac. M4 asks for the
    same game over the LAN relay, with one side on Windows, and no visible desync for ten
    minutes.
-4. **The shortcut.** It registers, and no run has fired it. The SSH run could not focus the
+4. **The shortcut.** It registers, and no run fired it. The SSH run could not focus the
    window, so it is not a product verdict. Try the chord at the Windows console, and check for a
    Zen or Windows conflict.
 5. **The axum relay.** The spike relay is Node. M3 and M6 want one Rust binary.

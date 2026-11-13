@@ -58,7 +58,8 @@ host room and a second peer tab. It drives the panel's Grant and Revoke buttons,
 both tab datasets and the panel's own DOM. It writes `zen/.runtime/results.json`, then it
 kills the browser processes. The check deletes the default profile first, because a restored
 panel also drives control. `shortcut.mjs` is a separate headful attempt at the Ctrl+Alt+B
-chord. It fails on this machine: Windows sends the chord, and the bridge does not receive it.
+chord. It cannot prove the chord from an SSH session. The process runs in Windows session 0,
+the window never takes focus, and the page records no key.
 
 To use the room by hand, start the relay, then run the command `profile.mjs` prints. Load the XPI
 from `about:debugging` when the profile is new.
@@ -74,7 +75,8 @@ from `about:debugging` when the profile is new.
   Zen starts. Without it BiDi refuses the extension context. The run uses one host and one
   peer on this machine, so a real LAN run is still open.
 - The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. No run
-  proved the chord. A headful Windows run sent it, and the bridge did not receive it.
+  proved the chord. The SSH run sent it, but the window never took focus, so the page recorded
+  no key. That is not a product verdict.
 - A room does not create a space. That needs the session store format, and the plan does not
   guess at it.
 - uBlock Origin installs from AMO as usual. Zen does not bundle it and neither does this folder.
