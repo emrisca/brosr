@@ -248,6 +248,52 @@ A second canvas click in the same window repeats the relayed click, and the peer
 scroll value next to it. The join journal is now `spike/.runtime/lan-mac-join.json`, which
 holds the 31 samples and the click from 07:54.
 
+### Windows scroll half, 13 November 2026
+
+The host opened the room page at 08:26:38 UTC with `grant=mac`. The Mac joined at 08:26:39,
+and the host moved to `tall.html` in the same second. At 08:26:42 the host scrolled to 0.5.
+That is 1211 px of a 2422 px range. The host held that ratio until 08:30:43 UTC.
+
+| Item | Windows |
+| --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host |
+| Presence latency samples | 200 |
+| Presence p95, ms | 1 (p50 0, worst 4) |
+| Scroll ratio, host | 0.5 |
+| Layout mismatch | false |
+| Click coordinates | none |
+| Applied and dropped input | 0 and 0 |
+
+The host kept `scroll` at 0.5 for the whole window, and `socket` stayed at 1. The peer list
+marked `mac` as granted. No canvas click arrived in either window. The first host moved to
+`tall.html` right after the Mac joined. The second host started on `tall.html` and still saw
+no click.
+
+A second host opened `tall.html` directly at 08:31:55 UTC and scrolled to the same 0.5. It
+held until 08:35 UTC. That run recorded no presence samples, so the table above uses the
+first window.
+
+#### Mac half of the scroll window, 13 November 2026
+
+The Mac peer joined at 08:26:39 and followed the host to `tall.html?grant=mac`. It read
+`granted: true` in every two-peer sample.
+
+| Item | Mac |
+| --- | --- |
+| Peers in the room | 2 (`mac` and `host`) |
+| Presence latency samples | 200, the journal cap |
+| Presence p95, ms | 7 (p50 7, worst 11) |
+| Scroll ratio, followed | 0 for the first samples, then 0.5 to the end |
+| Click coordinates | none |
+| Applied and dropped input | not applied here |
+
+The journal held 752 two-peer samples from 08:26:36 to 08:39:12 UTC. `scroll` read 0 until the
+host's 0.5 arrived, then 0.5 at every later sample. The two sides agree on 0.5.
+
+The peer did not click. The driver clicks only on `board.html`, and the host opened
+`tall.html`, so no canvas was in front of the peer. Your 0 applied and 0 dropped records match
+a window with no click.
+
 ## Two tasks for the Mac
 
 Run these in order. Task 1 gives Task 2 a working harness.

@@ -88,8 +88,24 @@ Nightly 162.0a1. The Windows host loaded `zen/.runtime/bridge-host.xpi`. The Mac
 The two sides measured different windows and directions. Windows held 29 samples at 3 ms p95.
 The Mac held 31 samples at 10 ms p95. Keep both columns and do not combine them.
 
-This proves one LAN hop, one grant, one canvas click and one applied record. It does not prove
-a WAN, an hour, or more than two machines.
+A second window measured the view layer. The host scrolled `tall.html` to 0.5, and the peer
+followed the ratio and held it.
+
+| Item | Windows | Mac |
+| --- | --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host | 2 |
+| Presence latency samples | 200 | 200, the journal cap |
+| Presence p95, ms | 1 (p50 0, worst 4) | 7 (p50 7, worst 11) |
+| Scroll ratio | 0.5 | 0.5 |
+| Click coordinates | none | none |
+| Applied and dropped input | 0 and 0 | not applied |
+
+The Mac held 0.5 from 08:26:42 to its last two-peer sample at 08:39:12 UTC. The Windows row
+covers its first window, 08:26:38 to 08:30:43 UTC. No canvas click happened in either window,
+because the host opened `tall.html` and the peer driver clicks only on `board.html`.
+
+This proves one LAN hop, one grant, one canvas click, one applied record and one followed
+scroll. It does not prove a WAN, an hour, or more than two machines.
 
 ## What it does not prove
 
