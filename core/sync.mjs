@@ -462,6 +462,9 @@ export function createRoomClient({
         const applied = state.applyView({ scroll: message.scroll, fingerprint: message.fingerprint });
         stats.scroll = applied.scroll;
         stats.layoutMismatch = applied.mismatch;
+        // The notice belongs to the mismatch that caused it. Once the pages
+        // line up again the banner has nothing to say.
+        if (!applied.mismatch) stats.layoutNotice = null;
         if (!isHost() && scrollTo) scrollTo(applied.scroll);
         return { ok: true, ...applied };
       }

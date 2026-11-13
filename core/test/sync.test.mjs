@@ -232,6 +232,57 @@ test('a peer follows the host url and scroll, and reports a layout mismatch', ()
   assert.equal(client.publish().layoutMismatch, true);
 });
 
+test('the published layout notice clears once the layouts agree again', () => {
+  const doc = { location: { href: 'http://x/a.html', origin: 'http://x' } };
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 1000,
+    send: () => {},
+    document: doc,
+    overlay: false,
+  });
+  client.setGrant('p2', true);
+
+  // The peer starts on the same layout, so the room has a fingerprint to compare.
+  client.receive(encode({ type: 'view', peerId: 'p2', scroll: 0.2, fingerprint }), 900);
+  assert.equal(client.publish().layoutMismatch, false);
+
+  // Then the peer widens its window and lays the page out differently.
+  client.receive(
+    encode({
+      type: 'view',
+      peerId: 'p2',
+      scroll: 0,
+      fingerprint: { ...fingerprint, innerWidth: 2000 },
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(client.publish().layoutMismatch, true);
+
+  const click = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 1,
+      records: [{ kind: 'click', path: '#go' }],
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(click.reasons.layout, 1, 'the click was dropped for the layout');
+  const noticed = client.publish().layoutNotice;
+  assert.equal(noticed.peerId, 'p2');
+  assert.equal(noticed.dropped, 1);
+
+  // The peer comes back to the host's layout, so the notice goes.
+  client.receive(encode({ type: 'view', peerId: 'p2', scroll: 0, fingerprint }), 1200);
+  assert.equal(client.publish().layoutMismatch, false);
+  assert.equal(client.publish().layoutNotice, null);
+});
+
 test('a late joiner gets the page and the scroll from the host', () => {
   const view = { url: 'http://x/a.html', scroll: 0.4, fingerprint };
   const { client, sent, at } = hostWithView(() => view);
