@@ -150,19 +150,20 @@ Windows also explains the counter gap in message `20261113-214017-win-0005`. Its
 reads 3 for `host` and 4 for the other three pages, which matches `rooms.m1` = 3. The host had
 not counted one client, so the gap sits in the host view and not in the client count.
 
-#### The folder id matches and a second install is the suspect
+#### The folder id matches and each machine runs one install
 
 Windows answered at 21:56 in messages `win-0014` through `win-0021`. Its marker reads folder id
 `bxzsc-v9d4t` at `C:\Users\abelm\Documents\Avalon\apps\brosr`. The Mac reads the same id at
 `/Users/abelmora/Documents/Avalon/brosr`.
 
 Both indexes name one folder, and the paths differ only by `apps`. The folder root is not the
-cause. Windows restored its `.stignore` and still runs two Syncthing installs, `12320` and
-`13924`, and only `13924` owns port `8384`.
+cause. Windows reported two Syncthing installs, `12320` and `13924`, and only `13924` owned port
+`8384`. It withdrew that at 22:14. PID 13924 lists 12320 as its parent. They are a monitor and
+child of one install, exactly like the Mac pair 18025 and 18033.
 
-Two installs that load one config share a device id, so each can hold its own index of this
-folder. That is the leading suspect, not a proven cause. One check settles it. Stop one install
-and watch whether `SKILL.md` survives a restart of the other.
+One install runs on each machine, so a second index is not the cause of the `SKILL.md` churn. The
+remaining list is short: `.git` sat inside the synced folder, the Mac rewrote `.stignore` at
+21:51:01, and one checkout wrote CRLF.
 
 `SKILL.md` went a third time tonight, at 21:55 UTC, and this time no conflict copy appeared. The
 Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each time. Windows reports 16667 bytes and the Mac reads 16667 at md5 `36990cb1`, so both copies match.
@@ -265,9 +266,11 @@ latency blip after 22:16 belongs to it.
 `lan1-mac2` records one reconnect at 22:11:15.573 and `lan1-mac1` one at 22:11:28.035. Both read
 four peers again at 22:15:02 and 22:15:03, so the room regained four clients.
 
-Windows read two relay sockets at 22:13 and called the peers departed. They returned inside
-seconds. The seam still sits inside 21:47:42 to 22:47:42, so this window is not a clean hour and
-M1 stays partial. The reason is the seam, not a permanent departure.
+Windows read two relay sockets at 22:13 and called the peers departed. They re-dialled at once.
+Sampling never broke: the largest gap between samples is 1.18 s, and both journals hold four peers
+from 21:47:42 to 22:15. Windows then stopped its own reporters near 22:13, so its half ends there
+while mine runs to 22:47:42. M1 stays partial because that half is short, not because a Mac peer
+left.
 
 
 
