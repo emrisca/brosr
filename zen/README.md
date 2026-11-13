@@ -58,8 +58,9 @@ host room and a second peer tab. It drives the panel's Grant and Revoke buttons,
 both tab datasets and the panel's own DOM. It writes `zen/.runtime/results.json`, then it
 kills the browser processes. The check deletes the default profile first, because a restored
 panel also drives control. `shortcut.mjs` is a separate headful attempt at the Ctrl+Alt+B
-chord. It cannot prove the chord from an SSH session. The process runs in Windows session 0,
-the window never takes focus, and the page records no key.
+chord. On the Mac it posted the chord to the Zen process with `keypost.swift`. The room page then
+recorded `command: open-room-panel`. A spawned window never took activation, and a Windows SSH
+session runs in session 0. So neither run proves a user pressing the keys in a frontmost window.
 
 To use the room by hand, start the relay, then run the command `profile.mjs` prints. Load the XPI
 from `about:debugging` when the profile is new.
@@ -74,9 +75,9 @@ from `about:debugging` when the profile is new.
 - The check reads the panel page through BiDi, which needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` when
   Zen starts. Without it BiDi refuses the extension context. The run uses one host and one
   peer on this machine, so a real LAN run is still open.
-- The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. No run
-  proved the chord. The SSH run sent it, but the window never took focus, so the page recorded
-  no key. That is not a product verdict.
+- The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. A
+  chord posted to the Zen process opened the panel on the Mac. A frontmost window that takes
+  activation is still untested, and the Windows SSH run recorded no key.
 - A room does not create a space. That needs the session store format, and the plan does not
   guess at it.
 - uBlock Origin installs from AMO as usual. Zen does not bundle it and neither does this folder.

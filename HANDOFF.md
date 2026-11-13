@@ -527,8 +527,24 @@ The chord still did not reach the page, and the runs recorded why:
 - Raising the window, clicking its centre, activating the browsing context, and addressing
   the chord to the `zen` process changed none of that.
 
-So the command and its handler exist, and the chord has no proof. This is macOS focus and
-delivery in this session, not a bridge refusal.
+So the command and its handler exist, and the chord had no proof from a frontmost window.
+
+A later run closed the delivery half. Zen never took activation through System Events:
+`NSRunningApplication.activate` returned `asked=1 active=0`. So the chord went straight to the
+browser process with `CGEvent.postToPid`, and that run opened the panel.
+
+| Item | Result |
+| --- | --- |
+| Command | `open-room-panel`, and `browser.commands.getAll()` says `MacCtrl+Alt+B` |
+| Delivery | `CGEvent` key code 11 with control and option, posted to the Zen pid |
+| Proof | The room page recorded `command: open-room-panel` |
+| Page keydown | None. The command consumes the chord before the content script sees it |
+
+`zen/keypost.swift` builds a helper that activates the pid and posts the chord. `shortcut.mjs`
+falls back to it when the System Events chord lands nothing. This proves the command path and
+the chord binding. It does not prove a user pressing the keys in a frontmost
+window, because the spawned window still does not take activation here. The Windows console is
+the clean place for that last step.
 
 #### Mac note on the hour and the game, 13 November 2026
 
@@ -684,9 +700,9 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 3. **A two-machine game.** The ten-minute game ran two windows on this Mac. M4 asks for the
    same game over the LAN relay, with one side on Windows, and no visible desync for ten
    minutes.
-4. **The shortcut.** It registers, and no run fired it. The SSH run could not focus the
-   window, so it is not a product verdict. Try the chord at the Windows console, and check for a
-   Zen or Windows conflict.
+4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
+   frontmost window still does not take activation on the Mac. Try the chord at the Windows
+   console and check for a Zen or Windows conflict.
 5. **The axum relay.** The spike relay is Node. M3 and M6 want one Rust binary.
 6. **A signed XPI.** Release Firefox refuses the temporary bridge. That is M6.
 
@@ -713,9 +729,9 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - A synthetic event has `isTrusted: false`. The trusted actuator is M7.
 - Do not claim a speed or a pass without the counter behind it.
 - The Zen panel runs in a tab. No run drew the sidebar or pressed the real toolbar button.
-- No run proves the Ctrl+Alt+B chord. The command and its handler exist. The macOS attempt
-  and the SSH run on 13 November never put a keydown in the page. The SSH run could not focus
-  the window.
+- No run proves the Ctrl+Alt+B chord from a frontmost window. The command registers, and a
+  chord posted to the Zen process opened the panel on 13 November 2026. A window that takes
+  activation is still untested.
 - No LAN hour and no two-machine game. Both ran on one Mac over loopback on 13 November 2026.
 
 ## Suggested skills

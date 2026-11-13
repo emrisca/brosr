@@ -4,6 +4,7 @@
 // and reads the command back from the room dataset.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
@@ -167,6 +168,10 @@ public class BrosrFocus {
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool on);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 }
 "@
 $handle = $p.MainWindowHandle
@@ -178,7 +183,20 @@ $foregroundThread = [BrosrFocus]::GetWindowThreadProcessId($foreground, [ref]$fo
 $mine = [BrosrFocus]::GetCurrentThreadId()
 [void][BrosrFocus]::AttachThreadInput($mine, $foregroundThread, $true)
 $focused = [BrosrFocus]::SetForegroundWindow($handle)
+$rect = New-Object BrosrFocus+RECT
+[void][BrosrFocus]::GetWindowRect($handle, [ref]$rect)
+$cx = [int](($rect.Left + $rect.Right) / 2)
+$cy = [int](($rect.Top + $rect.Bottom) / 2)
+[void][BrosrFocus]::SetCursorPos($cx, $cy)
+[BrosrFocus]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 50
+[BrosrFocus]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 Start-Sleep -Milliseconds 900
+# A plain key proves the page accepts input at all. The chord is the proof.
+[BrosrFocus]::keybd_event(0x41, 0, 0, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 80
+[BrosrFocus]::keybd_event(0x41, 0, 2, [UIntPtr]::Zero)
+Start-Sleep -Milliseconds 150
 [BrosrFocus]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
 [BrosrFocus]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
 [BrosrFocus]::keybd_event(0x42, 0, 0, [UIntPtr]::Zero)
@@ -187,7 +205,12 @@ Start-Sleep -Milliseconds 120
 [BrosrFocus]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
 [BrosrFocus]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
 [void][BrosrFocus]::AttachThreadInput($mine, $foregroundThread, $false)
-Write-Output ('focused ' + $focused + ' handle ' + $handle)
+$fg = [BrosrFocus]::GetForegroundWindow()
+$fgPid = 0
+[void][BrosrFocus]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+$fgProc = Get-Process -Id $fgPid -ErrorAction SilentlyContinue
+$fgName = if ($fgProc) { $fgProc.ProcessName } else { 'unknown' }
+Write-Output ('focused ' + $focused + ' handle ' + $handle + ' foreground ' + $fg + ' ' + $fgName)
 `;
   const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8',
@@ -200,15 +223,14 @@ Write-Output ('focused ' + $focused + ' handle ' + $handle)
   };
 }
 
-function focusZenWindow() {
-  // A browser command needs a frontmost window with the page focused. This is
-  // setup; the proof is the chord.
+function focusZenWindow(pid) {
+  // The spawned instance is not the app that AppleScript names by bundle, so a
+  // by-name target can raise a different Zen. Target the unix id instead. This
+  // is setup; the proof is the chord.
   if (process.platform !== 'darwin') return { ok: true, out: 'not-mac', err: '', status: 0 };
   const script = `
-tell application "Zen" to activate
-delay 0.8
 tell application "System Events"
-  set p to first process whose frontmost is true
+  set p to first process whose unix id is ${pid}
   set frontName to name of p
   tell p
     set frontmost to true
@@ -235,14 +257,11 @@ return frontName & " " & (item 1 of pos) & "," & (item 2 of pos) & " " & (item 1
 function pressShortcutMac() {
   // key code 11 is the physical B key. keystroke "b" with Option composes a
   // character, so the command matcher never sees a plain b.
-  // A global chord needs the window to be key. Targeting the process posts the
-  // chord straight to Zen's event queue instead.
+  // The chord goes to the frontmost app, which focusZenWindow() set to the
+  // spawned instance. A by-name `tell process` can post it to another Zen.
   const script = `
 tell application "System Events"
-  tell process "zen"
-    set frontmost to true
-    key code 11 using {control down, option down}
-  end tell
+  key code 11 using {control down, option down}
 end tell
 `;
   const res = spawnSync('osascript', ['-e', script], { encoding: 'utf8', timeout: 15000 });
@@ -254,11 +273,54 @@ end tell
   };
 }
 
+function keypostPath() {
+  // System Events raises a spawned window but leaves the instance inactive, so
+  // the page never reads focus. A small helper activates the pid and can post
+  // the chord to that process.
+  if (process.platform !== 'darwin') return null;
+  const source = path.join(here, 'keypost.swift');
+  const out = path.join(runtime, 'keypost');
+  if (fs.existsSync(out) && fs.statSync(out).mtimeMs >= fs.statSync(source).mtimeMs) return out;
+  fs.mkdirSync(runtime, { recursive: true });
+  const build = spawnSync('swiftc', ['-parse-as-library', '-O', source, '-o', out], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (build.status !== 0) {
+    log('[shortcut] keypost build failed', String(build.stderr || '').trim().slice(0, 300));
+    return null;
+  }
+  return out;
+}
+
+function activateZen(pid) {
+  const helper = keypostPath();
+  if (!helper) return { ok: false, out: '', err: 'no keypost helper' };
+  const res = spawnSync(helper, ['activate', String(pid)], { encoding: 'utf8', timeout: 20000 });
+  return {
+    ok: res.status === 0,
+    out: String(res.stdout || '').trim(),
+    err: String(res.stderr || '').trim(),
+  };
+}
+
+function postChord(pid) {
+  const helper = keypostPath();
+  if (!helper) return { ok: false, out: '', err: 'no keypost helper' };
+  const res = spawnSync(helper, ['chord', String(pid)], { encoding: 'utf8', timeout: 20000 });
+  return {
+    ok: res.status === 0,
+    out: String(res.stdout || '').trim(),
+    err: String(res.stderr || '').trim(),
+  };
+}
+
 async function main() {
   const zen = findZen();
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary');
-  const profile = path.join(runtime, 'shortcut-profile');
-  fs.rmSync(profile, { recursive: true, force: true });
+  // The repo sits in a Syncthing folder, and Syncthing holds temp files in a
+  // profile while it syncs. Use the OS temp dir so a run never waits on a lock.
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'brosr-shortcut-'));
   writeProfile(profile);
   const xpi = buildXpi();
   const relay = spawn(process.execPath, ['relay.js'], { cwd: spike, stdio: 'ignore' });
@@ -297,20 +359,17 @@ async function main() {
     // Headful create hangs on this build, so reuse the window's own tab.
     const tree = await bidi.cmd('browsingContext.getTree', {});
     if (!tree.contexts.length) throw new Error('no window context');
-    log(
-      '[shortcut] contexts',
-      JSON.stringify(
-        tree.contexts.map((item) => ({
-          id: item.context,
-          url: item.url,
-          active: item.active,
-          window: item.clientWindow,
-        }))
-      )
-    );
+    const views = [];
+    for (const item of tree.contexts) {
+      const visibility = await evaluate(bidi, item.context, 'document.visibilityState').catch(
+        () => 'unknown'
+      );
+      views.push({ id: item.context, url: item.url, active: item.active ?? null, visibility });
+    }
+    log('[shortcut] contexts', JSON.stringify(views));
     // A launched window can carry a background context. The key chord only
-    // reaches the active one, so the room page goes into that.
-    const context = (tree.contexts.find((item) => item.active) || tree.contexts[0]).context;
+    // reaches the visible tab, so the room page goes into that one.
+    const context = (views.find((item) => item.visibility === 'visible') || views[0]).id;
     const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=shortcut&peer=host&name=Host&panel=1`;
     await bidi.cmd('browsingContext.navigate', { context, url, wait: 'complete' });
     const data = await waitForDataset(bidi, context, (d) => d.socket === 1);
@@ -345,15 +404,19 @@ async function main() {
       log('[shortcut] activate failed', error.message)
     );
     await sleep(400);
-    const windowFocus = focusZenWindow();
+    const activated = activateZen(browser.pid);
+    log('[shortcut] activate', JSON.stringify(activated));
+    const windowFocus = focusZenWindow(browser.pid);
     log('[shortcut] window', JSON.stringify(windowFocus));
     await sleep(400);
-    const focus = await evaluate(
-      bidi,
-      context,
-      'JSON.stringify({ focus: document.hasFocus(), active: document.activeElement && document.activeElement.tagName })'
-    ).catch((error) => 'read failed: ' + error.message);
-    log('[shortcut] focus', focus);
+    const readFocus = () =>
+      evaluate(
+        bidi,
+        context,
+        'JSON.stringify({ focus: document.hasFocus(), visibility: document.visibilityState, active: document.activeElement && document.activeElement.tagName })'
+      ).catch((error) => 'read failed: ' + error.message);
+    const focusBefore = await readFocus();
+    log('[shortcut] focus before keys', focusBefore);
     // A plain key proves the window accepts System Events input at all. It
     // never matches a command, so it cannot pass the proof on its own.
     if (process.platform === 'darwin') {
@@ -365,20 +428,46 @@ async function main() {
     }
     const sent = pressShortcut();
     log('[shortcut] keys', JSON.stringify(sent));
+    if (process.platform === 'darwin') {
+      // Hand the desktop back as soon as the chord is on its way.
+      spawnSync('osascript', ['-e', 'tell application "Terminal" to activate'], {
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+    }
+    await sleep(600);
+    const focusAfter = await readFocus();
+    log('[shortcut] focus after keys', focusAfter);
     const pageKeys = await evaluate(
       bidi,
       context,
       'JSON.stringify(window.__brosrKeys || [])'
     ).catch((error) => 'read failed: ' + error.message);
     log('[shortcut] page keys', pageKeys);
-    result.diag = { focus, sent, pageKeys };
-    const hit = await waitForDataset(bidi, context, (d) => d.command === 'open-room-panel', 15000);
-    if (!sent.ok) {
+    result.diag = { activate: activated, focusBefore, focusAfter, sent, pageKeys };
+    let hit = await waitForDataset(bidi, context, (d) => d.command === 'open-room-panel', 4000);
+    let posted = null;
+    if (!hit) {
+      // If the window still did not take activation, post the chord straight to
+      // the browser process. That proves delivery, not a frontmost window.
+      posted = postChord(browser.pid);
+      log('[shortcut] posted', JSON.stringify(posted));
+      hit = await waitForDataset(bidi, context, (d) => d.command === 'open-room-panel', 10000);
+      const keysAfterPost = await evaluate(
+        bidi,
+        context,
+        'JSON.stringify(window.__brosrKeys || [])'
+      ).catch((error) => 'read failed: ' + error.message);
+      log('[shortcut] page keys after post', keysAfterPost);
+      result.diag.posted = posted;
+      result.diag.pageKeysAfterPost = keysAfterPost;
+    }
+    if (!sent.ok && !(posted && posted.ok)) {
       throw new Error(`the key chord did not send (${sent.out || sent.err || 'no output'})`);
     }
     if (!hit || hit.command !== 'open-room-panel') {
       throw new Error(
-        `the key chord did not reach the bridge (frontmost: ${sent.out || 'unknown'})`
+        `the key chord did not reach the bridge (window: ${sent.out || 'unknown'}; focus after: ${focusAfter}; page keys: ${pageKeys})`
       );
     }
     result = {
@@ -390,8 +479,10 @@ async function main() {
         command: hit.command,
         via:
           process.platform === 'darwin'
-            ? 'macOS System Events key code to a frontmost Zen window'
-            : 'Windows SendKeys to a headful Zen window',
+            ? posted
+              ? 'macOS CGEvent chord posted to the Zen process id'
+              : 'macOS System Events key code to the frontmost Zen window'
+            : 'Windows keybd_event to a headful Zen window',
         sent,
       },
     };
