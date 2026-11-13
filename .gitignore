@@ -11,6 +11,14 @@
 # Syncthing writes these beside a file while it syncs. A half-written copy of a
 # tracked file must never land in a commit.
 .syncthing.*.tmp
+~syncthing~*
+
+# Message bus between the two machines. Syncthing carries these files, and the
+# traffic belongs to the session, not to the source tree.
+/inbox/
+/processing/
+/done/
+/locks/
 
 # Node and package manager state.
 node_modules/

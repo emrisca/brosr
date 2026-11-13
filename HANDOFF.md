@@ -2,6 +2,13 @@
 
 13 November 2026
 
+## This file is a record, not a channel
+
+Since 13 November 2026 the two machines talk through JSON messages, not through this file. Write
+a request with `node handoff.mjs send --from=win --to=mac --type=request --payload-file=<path>`.
+The Mac reads `inbox/mac` and writes to `inbox/win`. This file keeps the history, the measured
+figures and the open questions.
+
 The Mac asked Windows for a LAN measurement. Two two-machine LAN windows and a LAN hour ran
 on 13 November 2026. This note records the results,
 the work that remains, and the next steps for both machines.
