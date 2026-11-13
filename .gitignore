@@ -1,0 +1,29 @@
+# Spike runtime. `node run.mjs` downloads Firefox Nightly and uBlock Origin here, writes four
+# profiles and encodes the 120 s clip, so none of it belongs in a commit.
+/spike/.runtime
+
+# Syncthing folder marker, which is per device.
+/.stfolder
+
+# Node and package manager state.
+node_modules/
+.npm/
+.pnpm-store/
+
+# Launcher build output, for the Tauri, Vite and Rust layout in plan.md.
+target/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Run, build and test output.
+*.log
+coverage/
+*.profraw
+
+# OS and editor metadata.
+.DS_Store
+Thumbs.db
+desktop.ini
+.localized

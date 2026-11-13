@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr media fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    video { width: 640px; max-width: 100%; display: block; background: #000; }
+    pre { font-family: monospace; background: #000; padding: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr media fixture</h1>
+  <video id="clip" src="/media/clip.webm" muted playsinline preload="auto"></video>
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    const state = document.getElementById('state');
+    const clip = document.getElementById('clip');
+    setInterval(() => {
+      const raw = document.documentElement.dataset.brosr;
+      const error = document.documentElement.dataset.brosrError;
+      if (error) {
+        state.textContent = 'core error: ' + error;
+        return;
+      }
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      state.textContent =
+        'role: ' + data.role + '\n' +
+        'source: ' + data.source + '\n' +
+        'socket: ' + data.socket + '\n' +
+        'media: ' + (data.key || 'none') + '\n' +
+        'currentTime: ' + clip.currentTime.toFixed(3) + ' s\n' +
+        'drift: ' + (data.samples.length ? data.samples[data.samples.length - 1] : 'none') + ' ms\n' +
+        'samples: ' + data.samples.length + '\n' +
+        'seeks: ' + data.seeks + ', nudges: ' + data.nudges + '\n' +
+        'cursors: ' + data.cursors;
+    }, 200);
+  </script>
+</body>
+</html>

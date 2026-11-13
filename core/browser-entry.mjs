@@ -1,0 +1,214 @@
+// Content-script entry. The bridge loads this file, and it starts the sync
+// client against the relay. Everything it reports lands in
+// document.documentElement.dataset.brosr, so the harness can read the same
+// numbers whether the core runs in the content script or in the page.
+
+import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
+
+export async function start() {
+  if (window.__brosrStarted) return { started: false, reason: 'already-running' };
+  window.__brosrStarted = true;
+
+  const params = new URLSearchParams(location.search);
+  // Identity survives a navigation. A room tab follows the host's URL, and the
+  // new page has no room params, so the tab remembers which room and peer it is.
+  const stored = (() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('brosr-room') || 'null');
+    } catch {
+      return null;
+    }
+  })();
+  const fresh = params.has('room') || params.has('peer');
+  const config = fresh || !stored
+    ? {
+        role: params.get('role') === 'host' ? 'host' : 'peer',
+        room: params.get('room') || 'spike',
+        peerId: params.get('peer') || (params.get('role') === 'host' ? 'host' : 'peer'),
+        hostId: params.get('host') || 'host',
+        name: params.get('name') || params.get('peer') || 'peer',
+        bias: Number(params.get('bias') || 0),
+        relayPort: params.get('relay') || '8787',
+        capture: params.get('capture') === '1',
+        grant: params.get('grant') || null,
+      }
+    : stored;
+  if (fresh) {
+    try {
+      sessionStorage.setItem('brosr-room', JSON.stringify(config));
+    } catch {
+      // Storage can be off. The page still works without a navigation.
+    }
+  }
+  const role = config.role === 'host' ? 'host' : 'peer';
+  const room = config.room || 'spike';
+  const peerId = config.peerId;
+  const hostId = config.hostId || 'host';
+  const name = config.name || peerId;
+  const bias = Number(config.bias || 0);
+  const relayPort = config.relayPort || '8787';
+  const source =
+    typeof browser !== 'undefined' && browser.runtime && browser.runtime.id ? 'content-script' : 'page';
+  const started = performance.now();
+  let socket = null;
+
+  // The room parameters describe this tab, not the page. A peer that follows
+  // the host's URL must not inherit the host's role, so the announced URL is
+  // the page alone.
+  const roomParams = ['role', 'peer', 'host', 'room', 'name', 'bias', 'relay'];
+  const cleanUrl = (href) => {
+    try {
+      const url = new URL(href);
+      for (const key of roomParams) url.searchParams.delete(key);
+      return url.toString();
+    } catch {
+      return href;
+    }
+  };
+
+  const viewport = () => {
+    const root = document.documentElement;
+    const max = Math.max(1, root.scrollHeight - window.innerHeight);
+    return {
+      url: cleanUrl(location.href),
+      scroll: Math.max(0, Math.min(1, window.scrollY / max)),
+      fingerprint: {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        dpr: window.devicePixelRatio,
+        scrollWidth: root.scrollWidth,
+      },
+    };
+  };
+
+  const navigate = (url) => {
+    if (url && url !== location.href) location.assign(url);
+  };
+
+  const scrollTo = (ratio) => {
+    const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo(0, Math.round(ratio * max));
+  };
+
+  const client = createRoomClient({
+    role,
+    room,
+    peerId,
+    hostId,
+    name,
+    colour: role === 'host' ? '#e2603f' : '#3f86e2',
+    document,
+    viewport,
+    navigate,
+    scrollTo,
+    input: {
+      capture: Boolean(config.capture),
+      grantTo: config.grant || null,
+      tabId: peerId,
+      origin: location.origin,
+    },
+    // One time base for the clock, the media ticks and the presence stamps.
+    // performance.now() is per process, so Date.now() here would poison the
+    // four-timestamp exchange.
+    now: () => performance.now(),
+    send: (frame) => {
+      if (socket && socket.readyState === 1) socket.send(frame);
+    },
+  });
+
+  const publish = () => {
+    const data = client.publish();
+    document.documentElement.dataset.brosr = JSON.stringify({
+      ...data,
+      source,
+      bias,
+      socket: socket ? socket.readyState : -1,
+      elapsed: Math.round(performance.now() - started),
+      location: location.href,
+      reconnects,
+    });
+  };
+
+  const video = client.media.pick(null);
+  const beginPlayback = () => {
+    if (!video) return;
+    video.muted = true;
+    const startedPlay = video.play();
+    if (startedPlay && typeof startedPlay.catch === 'function') startedPlay.catch(() => {});
+  };
+
+  // A peer that starts ahead proves the controller closes the gap.
+  const applyBias = () => {
+    if (!video || !bias) return;
+    const max = Number.isFinite(video.duration) ? video.duration - 1 : bias;
+    video.currentTime = Math.max(0, Math.min(bias, max));
+  };
+
+  if (video) {
+    if (video.readyState >= 1) applyBias();
+    else video.addEventListener('loadedmetadata', applyBias, { once: true });
+
+    if (role === 'host') {
+      if (video.readyState >= 2) beginPlayback();
+      else video.addEventListener('loadeddata', beginPlayback, { once: true });
+    }
+  }
+
+  let reconnects = 0;
+  let retryTimer = null;
+  let leaving = false;
+  window.addEventListener('pagehide', () => { leaving = true; }, { once: true });
+
+  const connect = () => {
+    socket = new WebSocket(
+      `ws://127.0.0.1:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
+    );
+    socket.onmessage = (event) => {
+      client.receive(event.data, performance.now());
+      publish();
+    };
+    socket.onopen = () => {
+      // A hello asks the host for a snapshot, so a rejoin lands on the room's
+      // page and scroll instead of starting over.
+      client.hello();
+      client.tick(performance.now());
+      publish();
+    };
+    socket.onerror = () => publish();
+    socket.onclose = () => {
+      publish();
+      if (leaving) return;
+      reconnects += 1;
+      const delay = Math.min(5000, 250 * reconnects);
+      if (!retryTimer) {
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          connect();
+        }, delay);
+      }
+    };
+  };
+  connect();
+
+  setInterval(() => {
+    client.tick(performance.now());
+  }, 50);
+
+  setInterval(() => {
+    const t = (performance.now() - started) / 1000;
+    client.presence({
+      id: peerId,
+      name,
+      colour: role === 'host' ? '#e2603f' : '#3f86e2',
+      point: {
+        x: 120 + Math.cos(t * 0.7 + peerId.length) * 80,
+        y: 140 + Math.sin(t * 0.7 + peerId.length) * 60,
+      },
+    });
+  }, PRESENCE_TICK_MS);
+
+  setInterval(publish, 200);
+  publish();
+
+  return { started: true, role, room, peerId, source };
+}

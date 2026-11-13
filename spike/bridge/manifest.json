@@ -1,0 +1,21 @@
+{
+  "manifest_version": 2,
+  "name": "Brosr bridge (spike)",
+  "version": "0.1.0",
+  "description": "Loads the Brosr core into a room tab: cursors, presence and media sync.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bridge@brosr.spike",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": ["tabs", "http://127.0.0.1/*"],
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": ["core/*.mjs"]
+}

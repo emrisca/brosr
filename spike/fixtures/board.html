@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr input fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    canvas { display: block; background: #17202b; border: 1px solid #33475c; }
+    input { display: block; margin: 12px 0; font-size: 18px; padding: 6px; width: 280px; }
+    pre { font-family: monospace; background: #000; padding: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr input fixture</h1>
+  <canvas id="board" width="400" height="300"></canvas>
+  <input id="title" autocomplete="off" placeholder="a title">
+  <input id="password" type="password" autocomplete="current-password" placeholder="a password">
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    window.__board = { clicks: [] };
+    const canvas = document.getElementById('board');
+    const context = canvas.getContext('2d');
+    canvas.addEventListener('click', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round(event.clientX - rect.left);
+      const y = Math.round(event.clientY - rect.top);
+      window.__board.clicks.push({ x, y, trusted: event.isTrusted });
+      context.fillStyle = event.isTrusted ? '#7fb4ff' : '#e2603f';
+      context.beginPath();
+      context.arc(x, y, 6, 0, Math.PI * 2);
+      context.fill();
+    });
+
+    const state = document.getElementById('state');
+    setInterval(() => {
+      const raw = document.documentElement.dataset.brosr;
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      state.textContent =
+        'role: ' + data.role + '\n' +
+        'granted: ' + data.granted + '\n' +
+        'capture: ' + data.capture + '\n' +
+        'applied: ' + data.inputApplied + ', dropped: ' + data.inputDropped + '\n' +
+        'reasons: ' + JSON.stringify(data.inputReasons) + '\n' +
+        'clicks: ' + JSON.stringify(window.__board.clicks);
+    }, 200);
+  </script>
+</body>
+</html>

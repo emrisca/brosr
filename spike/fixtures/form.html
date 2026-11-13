@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr input fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 40px; }
+    input { font-size: 20px; padding: 8px; width: 320px; }
+    pre { font-family: monospace; background: #111; color: #eee; padding: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr input fixture</h1>
+  <input id="field" autocomplete="off" placeholder="type here">
+  <pre id="log">no key yet</pre>
+  <script>
+    window.__keys = [];
+    const field = document.getElementById('field');
+    const log = document.getElementById('log');
+    field.addEventListener('keydown', (event) => {
+      window.__keys.push({ key: event.key, trusted: event.isTrusted });
+      log.textContent = JSON.stringify(window.__keys, null, 2);
+    });
+    field.focus();
+  </script>
+</body>
+</html>

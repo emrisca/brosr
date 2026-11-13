@@ -1,0 +1,33 @@
+// Syncthing ignore rules for the Brosr folder.
+//
+// Synced: plan.md, core/, spike/ source, fixtures, results.json.
+// Not synced: anything a spike run, a build or the OS generates, because each machine
+// produces its own and a shared copy only causes conflicts and wasted bandwidth.
+
+// The spike downloads Firefox Nightly and uBlock Origin here, writes four profiles and
+// encodes the 120 s test clip with ffmpeg. 794 MB on this machine, rebuilt by `node run.mjs`.
+// Rooted with the leading slash, because only the spike's copy is generated.
+/spike/.runtime
+
+// Node and package manager state.
+node_modules
+.npm
+.pnpm-store
+
+// Launcher build output, for the Tauri, Vite and Rust layout the plan calls for.
+target
+dist
+build
+.vite
+*.tsbuildinfo
+
+// Run, build and test output that is regenerated everywhere.
+*.log
+coverage
+*.profraw
+
+// OS and editor metadata. (?d) lets Syncthing delete these when it needs to.
+(?d).DS_Store
+(?d)Thumbs.db
+(?d)desktop.ini
+(?d).localized

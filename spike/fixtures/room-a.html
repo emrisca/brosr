@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr room page A</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    a { color: #7fb4ff; }
+    pre { font-family: monospace; background: #000; padding: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Room page A</h1>
+  <p><a id="go" href="#">Go to page B</a></p>
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    // A clean URL. The room tab restores its own identity from sessionStorage.
+    document.getElementById('go').href = '/room-b.html';
+    const state = document.getElementById('state');
+    setInterval(() => {
+      const raw = document.documentElement.dataset.brosr;
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      state.textContent =
+        'role: ' + data.role + '\n' +
+        'url: ' + data.url + '\n' +
+        'scroll: ' + data.scroll + '\n' +
+        'cursors: ' + data.cursors + '\n' +
+        'latency samples: ' + data.latencies.length;
+    }, 200);
+  </script>
+</body>
+</html>

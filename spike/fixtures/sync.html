@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr sync fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 40px; }
+    #state { font-family: monospace; white-space: pre-wrap; background: #111; color: #eee; padding: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr sync fixture</h1>
+  <p>The sync client runs as a content script, or as an injected script when the bridge is missing.</p>
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    const state = document.getElementById('state');
+    setInterval(() => {
+      const raw = document.documentElement.dataset.brosr;
+      if (raw) {
+        const data = JSON.parse(raw);
+        state.textContent =
+          'role: ' + data.role + '\n' +
+          'socket: ' + data.socket + '\n' +
+          'position: ' + data.pos + ' s\n' +
+          'samples: ' + data.samples.length + '\n' +
+          'last drift: ' + (data.samples.length ? data.samples[data.samples.length - 1] : 'none') + ' ms\n' +
+          'corrections: ' + data.corrections;
+      }
+    }, 250);
+  </script>
+</body>
+</html>

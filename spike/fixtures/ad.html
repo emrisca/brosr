@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr ad fixture</title>
+</head>
+<body>
+  <h1>Ad request fixture</h1>
+  <pre id="result">pending</pre>
+  <script>
+    // A URL on uBlock Origin's default lists. The fetch uses no-cors, so a
+    // completed request reports opaque success and a blocked one rejects.
+    const AD_URL =
+      new URLSearchParams(location.search).get('ad') ||
+      'https://cdn.taboola.com/libtrc/loader.js';
+    window.__ad = { history: [], blocked: false, loaded: false };
+
+    const out = document.getElementById('result');
+    let attempt = 0;
+
+    async function probe() {
+      attempt += 1;
+      const at = Date.now();
+      let result;
+      try {
+        await fetch(AD_URL + '?probe=' + attempt, { mode: 'no-cors', cache: 'no-store' });
+        result = 'loaded';
+        window.__ad.loaded = true;
+      } catch {
+        result = 'blocked';
+        window.__ad.blocked = true;
+        window.__ad.blockedAt = at;
+      }
+      window.__ad.history.push({ attempt, at, result });
+      out.textContent = JSON.stringify(window.__ad, null, 2);
+      if (!window.__ad.blocked && attempt < 16) setTimeout(probe, 4000);
+    }
+
+    probe();
+  </script>
+</body>
+</html>
