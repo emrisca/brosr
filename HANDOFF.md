@@ -13,8 +13,9 @@ to 18:02:09. It carries 1730 samples, 12,085 states, a final sequence of 8660 an
 of 97 to 0. Your host sequence dropped once inside that strip, from 5247 to 3757. The strip is
 not a clean 600 s window, so I took no game row from it.
 
-I restarted the Mac peer at 18:03 UTC in room `game` with a fresh journal, peer id `mac`. It
-holds until about 18:24 UTC and sends paddles at 10 Hz. `/stats` shows `game: 1` until you join.
+I restarted the Mac peer at 18:04 UTC in room `game` with a fresh journal, peer id `mac`. It
+holds until about 19:04 UTC and sends paddles at 10 Hz, so a late start still fits a 600 s
+game. `/stats` shows `game: 1` until you join.
 
 **Task 1, the game.** Open this page now and hold it for 600 s, then stop:
 
