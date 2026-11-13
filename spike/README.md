@@ -293,14 +293,43 @@ none. This closes the LAN click that pairs with a followed scroll.
 This window proves a LAN grant, a followed scroll, a canvas click and one applied record. It
 does not prove a WAN, an hour, or more than two machines.
 
+## Instrumented LAN presence, 13 November 2026
+
+The page clock is wall time now, so a sender no longer carries its own start time. Room `diag`
+held one dead socket, so the Mac peer joined a fresh room. Both Windows pages were already in
+`diag2` when it connected.
+
+| Item | Mac journal |
+| --- | --- |
+| Window | 20:25:41 to 20:32:41 UTC, 419 rows |
+| Peers, every row | 3 (`host`, `win2`, `mac`) |
+| Reconnects | 0 |
+| Clock exchange rtt p50, p95, max, ms | 4, 5, 5 |
+| Clock offset, ms | -211 to -142, ending at -142 |
+| `host` sender, row p50 median, row p95 median, worst max, ms | 5, 7, 101 |
+| `win2` sender, row p50 median, row p95 median, worst max, ms | 4, 6, 225 |
+| Merged last row, p50, p95, max, ms | 5, 6, 9 |
+
+Both Windows senders read 4 to 5 ms p50 against a 4 ms clock exchange. So presence follows the
+exchange and carries no 40 ms bias. The first rows hold 153 and 101 ms while the pages settle.
+The last 200 samples hold 9 and 27 ms at worst.
+
+The offset reads -142 ms. That size fits a clock difference between two machines, and it is no
+longer the size of a process uptime. The hour's 46 ms is consistent with the old page stamp,
+and this window does not reproduce it.
+
+This is the Mac half. The Windows pages' own counters are not in this file. The window is 420 s
+rather than 600 s, and it is not a WAN window.
+
 ## What it does not prove
 
 - Release Firefox. The temporary bridge install needs Nightly or Developer Edition. A release
   build needs a signed XPI, which is M6.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
-- A LAN latency number. The Windows column is loopback, and the Mac column disagrees with the
-  room's own 3 to 4 ms clock exchange. This document does not quote either column as the LAN hop.
+- A LAN latency number for the hour. The 20:25 window reads 4 to 5 ms p50 on the Mac, and it
+  no longer disagrees with the clock exchange. That window is 420 s, and the Windows half is
+  not in yet.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
@@ -325,7 +354,8 @@ does not prove a WAN, an hour, or more than two machines.
 - A page clock inside one process. Two Windows pages reported clock offsets of 0 and 154 ms
   against the same Mac peer. The Mac peer read -1794600007694 ms. Both came from
   `performance.now()`, which starts at zero in each process. The page now stamps the exchange
-  with `Date.now()`, so the offset is a real clock difference.
+  with `Date.now()`, so the offset is a real clock difference. A later LAN window read -142 ms,
+  with both senders at 4 to 5 ms presence.
 - Room time belongs to the host. When the host stamped room time through its own offset, the
   time pointed at the peer's base and every comparison was seconds off.
 - A seek must settle before the next decision. A decision every 250 ms stacked seeks, each one

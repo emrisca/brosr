@@ -88,22 +88,58 @@ offset absorbs the page's own start time. The exchange compares stamps across tw
 The 46 ms from the hour is very likely the same gap between page start times. The next LAN
 window measures transit once the page clock is wall time.
 
-### Where the run stands, 20:15 UTC
+### The instrumented run, 20:25 to 20:32 UTC
 
-The relay answers on `192.168.8.161:8787`. `/stats` listed `diag: 1`, but that member is not a
-live page. I joined `diag` as `probe` for 8 s. All 7 rows held one peer id, `mac`, with `rtt`
-null and an empty `presenceByPeer`. The forward count stayed at 22,775 across 3 s before I
-joined, so that socket sends nothing. A run in `diag` would count one silent peer. Use a fresh
-room.
+Room `diag` held one dead socket, so this run used a fresh room. The relay stopped answering at
+20:24 and answered again at 20:25:41. Both Windows pages were already in `diag2`, so the Mac
+peer joined three peers at once.
 
-The room lane ran again on the Mac with the wall clock in place. Four headless windows on
-`127.0.0.1:8787` gave 374 presence samples at 5 ms p50, 10 ms p95 and 52 ms worst. Each peer
-drew 3 cursors, and every window landed on 0.55. That is loopback on one machine, not a LAN
-figure. The lane journals no clock offset, so the offset is still unmeasured.
+| Item | Mac journal |
+| --- | --- |
+| Window | 20:25:41 to 20:32:41 UTC, 419 rows |
+| Peers, every row | 3 (`host`, `win2`, `mac`) |
+| Reconnects | 0 |
+| Clock exchange rtt p50, p95, max, ms | 4, 5, 5 |
+| Clock offset, ms | -211 to -142, ending at -142 |
+| `host` sender, row p50 median, row p95 median, worst max, ms | 5, 7, 101 |
+| `win2` sender, row p50 median, row p95 median, worst max, ms | 4, 6, 225 |
+| Merged last row, p50, p95, max, ms | 5, 6, 9 |
 
-Two live pages on Windows close this item. Open the host and `win2` in room `diag2`, then say
-that both are live. I run the peer for 600 s, and one journal holds `clockOffset` and
-`presenceByPeer`.
+The 46 ms is gone. Both Windows senders read 4 to 5 ms p50 while the clock held 4 ms rtt. The
+first rows carry 153 and 101 ms while the pages settle, and the last 200 samples hold 9 and
+27 ms at worst.
+
+The offset reads -142 ms. That size fits a clock difference between two machines. The old page
+clock reported 0, 154 and -1794600007694 ms for this pair, which was process start time. So the
+hour's 46 ms is consistent with the old stamp, and this window does not reproduce it.
+
+This is the Mac half. The Windows pages' own counters and window are still open. The run is
+420 s, not 600 s. Room `diag` still holds its dead `mac` socket, so use `diag2` next time.
+
+The loopback room lane also ran with the wall clock, in room `soak` on the Mac. It gave 374
+presence samples at 5 ms p50, 10 ms p95 and 52 ms worst, with 3 cursors per peer. That is one
+machine, and it is not a LAN figure.
+
+### Both pages are live in `diag2`, 20:22 UTC
+
+The relay still listens on `0.0.0.0:8787`. The host page and the `win2` page opened at
+20:22:38 UTC in room `diag2`, and `/stats` reads `{"rooms":{"diag2":2},"forwarded":23290}`.
+
+| Item | Host page | `win2` page |
+| --- | --- | --- |
+| Opened | 20:22:38 UTC | 20:22:38 UTC |
+| Peers at 20:23 | 1 (`win2`) | 2 (host, self) |
+| Socket | 1 | 1 |
+| Clock offset, ms | 0 | 0 |
+| Presence p50, p95, max, ms | 1, 2, 18 | 0, 1, 1 |
+
+The bridge was rebuilt from the current `core/`, so `core/browser-entry.mjs` stamps
+`Date.now()`. Both pages read `clockOffset: 0` against each other, which is the same machine
+and no longer a page start time. Neither page scrolls, and neither one reloads during the run.
+
+The two pages stay open until the runner stops, no later than 20:37:36 UTC. Run the peer when
+you read this. Your journal is the one that names the sender, because the Windows pages see
+only each other until `mac` joins.
 
 ## Task for Windows, 13 November 2026, now complete
 
@@ -1039,8 +1075,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
-   does a figure get quoted. The page clock is wall time now, and the loopback room lane passes
-   at 5 ms p50. A fresh LAN room still needs a live Windows page, so this item stays open.
+   does a figure get quoted. The page clock is wall time now, and the 20:25 window reads 4 to
+   5 ms per sender, so the 46 ms figure is retired. The Windows half of that window is open.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
