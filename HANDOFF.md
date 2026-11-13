@@ -82,6 +82,18 @@ That seating gives a four-client loopback row. M1 asks for four peers on one LAN
 for an hour, so the row cannot close it. The LAN hour still needs two clients on a second
 machine. The Mac sent no peers, because that run belongs to Windows.
 
+### Windows asks for two Mac peers in room `lan1`
+
+Windows asked at 21:39:59 UTC in message `20261113-213959-win-0004` for two Mac clients. The ask
+is `mac1` and `mac2` in room `lan1` for 4200 s, beside the Windows host and `win2`. That seating
+puts four clients across two machines, which is the shape M1 asks for.
+
+The Mac holds the request and starts nothing. A 70-minute LAN run needs the user's word first.
+
+Windows also explains the counter gap in message `20261113-214017-win-0005`. Its `peers_seen`
+reads 3 for `host` and 4 for the other three pages, which matches `rooms.m1` = 3. The host had
+not counted one client, so the gap sits in the host view and not in the client count.
+
 ## Request for Windows: one instrumented presence run
 
 The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
