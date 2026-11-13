@@ -234,11 +234,12 @@ test('a peer follows the host url and scroll, and reports a layout mismatch', ()
 
 test('the published layout notice clears once the layouts agree again', () => {
   const doc = { location: { href: 'http://x/a.html', origin: 'http://x' } };
+  let local = 1000;
   const client = createRoomClient({
     role: 'host',
     peerId: 'host',
     hostId: 'host',
-    now: () => 1000,
+    now: () => local,
     send: () => {},
     document: doc,
     overlay: false,
@@ -276,11 +277,36 @@ test('the published layout notice clears once the layouts agree again', () => {
   const noticed = client.publish().layoutNotice;
   assert.equal(noticed.peerId, 'p2');
   assert.equal(noticed.dropped, 1);
+  assert.equal(noticed.at, 1000, 'the notice carries the time of the drop');
 
   // The peer comes back to the host's layout, so the notice goes.
   client.receive(encode({ type: 'view', peerId: 'p2', scroll: 0, fingerprint }), 1200);
   assert.equal(client.publish().layoutMismatch, false);
   assert.equal(client.publish().layoutNotice, null);
+
+  // A later mismatch names its own time, not the first drop.
+  local = 1400;
+  client.receive(
+    encode({
+      type: 'view',
+      peerId: 'p2',
+      scroll: 0,
+      fingerprint: { ...fingerprint, innerWidth: 2000 },
+      roomTime: 1400,
+    }),
+    1400
+  );
+  client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 2,
+      records: [{ kind: 'click', path: '#go' }],
+      roomTime: 1400,
+    }),
+    1400
+  );
+  assert.equal(client.publish().layoutNotice.at, 1400);
 });
 
 test('a late joiner gets the page and the scroll from the host', () => {
