@@ -31,12 +31,19 @@
   "web_accessible_resources": [
     "core/*.mjs"
   ],
+  "commands": {
+    "open-room-panel": {
+      "suggested_key": {
+        "default": "Ctrl+Alt+B"
+      },
+      "description": "Open the Brosr room panel"
+    }
+  },
   "sidebar_action": {
     "default_title": "Brosr room",
     "default_panel": "panel/room.html"
   },
   "browser_action": {
-    "default_title": "Brosr room",
-    "default_popup": "panel/room.html"
+    "default_title": "Brosr room"
   }
 }

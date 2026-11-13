@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=280" />
+    <title>Brosr room</title>
+    <link rel="stylesheet" href="room.css" />
+  </head>
+  <body>
+    <header>
+      <span class="dot" id="dot" data-state="idle"></span>
+      <h1 id="room">Room</h1>
+      <span class="role" id="role"></span>
+    </header>
+    <p class="status" id="status">Checking this tab.</p>
+    <ul id="peers"></ul>
+    <section class="control" id="control" hidden>
+      <label for="peer">Control</label>
+      <input id="peer" type="text" placeholder="peer id" autocomplete="off" />
+      <div class="row">
+        <button id="grant" type="button">Grant</button>
+        <button id="revoke" type="button">Revoke</button>
+      </div>
+      <p class="notice" id="notice"></p>
+    </section>
+    <footer>
+      <span id="latency">-</span>
+      <button id="refresh" type="button">Refresh</button>
+    </footer>
+    <script src="room.js"></script>
+  </body>
+</html>

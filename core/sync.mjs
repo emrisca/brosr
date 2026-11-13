@@ -371,6 +371,19 @@ export function createRoomClient({
         state.join({ id: message.peerId, name: message.name, colour: message.colour });
         if (isHost()) {
           sendSnapshot();
+          // A peer that follows a navigation reloads and says hello again. Send
+          // the grant again, or the new page never learns it holds control.
+          const held = grants.active().find((grant) => grant.peerId === message.peerId);
+          if (held) {
+            sendMessage({
+              type: 'control',
+              peerId: message.peerId,
+              allowed: true,
+              tabId: held.tabId,
+              origin: held.origin,
+              roomTime: roomTimeOf(),
+            });
+          }
           if (input && input.grantTo === message.peerId) setGrant(message.peerId, true);
         }
         return { ok: true };
@@ -487,6 +500,7 @@ export function createRoomClient({
   }
 
   function publish() {
+    const grantedPeers = new Set(grants.active().map((grant) => grant.peerId));
     return {
       role,
       peerId,
@@ -506,6 +520,15 @@ export function createRoomClient({
       clockOffset: Math.round(clock.offset()),
       driftRate: drift.rate,
       peers: state.peers.size,
+      // The panel needs names and who holds control. The count stays a number so
+      // the harness assertions do not change.
+      peerList: [...state.peers.values()].map((peer) => ({
+        id: peer.id,
+        name: peer.name || peer.id,
+        colour: peer.colour || null,
+        self: peer.id === peerId,
+        granted: peer.id === peerId ? remoteGrant : grantedPeers.has(peer.id),
+      })),
       url: state.url,
       scroll: Math.round(state.scroll * 1000) / 1000,
       layoutMismatch: stats.layoutMismatch,

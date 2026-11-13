@@ -23,9 +23,9 @@ Paths are relative to this folder. In the Avalon checkout it is `apps/brosr`.
 | `spike/results.json` | Output of the last run |
 | `spike/README.md` | Results table, findings and the limits of each check |
 
-This folder is its own git repository. It has no commits yet and no remote. Syncthing syncs
-the folder, so nothing here comes through git. Leave the `~syncthing~*.tmp` file alone. Ask
-before you commit or push.
+This folder is its own git repository, with local history and no remote. Syncthing syncs the
+folder, so a commit stays on the machine that made it. Leave the `~syncthing~*.tmp` file
+alone. Ask before you commit or push.
 
 ## State on 12 November 2026
 
@@ -37,8 +37,23 @@ before you commit or push.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
   field guard, CSS-path and canvas targeting, and replay. One canvas click proved it. M4 asks
   for a two-machine game.
-- **Verified today.** Ten harness checks pass with `--soak=60`. 63 core tests pass. Two relay
-  tests pass. Three documents lint at zero.
+- **Zen panel.** The room panel reports live inside Zen. The check drives Grant and Revoke, and
+  the toolbar button opens the sidebar. Spaces are still manual.
+- **Verified today.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 63
+  core tests pass. Two relay tests pass. The documents lint at zero.
+
+## Zen panel, 13 November 2026
+
+`zen/` runs the room inside Zen Browser. A headless check installs the bridge, opens a room and
+drives the room panel through Grant and then Revoke. The final notice reads "Control revoked
+from peer.", and `zen/.runtime/results.json` holds both notices.
+
+The toolbar button calls `sidebarAction.open()`, so a click opens the sidebar with no query
+flag. A background page opens the panel as a tab when the sidebar is unavailable, and only one
+panel owns the state.
+
+What is not proven: no run drew Zen's sidebar or the toolbar button. The check drives the panel
+in a tab. Spaces stay manual, because Zen stores them in its session store.
 
 ## Two tasks for the Mac machine
 
@@ -71,30 +86,18 @@ are not ten.
 A LAN hop is the missing piece behind M1 and M4. Every number so far came from four windows on
 one machine over loopback.
 
-Three places block it today:
-
-- `relay.js` binds `127.0.0.1`, so the Mac cannot reach it.
-- `core/browser-entry.mjs` line 164 builds the socket at `ws://127.0.0.1:<port>`, so a LAN
-  page still dials its own loopback.
-- `bridge/manifest.json` matches only `127.0.0.1` and `localhost`, so the content script never
-  runs on a LAN origin.
+The code side landed on 13 November 2026. `relay.js` reads `HOST`, the socket dials
+`location.hostname`, and the bridge matches `http://*/*`. What remains is the run.
 
 Goal: the Mac is a second peer on the Windows relay, and you record its numbers.
 
-1. On Windows, let the relay listen on the LAN. Add a `HOST` read to `relay.js` (default
-   `127.0.0.1`), then run with `HOST=0.0.0.0`. Do not expose it beyond the LAN. It has no auth.
-2. On Windows, open inbound TCP 8787 for the private network in the firewall.
-3. Change `browser-entry.mjs` to dial the page's host instead of loopback, for example
-   `ws://${location.hostname}:${relayPort}`. Keep `relay` as an override, because the jitter
-   proxy lives on 8788.
-4. Widen the bridge match for this test to `["http://*/*"]`. A match pattern cannot carry a
-   port, so the host form works and the port form does not. Rebuild the XPI and reload it on
-   both machines.
-5. Open `room-b.html` on the Windows LAN address at port 8787, with `role=host`,
+1. On Windows, run the relay with `HOST=0.0.0.0` and open inbound TCP 8787 for the private
+   network. The relay still has no authentication, so keep it on the LAN.
+2. Load the bridge XPI on both machines. `spike/run.mjs` and `zen/check.mjs` both build it.
+3. Open the host page on the Windows LAN address, not `127.0.0.1`, with `role=host`,
    `room=lan`, `peer=host`, `name=Host` and `grant=mac`.
-
-6. On the Mac, load the XPI in `about:debugging`, then open the same page with `role=peer`,
-   `room=lan`, `peer=mac`, `host=host`, `name=Mac` and `capture=1`.
+4. Open the same page on the Mac with `role=peer`, `room=lan`, `peer=mac`, `host=host`,
+   `name=Mac` and `capture=1`.
 
 Append the parameters as a query string. The host announces its own page, so a peer that
 follows `127.0.0.1` lands on itself.
@@ -176,6 +179,8 @@ Each one cost a run. `core/README.md` lists five rules. Beyond those:
 - The relay has no room size cap and no authentication yet. Do not expose it beyond the LAN.
 - A synthetic event has `isTrusted: false`. The trusted actuator is M7.
 - Do not claim a speed or a pass without the counter in `results.json` behind it.
+- The check drives the Zen panel in a tab, not in the sidebar. Zen's sidebar may host it
+  differently.
 
 ## Suggested skills
 

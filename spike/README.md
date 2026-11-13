@@ -24,10 +24,10 @@ no system Firefox on the machine.
 | Q2 bridge | Pass | A temporary XPI with the nine core modules installed on all four. The content script imported the core from the extension origin and reported `source: content-script`. |
 | Q3 uBlock Origin | Pass | Full uBO 1.76.0, active and signed. It blocked a Taboola request in profile A. Profile B, without uBO, loaded the same request. |
 | Q4 BiDi input | Pass | One key action produced `isTrusted: true` and set the field to `a`. |
-| Q5 media | Pass | Two windows played one encoded clip through a real `HTMLMediaElement`. The peer joined 2.4 s behind, used one seek and one rate nudge, then held 84 samples at 12 ms p95 and 32 ms worst. Both windows drew the other cursor. |
+| Q5 media | Pass | Two windows played one encoded clip through a real `HTMLMediaElement`. The peer joined 2.4 s behind, used one seek and one rate nudge, then held 84 samples at 12 ms p95 and 36 ms worst. Both windows drew the other cursor. |
 | Q6 token channel | Pass | The agent refused to start without a grant and bound `127.0.0.1` on a random port. No token gave 401, a wrong token gave 401, the right token typed a trusted `t`, and revoke closed the socket. |
-| Q7 four-peer room | Pass | Four tabs in one room. 432 presence samples across three peers at 2 ms p95 and 3 ms worst. Each peer drew three cursors, all three followed the host to the second page, and every window landed at the same 0.55 scroll ratio. |
-| Q8 jitter link | Pass | The proxy added 120 ms each way and dropped 5 percent, which cost 20 messages up and 29 down. The peer converged with one seek, then held 57 samples at 39 ms p95 and 47 ms worst. |
+| Q7 four-peer room | Pass | Four tabs in one room. 498 presence samples across three peers at 2 ms p95 and 4 ms worst. Each peer drew three cursors, all three followed the host to the second page, and every window landed at the same 0.55 scroll ratio. |
+| Q8 jitter link | Pass | The proxy added 120 ms each way and dropped 5 percent, which cost 31 messages up and 20 down. The peer converged with one seek, then held 58 samples at 11 ms p95 and 42 ms worst. |
 | Q9 input relay | Pass | A granted peer clicked the canvas at its centre. The host drew the same point as a synthetic event at (201, 151) and applied one record. A password field on the peer stayed local, so the host's copy stayed empty. |
 | Soak 60 s | Pass | Four peers scrolled together while the relay restarted in the middle. 600 presence samples at 2 ms p95. Every peer reconnected and came back to the host's 0.6 scroll ratio. |
 
@@ -52,7 +52,8 @@ node run.mjs --only=bidi,ad --firefox="$PWD/.runtime/firefox-mac.app/Contents/Ma
 | Q7 four-peer room | Pass | 467 presence samples at 3 ms p95. Each peer drew three cursors and reported the host's 0.55 scroll ratio. |
 
 The room lane ran as a regression check for the LAN changes below, not as a ten-check run.
-`results.json` holds this run. `results-win11.json` holds the full ten-check Windows run.
+`results-macos.json` holds this run. `results.json` holds the later Windows run, and
+`results-win11.json` holds the ten-check run it replaced.
 
 ## The LAN changes, and what they do not prove
 

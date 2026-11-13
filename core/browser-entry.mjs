@@ -215,6 +215,12 @@ export async function start() {
         .sendMessage({ type: 'brosr:open-panel', selftest: Boolean(config.selftest) })
         .catch(() => {});
     }
+    // The panel cannot see this tab with tabs.query in a headless window, so
+    // the tab registers itself instead.
+    const hello = () =>
+      browser.runtime.sendMessage({ type: 'brosr:room-hello' }).catch(() => {});
+    hello();
+    setInterval(hello, 2000);
     setInterval(async () => {
       try {
         const reply = await browser.runtime.sendMessage({ type: 'brosr:panel-state' });
