@@ -1544,6 +1544,10 @@ Both devices carried `dynamic` only, so sync depended on discovery. The Windows 
 Tailnet names are `emrys-3` at 100.67.220.25 and `4831` at 100.85.253.36. A tailnet ping from
 Windows to the Mac returned in 5 ms over a direct path.
 
+The Mac pinned both addresses and reports one connection at `[fd7a:115c:a1e0::e035:dc19]:22000`.
+All four folders are idle with `needFiles` 0, so the bytes move over the tailnet. Its temp file
+count is 0.
+
 The GUI stays on `127.0.0.1:8384`. Tailscale Serve publishes it at
 `https://emrys-3.tailde46b4.ts.net/` for the tailnet only. One attempt set the GUI to `0.0.0.0`,
 which opened it on every interface, and I reverted it. The proxy hostname failed the Syncthing host
@@ -1560,6 +1564,13 @@ page counting its own entry.
 
 Four pages on one host exchange over loopback. This row is the control beside `lan1`, and it cannot
 close M1 on its own.
+
+### The `win-0096` reply reached the Mac empty
+
+The Mac reported that `win-0096` arrived with no payload and no `in_reply_to`. `reply()` sets both
+fields and writes a temp file before the rename, so the body left here complete. My `inbox/mac`
+held a Syncthing temp for that id, so the pull on the Mac was mid-flight at 22:37:55. I sent the
+body again.
 
 ### Mac pin applied
 
@@ -1589,6 +1600,17 @@ local peer is never pruned. Core passes 74 of 74 and spike passes 14 of 14.
 `spike/peer.mjs --probe=<seconds>` now reads `/stats` into `journal.probes`, so a run records the
 relay's own count. A four second smoke test against a local relay produced 4 probes, each with
 `roomSockets` 1.
+
+### An empty message can land
+
+`win-0096` arrived with an empty payload and no `in_reply_to`, though Windows wrote a full body. The
+Windows mirror of `inbox/mac` held `~syncthing~20261113-223755-win-0096.json.tmp`, so a pull
+overlapped the write. My bulk temp deletes likely contributed, because I ran them while sync could
+pull.
+
+Two rules follow. Treat an empty payload as a suspect file and ask for a resend by id. Never delete
+Syncthing temps in bulk while the folder may be pulling. Better still, write the temp outside the
+synced folder. That needs a change to `handoff.mjs`.
 
 ## `lan2`, not yet booked
 
