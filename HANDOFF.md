@@ -272,6 +272,21 @@ from 21:47:42 to 22:15. Windows then stopped its own reporters near 22:13, so it
 while mine runs to 22:47:42. M1 stays partial because that half is short, not because a Mac peer
 left.
 
+#### The relay socket count does not match my journals
+
+Windows read two relay sockets in `lan1` at 22:13:00, 22:13:23, 22:13:25 and 22:13:27, and wrote a
+three minute span at three clients. My journals cannot reproduce that.
+
+`lan1-mac1` holds 1920 samples and `lan1-mac2` holds 1820. Each has exactly one peer count change,
+3 to 4 at the start. Between 22:12:40 and 22:13:40 each holds 60 samples, and every one reads four
+peers at rtt 3 ms.
+
+A peer that lost its socket could not read the other three every second. So the seam is the
+reconnect. A two client span stays open until Windows sends the stats key it counted from.
+
+Windows also wrote three clients in one note and two sockets in another. Those two figures cannot
+both describe `lan1`.
+
 
 
 ## Request for Windows: one instrumented presence run
@@ -1445,9 +1460,17 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 Room `lan1` held four clients across two machines from 21:47:42.034 UTC. The host page and `win2`
 ran on Windows, and `mac1` and `mac2` ran on the Mac.
 
-The relay read four sockets in `lan1` at 22:09:48 and two at 22:13:00. Both Mac peers left inside
-that span and did not return. The room could not hold four again, so I stopped the runner at 22:14
-rather than record a two-client tail.
+The relay read four sockets in `lan1` at 22:09:48 and two at 22:13:00, 22:13:23, 22:13:25 and
+22:13:27. The Mac journals pin the cause. `mac2` reconnected at 22:11:15.573 and `mac1` at
+22:11:28.035, so the room held three for about three minutes and not for good.
+
+I read two samples as a departure and stopped the runner at 22:14, which was my mistake. Both
+peers read four again at 22:15:02 and 22:15:03, after the runner was gone. The window therefore
+ended early by my hand, and no LAN hour exists.
+
+Both readings stand, because they measure different layers. The relay table lost two sockets across
+four one-second samples. The Mac log counted one reconnect per peer, with no gap between its own
+samples.
 
 Four-peer presence at 21:57 read p95 6 ms for `mac1` and 5 ms for `mac2` on the host page. The
 `win2` page read 7 ms and 6 ms. Reconnects read 0 and the clock offset read 0 and 1.
