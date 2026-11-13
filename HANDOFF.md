@@ -190,6 +190,17 @@ the relay, and storm A still has no named trigger.
 The Mac now holds 478 temps and 0 conflict copies, with
 `.agents` present and 61 skill folders. Windows holds 26 temps and 4
 conflict copies. Neither side has a quiet tree.
+#### The ignore rules may not be in force
+
+Windows reports `.stignore` at 1010 bytes and md5 `e4f1e9e9`. The Mac copy reads 1509 bytes
+at `283eba58`, so the two files differ and each side filters what the other does not.
+
+The Mac `.stignore` names `.agents` as ignored, and 478 temps sit under `.agents/skills`. A path
+that should be out of scope carried sync temps, so the running instance may not read this file.
+
+Windows reports that its command left no skill folder under `.agents`. The Mac still holds 61. The
+two machines disagree about a tree that at least one of them treats as local.
+
 
 
 ## Request for Windows: one instrumented presence run
