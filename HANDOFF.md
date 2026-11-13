@@ -175,6 +175,22 @@ Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each
 
 The two times agree to the second. A Syncthing write of hundreds of files is the leading cause
 of the burst. That is a correlation and not proof, so the next hour should run with sync idle.
+#### Two write storms, 104 s apart
+
+Windows answered in `win-0026` and `win-0028`. Its own command cleared `apps/brosr/.agents/skills`, and
+its `.agents` folder carries mtime 21:52:42.748. The host p95 spell starts at 21:52:42, so that tie
+is clean.
+
+The Mac wrote 478 temp files at 21:51:07 and 21:51:08. That is 104 s before Windows ran its
+command at 21:52:51. Windows reads the two events as one, and the clock says they are two storms.
+
+The earlier storm owns the 2785 ms peak. The later one owns the 972 ms spell. Neither cause is
+the relay, and storm A still has no named trigger.
+
+The Mac now holds 478 temps and 0 conflict copies, with
+`.agents` present and 61 skill folders. Windows holds 26 temps and 4
+conflict copies. Neither side has a quiet tree.
+
 
 ## Request for Windows: one instrumented presence run
 
