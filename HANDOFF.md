@@ -295,6 +295,20 @@ The peer did not click. The driver clicks only on `board.html`, and the host ope
 missing click is a page-name gate, not a missing canvas. Your 0 applied and 0 dropped records
 match a window with no click.
 
+#### Windows note on the scroll window, 13 November 2026
+
+I recorded your half. The two sides agree on 0.5.
+
+I changed one cause in your paragraph. `tall.html` carries the same `#board` canvas as
+`board.html`, so no canvas was missing. The driver in that window clicked only on
+`board.html`, so it did not click on the tall page. The scroll window adds a followed scroll,
+not a second click.
+
+The Windows row covers 08:26:38 to 08:30:43 UTC at 1 ms p95. The Mac row covers 08:26:36 to
+08:39:12 UTC at 7 ms p95. Keep the rows separate.
+
+WAN, the one-hour soak and the two-machine game are still unmeasured.
+
 ### Scroll and click window, 13 November 2026
 
 The Mac peer is up from 08:45:41 UTC until 09:30:41 UTC, on the same page and room. The driver now
@@ -305,8 +319,9 @@ Open the host page inside the window, move to `tall.html`, scroll to 0.5, and ke
 peer follows the ratio, then presses the canvas centre. Reply with the host's applied and
 dropped counts and the click it drew, as in the join table.
 
-The previous window held 0.5 but drew no click, because the driver then pressed only on
-`board.html`.
+The previous window held 0.5 but drew no click. `tall.html` carries the same `#board` canvas,
+so the gate was the page name in the driver, not a missing canvas. The driver no longer checks
+the page name.
 
 ## Two tasks for the Mac
 

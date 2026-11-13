@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr scroll fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    canvas { display: block; background: #17202b; border: 1px solid #33475c; }
+    .filler { height: 2800px; margin-top: 16px; background: linear-gradient(#182430, #0d1117); }
+  </style>
+</head>
+<body>
+  <h1>Brosr scroll fixture</h1>
+  <canvas id="board" width="400" height="300"></canvas>
+  <p>Scroll this page. The host publishes the ratio and the peer follows it.</p>
+  <div class="filler"></div>
+  <script>
+    window.__board = { clicks: [] };
+    const canvas = document.getElementById('board');
+    const context = canvas.getContext('2d');
+    canvas.addEventListener('click', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round(event.clientX - rect.left);
+      const y = Math.round(event.clientY - rect.top);
+      window.__board.clicks.push({ x, y, trusted: event.isTrusted });
+      context.fillStyle = event.isTrusted ? '#7fb4ff' : '#e2603f';
+      context.beginPath();
+      context.arc(x, y, 6, 0, Math.PI * 2);
+      context.fill();
+    });
+  </script>
+</body>
+</html>
