@@ -38,7 +38,8 @@ needs no Zen patch.
    Grant or Revoke button, and the panel lists the last three control changes.
 3. **Two entry points.** The panel is a `sidebar_action`. The toolbar button calls
    `sidebarAction.open()`, so a click opens the sidebar with no query flag. The Ctrl+Alt+B
-   command calls the same function. No run proved that chord. If the sidebar is
+   command calls the same function. A Windows console run proved the chord from a foreground
+   window, and the Mac run posted it to the Zen process. If the sidebar is
    unavailable, the background page opens the panel as a tab instead.
 4. **Spaces stay manual.** Zen stores spaces in its session store. A launcher cannot write that
    store safely, so the profile does not fake one. A room per space is the natural next step, and
@@ -57,10 +58,12 @@ relay and builds the XPI with the panel inside. It starts Zen headless on port 9
 host room and a second peer tab. It drives the panel's Grant and Revoke buttons, then reads
 both tab datasets and the panel's own DOM. It writes `zen/.runtime/results.json`, then it
 kills the browser processes. The check deletes the default profile first, because a restored
-panel also drives control. `shortcut.mjs` is a separate headful attempt at the Ctrl+Alt+B
-chord. On the Mac it posted the chord to the Zen process with `keypost.swift`. The room page then
-recorded `command: open-room-panel`. A spawned window never took activation, and a Windows SSH
-session runs in session 0. So neither run proves a user pressing the keys in a frontmost window.
+panel also drives control. `shortcut.mjs` is a separate headful proof of the Ctrl+Alt+B chord. On the Mac it posted the
+chord to the Zen process with `keypost.swift`. The room page then recorded
+`command: open-room-panel`. At the Windows console it sent the chord to a foreground window and
+the room recorded `open-room-panel`. The page records no keydown in either case, because the
+browser consumes the chord. A spawned Mac window still does not take activation, so the Mac has
+no proof from a frontmost window.
 
 To use the room by hand, start the relay, then run the command `profile.mjs` prints. Load the XPI
 from `about:debugging` when the profile is new.
@@ -75,9 +78,9 @@ from `about:debugging` when the profile is new.
 - The check reads the panel page through BiDi, which needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` when
   Zen starts. Without it BiDi refuses the extension context. The run uses one host and one
   peer on this machine, so a real LAN run is still open.
-- The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. A
-  chord posted to the Zen process opened the panel on the Mac. A frontmost window that takes
-  activation is still untested, and the Windows SSH run recorded no key.
+- The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. The
+  Windows console proved the chord from a foreground window. The Mac run posted it to the Zen
+  process and opened the panel. A Mac window that takes activation is still untested.
 - A room does not create a space. That needs the session store format, and the plan does not
   guess at it.
 - uBlock Origin installs from AMO as usual. Zen does not bundle it and neither does this folder.

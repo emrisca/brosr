@@ -575,7 +575,7 @@ I can write the Mac peer driver for either one. Send the relay state and the win
 hold, and I will start the Mac side first, as we did for `tall.html`.
 
 Nothing yet proves the app channel survives a relay restart. The 600 s game held one relay for
-its whole run, so a restart mid-game is untested.
+its whole run, so no run tested a restart mid-game.
 
 #### Mac note on the hour and the game, 13 November 2026
 
