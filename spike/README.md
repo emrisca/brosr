@@ -123,6 +123,70 @@ The host never counts itself, so 1 and 2 are the right counts for two pages. The
 0 because the peer paddle only moved between two positions. The scores still match on both
 windows, which is the check that matters.
 
+## LAN game, 13 November 2026
+
+The Mac peer ran `spike/peer.mjs` in room `game`. The Windows host opened `game.html` at
+`http://192.168.8.161:8787/` and held it for 600 s.
+
+| Item | Windows | Mac |
+| --- | --- | --- |
+| Window | 17:38:59 to 17:49:00 UTC | 17:38:59 to 17:49:00 UTC |
+| Peers | 1 visible (`mac`) | 2 |
+| State frames | 8658 sent | 8645 received, 14.4 per second |
+| Paddles | 5969 received | 5960 sent |
+| Dropped | 0 | 0 |
+| Sequence at the end | 8658 | 8656 |
+| Score at the end | 97 to 0 | 97 to 0 |
+| Frames drawn | 86585 | not counted |
+| Presence latency | not read, the page reported `null` | 200 samples, p50 3 ms, p95 4 ms, max 5 ms |
+
+The two scores match, so `scoresMatch` is true. The host sent 13 more states than the Mac
+received. A host restart earlier in the strip dropped the sequence to 3757, but that drop sits
+before 17:38:59, and the window itself has no regression. The Mac peer counted two entries
+where the host counted one. The first early host run covered a room where the Mac peer dropped,
+so it is not a row.
+
+A second 600 s game ran at 18:11 UTC, after the Mac restarted its peer. The host saw the peer at
+18:11:54 UTC.
+
+| Item | Windows | Mac |
+| --- | --- | --- |
+| Window | 18:11:54 to 18:21:55 UTC | 18:11:54 to 18:21:55 UTC |
+| Peers | 1 visible (`mac`) | 1 visible (`host`) |
+| State frames | 8648 sent | 8641 received, 14.4 per second |
+| Paddles | 5958 received | 5957 sent |
+| Dropped | 0 | 0 |
+| Sequence at the end | 8649 | 8650 |
+| Score at the end | 111 to 0 | 111 to 0 |
+| Frames drawn | 86488 | not counted |
+| Presence latency | 200 samples, p50 0 ms, p95 8 ms, max 44 ms | 200 samples, p50 43 ms, p95 44 ms, max 44 ms |
+
+The two scores match, so `scoresMatch` is true. The host sent 7 more states than the Mac
+received, and the paddle counts differ by one, so the sides are not frame exact. The host p95
+read 2189 ms at 18:14 and 8 ms at the end. The final row uses the last 200 samples.
+
+## LAN hour, 13 November 2026
+
+The Mac peers `mac1` and `mac2` joined room `soak` at 18:27 UTC. The Windows host and `win2`
+opened at 18:30:01 and started at 18:30:02.885 UTC.
+
+| Item | Windows host | Windows peer `win2` | Mac `mac1` | Mac `mac2` |
+| --- | --- | --- | --- | --- |
+| Window | 18:30:02 to 19:30:03 UTC | same | 18:30:00 to 19:30:00 UTC | 18:30:00 to 19:30:00 UTC |
+| Peers | 3 | 4 | 1 then 4 | 1 then 4 |
+| Presence samples | 200, the page cap | 200, the page cap | 3596 | 3596 |
+| Presence p50, ms | 0 | 1 | 46 | 46 |
+| Presence p95, ms | 1 | 2 | 158 | 161 |
+| Presence max, ms | 1 | 3 | 4920 | 4984 |
+| Scroll | 0.2, 0.6 at 18:50, 0.35 at 19:10 | followed both | reported 0.2, 0.6, 0.35 | reported 0.2, 0.6, 0.35 |
+| Applied and dropped input | 0 and 0 | 0 and 0 | no input sent | no input sent |
+| Reconnects | 0 | 0 | 1 at 18:31:16 | 1 at 18:31:16 |
+
+The page keeps the last 200 latency samples, so its p95 covers the last 200 samples. The Mac
+journal keeps all 3596, so its p95 covers the whole hour. The Mac peers report the host ratio
+rather than scrolling a page. The Mac max lands on the reconnect minute. The Mac peers counted
+four entries once Windows joined, and the host counted three.
+
 ## LAN, two machines, 13 November 2026
 
 The first two-machine run joined a Windows host and a Mac peer over the Ethernet LAN at
@@ -198,16 +262,16 @@ does not prove a WAN, an hour, or more than two machines.
   build needs a signed XPI, which is M6.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
-- A LAN hour. The Windows run soaked 60 s. The one-hour run on 13 November 2026 was loopback
-  on one Mac, so no hour crossed the LAN.
+- An explained LAN hour. Both halves exist, but Windows held 1 to 2 ms p95. The Macs held
+  158 to 161 ms. No measurement in this folder explains the gap.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
 - The launcher. The token agent ran inside the harness, not in a Tauri process. The harness
   minted the token and the grant, and no UI showed either.
 - The grant UI. The spike grants control with a query parameter, and it has no Revoke button.
-- A two-machine game. The 600 s game ran two windows on one Mac over loopback. No game
-  crossed the LAN.
+- A frame-exact game. Both sides ended at 111 to 0, but the host sent 8648 states against
+  8641 received, and the paddle counts differ by one.
 - Input beyond a click and a paddle. No pointer lock, no wheel test, and no typing into an
   ordinary field.
 - Media beyond one 120 s clip: no ad, no DRM, no live stream, no 40-minute run.
