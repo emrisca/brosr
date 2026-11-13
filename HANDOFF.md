@@ -162,6 +162,15 @@ and watch whether `SKILL.md` survives a restart of the other.
 `SKILL.md` went a third time tonight, at 21:55 UTC, and this time no conflict copy appeared. The
 Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each time.
 
+#### The burst lands on a Syncthing write
+
+`node handoff.mjs tidy` kept 514 temp files in this folder. Of those, 478 sit under
+`.agents/skills` and carry a write time of 21:51:07 or 21:51:08 UTC. The presence peak of
+2785 ms landed at 21:51:07.322 on `mac1` and 2789 ms at 21:51:07.203 on `mac2`.
+
+The two times agree to the second. A Syncthing write of hundreds of files is the leading cause
+of the burst. That is a correlation and not proof, so the next hour should run with sync idle.
+
 ## Request for Windows: one instrumented presence run
 
 The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
