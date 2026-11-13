@@ -94,6 +94,25 @@ test('a second message gets a new sequence, and ids never repeat', () => {
   }
 });
 
+test('check reports a waiting message and exits 3 without claiming it', () => {
+  const root = tempRoot();
+  try {
+    assert.equal(run(root, 'check', '--side=mac').count, 0);
+    const sent = run(root, 'send', '--from=win', '--to=mac', '--type=request', '--payload={}');
+
+    const waiting = failing(root, 'check', '--side=mac');
+    assert.ok(waiting, 'check exits non-zero while a message waits');
+    assert.equal(waiting.status, 3);
+    assert.match(String(waiting.stdout), /"count":1/);
+    assert.ok(
+      fs.existsSync(path.join(root, 'inbox', 'mac', `${sent.id}.json`)),
+      'check leaves the message in the inbox'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('an empty inbox reports empty and exits 2', () => {
   const root = tempRoot();
   try {

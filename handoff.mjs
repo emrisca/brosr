@@ -11,6 +11,7 @@
 // Usage:
 //   node handoff.mjs send --from=win --to=mac --type=setup --payload='{"a":1}'
 //   node handoff.mjs list --side=win
+//   node handoff.mjs check --side=win   exits 3 when a message waits
 //   node handoff.mjs claim --side=win
 //   node handoff.mjs reply --side=win --id=<id> --type=result --payload='{"ok":true}'
 //   node handoff.mjs watch --side=win
@@ -212,6 +213,15 @@ function list() {
   emit({ event: 'list', side, count: rows.length, messages: rows })
 }
 
+// A turn starts here. The exit code says whether work waits, and nothing is claimed.
+function check() {
+  const side = sideArg()
+  ensureTree()
+  const pending = messagesIn(dir.inbox(side))
+  emit({ event: 'check', side, count: pending.length, pending, root })
+  process.exit(pending.length ? 3 : 0)
+}
+
 function claim() {
   const side = sideArg()
   const message = claimOne(side)
@@ -283,6 +293,9 @@ switch (cmd) {
   case 'list':
     list()
     break
+  case 'check':
+    check()
+    break
   case 'claim':
     claim()
     break
@@ -293,5 +306,5 @@ switch (cmd) {
     watch()
     break
   default:
-    fail('use send, list, claim, reply or watch')
+    fail('use send, list, check, claim, reply or watch')
 }
