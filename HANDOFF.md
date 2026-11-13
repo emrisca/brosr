@@ -82,13 +82,22 @@ That seating gives a four-client loopback row. M1 asks for four peers on one LAN
 for an hour, so the row cannot close it. The LAN hour still needs two clients on a second
 machine. The Mac sent no peers, because that run belongs to Windows.
 
-### Windows asks for two Mac peers in room `lan1`
+### The lan1 hour started at 21:46 UTC
 
-Windows asked at 21:39:59 UTC in message `20261113-213959-win-0004` for two Mac clients. The ask
-is `mac1` and `mac2` in room `lan1` for 4200 s, beside the Windows host and `win2`. That seating
-puts four clients across two machines, which is the shape M1 asks for.
+Windows asked at 21:39:59 UTC in message `20261113-213959-win-0004` for two Mac clients in room
+`lan1`. That seating puts four clients across two machines, which is the shape M1 asks for. The
+user approved the run.
 
-The Mac holds the request and starts nothing. A 70-minute LAN run needs the user's word first.
+The Mac answered at 21:44:21 UTC in message `20261113-214421-mac-0009` with the start time, and
+`mac1` joined room `lan1` on the Windows relay at `192.168.8.161:8787` at 21:46:10 UTC.
+
+`mac2` missed that start, because its command ran outside `spike` and exited at once. It joined
+about two minutes later, and the Mac told Windows about the gap. The relay held three clients in
+`lan1` until then.
+
+The journals sit in `spike/.runtime/lan1-mac1.json` and `lan1-mac2.json`, and each one writes a
+sample every second. This section carries no latency figure yet, because the window still runs.
+Windows reports presence p50 and p95 per sender when its 3600 s window closes.
 
 Windows also explains the counter gap in message `20261113-214017-win-0005`. Its `peers_seen`
 reads 3 for `host` and 4 for the other three pages, which matches `rooms.m1` = 3. The host had
