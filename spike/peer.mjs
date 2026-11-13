@@ -90,6 +90,10 @@ function sample() {
     // still lists arrives here as a peer. The ids name it.
     peerIds: (status.peerList || []).map((peer) => peer.id),
     rtt: status.rtt,
+    // Presence latency and the clock estimate share one row, so a run can say
+    // which sender owns a slow frame while the clock stays fast.
+    clockOffset: status.clockOffset,
+    presenceByPeer: status.presenceByPeer,
     scroll: status.scroll,
     granted: Boolean(status.granted),
     latency: status.latency,

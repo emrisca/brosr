@@ -56,6 +56,9 @@ export function createRoomClient({
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
   const latencies = [];
+  // The merged list cannot say which sender owns a slow frame, so each sender
+  // keeps its own window next to the clock estimate taken at the same time.
+  const presenceByPeer = new Map();
   const stats = {
     role,
     peerId,
@@ -265,6 +268,10 @@ export function createRoomClient({
       if (latency >= 0 && latency < LATENCY_LIMIT) {
         latencies.push(latency);
         if (latencies.length > latencyLimit) latencies.shift();
+        const bucket = presenceByPeer.get(message.peerId) || [];
+        bucket.push(latency);
+        if (bucket.length > latencyLimit) bucket.shift();
+        presenceByPeer.set(message.peerId, bucket);
       }
     }
     state.join({ id: message.peerId, name: message.name, colour: message.colour });
@@ -548,11 +555,15 @@ export function createRoomClient({
     return stats;
   }
 
-  function latencyStats() {
-    if (!latencies.length) return null;
-    const sorted = [...latencies].sort((a, b) => a - b);
+  function summarize(list) {
+    if (!list.length) return null;
+    const sorted = [...list].sort((a, b) => a - b);
     const at = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
     return { n: sorted.length, p50: at(0.5), p95: at(0.95), max: sorted[sorted.length - 1] };
+  }
+
+  function latencyStats() {
+    return summarize(latencies);
   }
 
   function publish() {
@@ -590,6 +601,9 @@ export function createRoomClient({
       layoutMismatch: stats.layoutMismatch,
       latency: latencyStats(),
       latencies: latencies.slice(-latencyLimit),
+      presenceByPeer: Object.fromEntries(
+        [...presenceByPeer].map(([id, list]) => [id, summarize(list)])
+      ),
       granted: remoteGrant,
       controlSent: stats.controlSent,
       controlReceived: stats.controlReceived,

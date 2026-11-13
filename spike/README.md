@@ -195,8 +195,9 @@ host, so 1 to 2 ms is a loopback figure and not a LAN one. The Mac column crosse
 on channel 56 at -49 dBm. That column is not a transit time either. The room's own clock
 exchange held 3 to 4 ms round trip for the whole hour, while presence read 46 ms p50. No frame
 takes 46 ms one way on a path with a 3 ms round trip. The presence figure carries a bias of
-about 40 ms. No row here names it. A TCP connect from the Mac to the relay took 4.5 to 13 ms
-over six tries.
+about 40 ms. No row here names it. The peer journal now carries each sender's presence p50
+beside the clock offset. A TCP connect from the Mac to the relay took 4.5 to 13 ms over six
+tries.
 
 ## LAN, two machines, 13 November 2026
 

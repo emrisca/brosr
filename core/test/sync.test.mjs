@@ -266,6 +266,24 @@ test('presence latency lands in the published sample list', () => {
   assert.equal(published.latencies.at(-1), 60);
   assert.equal(published.latency.n, 1);
   assert.equal(published.latency.p95, 60);
+
+  // A second sender keeps its own window, so one slow peer cannot hide behind
+  // a merged p50.
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p3',
+      name: 'Q',
+      colour: '#000',
+      point: { x: 0, y: 0 },
+      roomTime: 990,
+    }),
+    now
+  );
+  const split = client.publish();
+  assert.equal(split.presenceByPeer.p2.p50, 60);
+  assert.equal(split.presenceByPeer.p3.p50, 10);
+  assert.equal(split.latency.n, 2);
 });
 
 test('a peer pings the host, and a ping addressed elsewhere is not answered', () => {

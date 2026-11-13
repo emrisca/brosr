@@ -93,7 +93,8 @@ The two latency columns measure different hops. The Windows pages talk to a rela
 host, so 1 to 2 ms there is loopback. The Mac column crosses Wi-Fi. That figure is not a transit
 time. The room's clock exchange held 3 to 4 ms round trip for the whole hour, while presence
 read 46 ms p50. No frame takes 46 ms one way over a path with a 3 ms round trip. The presence
-figure carries a bias of about 40 ms. No row here names it.
+figure carries a bias of about 40 ms. No row here names it. The peer journal now carries each
+sender's presence p50 next to the clock offset, so the next LAN hour names the sender.
 
 ## What Windows changed since 12 November
 
@@ -937,7 +938,9 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 2. **The Mac latency.** The Windows column is loopback, so it says nothing about the LAN. The
    Mac column reads 46 ms p50. Instrument the presence path against the clock exchange in one
    run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
-   at 43 ms after a jump from 8 ms and stayed there.
+   at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
+   presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
+   does a figure get quoted.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
