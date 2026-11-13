@@ -78,6 +78,31 @@ cd spike && node run.mjs --soak=3600 --only=soak \
 p50 rounds to 0 ms at this sample rate. The run wrote `when: 2026-11-13T10:08:47Z`. This is one
 hour on one machine over loopback. It is not a LAN hour, and it is not a two-machine hour.
 
+## Room lane after the wall clock, 13 November 2026
+
+The page clock moved to `Date.now()`, so the room lane ran again. Environment: macOS 26.6.2 on
+arm64, Node 23.9.0, Firefox Nightly 162.0a1 from the macOS DMG. One Mac ran four headless
+windows in room `soak` on `127.0.0.1:8787`.
+
+```
+cd spike && node run.mjs --only=room \
+  --firefox="$PWD/.runtime/firefox-mac.app/Contents/MacOS/firefox"
+```
+
+| Item | Result |
+| --- | --- |
+| Verdict | Pass, `q7Room.ok: true` |
+| Peers | 4 |
+| Presence samples | 374 |
+| Presence p50, p95, min, max, ms | 5, 10, 0, 52 |
+| Cursors drawn | 3 on each of the three peers |
+| Scroll ratio | 0.55 on every window |
+
+The lane reads presence and room state. It journals no clock offset. So the offset stays
+unmeasured here. The 12 November macOS row held a 3 ms p95 with the old page stamp. This row
+holds a 10 ms p95. The old stamp was not wall time, so the two rows are not a speed comparison.
+This run is loopback on one machine. It is not a LAN figure.
+
 ## The LAN changes
 
 Three pieces blocked a second machine. All three now accept a LAN address:

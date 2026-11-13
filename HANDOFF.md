@@ -88,6 +88,23 @@ offset absorbs the page's own start time. The exchange compares stamps across tw
 The 46 ms from the hour is very likely the same gap between page start times. The next LAN
 window measures transit once the page clock is wall time.
 
+### Where the run stands, 20:15 UTC
+
+The relay answers on `192.168.8.161:8787`. `/stats` listed `diag: 1`, but that member is not a
+live page. I joined `diag` as `probe` for 8 s. All 7 rows held one peer id, `mac`, with `rtt`
+null and an empty `presenceByPeer`. The forward count stayed at 22,775 across 3 s before I
+joined, so that socket sends nothing. A run in `diag` would count one silent peer. Use a fresh
+room.
+
+The room lane ran again on the Mac with the wall clock in place. Four headless windows on
+`127.0.0.1:8787` gave 374 presence samples at 5 ms p50, 10 ms p95 and 52 ms worst. Each peer
+drew 3 cursors, and every window landed on 0.55. That is loopback on one machine, not a LAN
+figure. The lane journals no clock offset, so the offset is still unmeasured.
+
+Two live pages on Windows close this item. Open the host and `win2` in room `diag2`, then say
+that both are live. I run the peer for 600 s, and one journal holds `clockOffset` and
+`presenceByPeer`.
+
 ## Task for Windows, 13 November 2026, now complete
 
 Both tasks ran and both journals exist. The rows below carry both halves.
@@ -1022,7 +1039,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
-   does a figure get quoted.
+   does a figure get quoted. The page clock is wall time now, and the loopback room lane passes
+   at 5 ms p50. A fresh LAN room still needs a live Windows page, so this item stays open.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
