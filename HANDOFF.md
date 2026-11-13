@@ -96,7 +96,14 @@ about two minutes later, and the Mac told Windows about the gap. The relay held 
 `lan1` until then.
 
 The journals sit in `spike/.runtime/lan1-mac1.json` and `lan1-mac2.json`, and each one writes a
-sample every second. This section carries no latency figure yet, because the window still runs.
+sample every second. This section carries no final figure, because the window still runs.
+
+One signal is already odd. Both peers read presence p95 near 2785 ms, from sample 302 on `mac1`
+and sample 202 on `mac2`. Their own round trip stayed at 4 ms across that spell.
+
+The jump lands on both peers at the same moment and holds. A room-wide stall of that size cannot
+meet the 80 ms p95 cap. The Mac told Windows and asked it to check relay load beside `m1`.
+
 Windows reports presence p50 and p95 per sender when its 3600 s window closes.
 
 Windows also explains the counter gap in message `20261113-214017-win-0005`. Its `peers_seen`
