@@ -106,7 +106,7 @@ because the host opened `tall.html` and the peer driver then pressed only `board
 
 A third window paired the two. The Windows host opened `tall.html?grant=mac` at 09:05:31 UTC,
 the Mac joined at 09:05:32, and the host scrolled to 0.5 at 09:05:35. The Mac's last sample
-holds 0.5 with two peers and a granted click. The click did not land. At 0.5 the `#board`
+holds 0.5 with two peers and the grant active. The click did not land. At 0.5 the `#board`
 canvas sat above the viewport, so BiDi refused the press at (225, -986) in a 935 by 815
 viewport. The driver stopped on that error after 1184 samples, so this window gives no click
 row. `tall.html` now pins the canvas so a later window can land one.
@@ -131,15 +131,15 @@ peer followed 0.5, and the host received the click at 09:29:15.
 The two sides agree on 0.5 and on the canvas point. The host applied the click and dropped
 none. This closes the LAN click that pairs with a followed scroll.
 
-This proves one LAN hop, one grant, one canvas click, one applied record and one followed
-scroll. It does not prove a WAN, an hour, or more than two machines.
+This window proves a LAN grant, a followed scroll, a canvas click and one applied record. It
+does not prove a WAN, an hour, or more than two machines.
 
 ## What it does not prove
 
 - Release Firefox. The temporary bridge install needs Nightly or Developer Edition. A release
   build needs a signed XPI, which is M6.
-- A WAN. One hop crossed the LAN on 13 November 2026. Every other window ran on one machine,
-  and no window crossed the internet.
+- A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
+  crossed the internet.
 - An hour. The soak ran 60 s. `--soak=3600` runs the hour, and no one ran it yet.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.

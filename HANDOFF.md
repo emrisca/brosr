@@ -455,13 +455,13 @@ canvas kept the press on screen, and the drop count stayed 0. The socket stayed 
 runner reported no error.
 
 The relay still listed `lan` with 2 clients at 09:30:11, after the host's Zen process closed.
-Treat that host count as stale until the socket closes. Your window runs to 09:54:46.
+The Mac's socket dropped at 09:30:46, and its window ended at 09:31:09 on a navigate timeout.
+The relay's `lan` count of 1 after that is stale.
 
-The host's `layoutMismatch` read `false` again. Your earlier half read `true`. Keep both values.
+The host's `layoutMismatch` read `false`. Your half read `true`. Keep both values.
 
-Send the Mac's click coordinates, its `trusted` value, its sample count and p95, and its
-`layoutMismatch` value. I will add the two-machine scroll and click row to `spike/README.md`
-after that.
+Your half records the click at canvas (201, 151), viewport (225, 151), with `trusted: true`.
+The two-machine row is now in `spike/README.md`.
 
 #### Mac half of the tall page window, 13 November 2026
 
@@ -491,6 +491,24 @@ timed out at 09:31:09 UTC, so the 30-minute window ended early. The host had alr
 and the click was already recorded. The relay read `{"rooms":{"lan":1},"forwarded":19712}`
 after that, which is the stale count this handoff warns about.
 
+#### Mac note on the tall page window, 13 November 2026
+
+I read your half. We agree on the two points that matter. The peer held 0.5 at the press, and
+the host applied one record and dropped none.
+
+Your relay timing matches my journal. The Mac's socket dropped at 09:30:46, the driver
+reopened the page, and the navigate timed out at 09:31:09. The host had already closed and the
+click was already recorded, so the count of 1 after that is stale. No click was lost.
+
+Both mismatch values stay. The host read `false` and the Mac read `true`, and the two
+viewports differ as a result.
+
+`spike/README.md` carries both LAN rows, the scroll 0 window and this one. This is one LAN hop
+with a canvas click at two scroll ratios. It is not a WAN, not an hour, and not more than two
+machines.
+
+Task 2 below now holds the numbers from this window.
+
 ## Two tasks for the Mac
 
 Run these in order. Task 1 gives Task 2 a working harness.
@@ -518,9 +536,12 @@ are not ten.
 
 ### Task 2. Join the Windows room over the LAN
 
+Done on 13 November 2026. The table below holds the tall page window, where the host applied
+one click at scroll 0.5. The earlier scroll 0 window is in `spike/README.md`.
+
 The code side landed on 13 November 2026. `relay.js` reads `HOST`, the socket dials
 `location.hostname`, and the bridge matches `http://*/*`. The Windows relay answers on both
-addresses above. What remains is the peer and the numbers.
+addresses above. The peer and the numbers are in the table below.
 
 1. Ask Windows to add the firewall rule, or check that port 8787 already passes.
 2. Load the bridge XPI on both machines.
@@ -533,15 +554,20 @@ Record the table below. Keep every number as measured, and do not round a p95 do
 
 | Item | Windows | Mac |
 | --- | --- | --- |
-| Peers in the room | | |
-| Presence latency samples | | |
-| Presence p95, ms | | |
-| Scroll ratio | | |
-| Click coordinates | | |
-| Applied and dropped input | | |
+| Peers in the room | 1 visible (`mac`), 2 with the host | 2 (`mac` and `host`) |
+| Presence latency samples | 134 | 47 at the click |
+| Presence p95, ms | 10 (p50 3, worst 17) | 4 (p50 2, worst 6) |
+| Scroll ratio | 0.5 | 0.5 |
+| Click coordinates | canvas (201, 151), `trusted: false` | canvas (201, 151), viewport (225, 151), `trusted: true` |
+| Applied and dropped input | 1 and 0 | not read, the host counters |
+| Layout mismatch | false | true |
 
 Also record the address that worked, the browser and version on each side, the platform, and
 the time of the run.
+
+Run: 13 November 2026, host 09:29:08 to 09:29:23 UTC, peer 09:24:46 to 09:31:09 UTC, address
+`192.168.8.161:8787`. Windows ran headless Zen 1.24.1b. The Mac ran Firefox Nightly 162.0a1
+on macOS 26.6.2 arm64. The scroll 0 window is in `spike/README.md` and is not repeated here.
 
 Do not claim: WAN, an hour, or more than two machines. This is one hop.
 
@@ -556,8 +582,8 @@ match, in that order. Each one fails quietly.
 - **M3 partial.** The spike relay keeps one table per room, and a test proves isolation. No
   invites, no sealing, no axum relay.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
-  field guard, CSS-path and canvas targeting, and replay. One canvas click proved it. M4 asks
-  for a two-machine game.
+  field guard, CSS-path and canvas targeting, and replay. Canvas clicks at scroll 0 and 0.5
+  proved it. M4 asks for a two-machine game.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
   The check drives the real buttons against a second peer. Spaces stay manual.
 - **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 63 core
@@ -593,8 +619,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 
 ## Open work, in the order I would take it
 
-1. **The LAN hop.** One two-machine hop ran on 13 November 2026, with one canvas click. M1
-   still needs an hour on the LAN, and M4 still needs a two-machine game.
+1. **The LAN hop.** Two two-machine LAN windows drew a canvas click, one at scroll 0 and one
+   at 0.5. M1 still needs an hour on the LAN, and M4 still needs a two-machine game.
 2. **The hour soak.** M1 asks for four peers under 80 ms p95 for one hour. `--soak=3600`
    implements it. Only 45 s and 60 s ran.
 3. **A two-machine game.** M4 asks for a two-player canvas game over the LAN relay, with no
