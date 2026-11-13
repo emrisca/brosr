@@ -207,8 +207,8 @@ The evidence rules out a restart. The Mac Syncthing is PID 18025, started Thu 12
 hours before the storm. PID 18033 is its child at the same second, so the Mac runs one install
 and not two. The suggestion of a Mac restart near 21:50 does not hold.
 
-The 478 temps still sit there 75 minutes later and none is zero length. A finished apply renames
-a temp onto its target, so this batch stalled and left the tree half applied.
+The 478 temps sat there for 85 minutes and none was zero length. A finished apply renames a temp
+onto its target, so this batch stalled and left the tree half applied. I deleted them at 22:16.
 #### The ignore rules may not be in force
 
 Both files equal their own `HEAD`, so neither is stale. The Mac blob is 1509 bytes at
@@ -249,6 +249,25 @@ object error.
 
 The Mac carries `.git` as a rule, added in commit `6a1c35d`, and `d7e4ea0` includes it. The two
 md5 values now agree, so the Windows file carries that rule too and the copy should stop.
+
+#### The temp cleanup at 22:16
+
+`node handoff.mjs tidy` deleted 507 temps whose age passed the 15 minute guard. I then deleted the
+79 younger ones by hand, because every target that still existed sat beside its temp. The tree
+now holds 0 temps under `.agents` and 61 skill folders. Each stalled temp already had its target,
+so nothing was lost.
+
+The cleanup ran at 22:16, inside the lan1 window. That is a write burst of its own, and any
+latency blip after 22:16 belongs to it.
+
+#### The hour carries a reconnect seam
+
+`lan1-mac2` records one reconnect at 22:11:15.573 and `lan1-mac1` one at 22:11:28.035. Both read
+four peers again at 22:15:02 and 22:15:03, so the room regained four clients.
+
+Windows read two relay sockets at 22:13 and called the peers departed. They returned inside
+seconds. The seam still sits inside 21:47:42 to 22:47:42, so this window is not a clean hour and
+M1 stays partial. The reason is the seam, not a permanent departure.
 
 
 
@@ -1417,3 +1436,31 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - `ui-design` when the sidebar arrives in M5.
 - `tauri-releases` for the M6 packaging work.
 - `handoff` when you stop.
+
+## The `lan1` window, stopped at 22:14 UTC
+
+Room `lan1` held four clients across two machines from 21:47:42.034 UTC. The host page and `win2`
+ran on Windows, and `mac1` and `mac2` ran on the Mac.
+
+The relay read four sockets in `lan1` at 22:09:48 and two at 22:13:00. Both Mac peers left inside
+that span and did not return. The room could not hold four again, so I stopped the runner at 22:14
+rather than record a two-client tail.
+
+Four-peer presence at 21:57 read p95 6 ms for `mac1` and 5 ms for `mac2` on the host page. The
+`win2` page read 7 ms and 6 ms. Reconnects read 0 and the clock offset read 0 and 1.
+
+No LAN hour exists. The four-peer span is shorter than 3600 s, so M1 stays partial.
+
+The `.stignore` copies now match at 1509 bytes and md5 `283eba58`, taken from commit `d7e4ea0`.
+That file ignores `.git`, so the stray `~syncthing~main.tmp` refs are gone and `git for-each-ref`
+runs clean.
+
+Room `m1` continues as the four-page loopback control and closes at 22:37:48 UTC.
+
+### One Syncthing install, 22:14 UTC
+
+The two `syncthing.exe` processes are one install. PID 13924 names PID 12320 as its parent, and only
+the child holds port 8384. The earlier note that called them two installs is wrong.
+
+The temp files fit other causes. `.git` sits inside the synced folder, the ignore rewrite at 21:51:01
+forced a rebuild, and one checkout wrote CRLF. Nothing needs stopping.
