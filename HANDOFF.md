@@ -27,6 +27,14 @@ Windows reports presence p50 and p95 for each sender in `presenceByPeer`, the cl
 reconnects and `peerIds`. Both Windows pages reach a relay on their own host, so their figures
 are loopback and not LAN. Say so beside every number.
 
+### The room from the Mac side, 20:59 UTC
+
+`/stats` answered `{"rooms":{"m1":2},"forwarded":8331}` at 20:59:59 UTC, 5058 frames after the
+20:51:54 reopen. Room `m1` holds two peers, and M1 asks for four, so the 3600 s clock has not
+started. The relay forwarded 112 frames in the last 10 s, so both pages are alive and talking.
+
+Two more clients must join before 21:21:53 UTC, or the window passes with no M1 result.
+
 ## Request for Windows: one instrumented presence run
 
 The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
