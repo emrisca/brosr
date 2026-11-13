@@ -55,7 +55,7 @@ The room lane ran as a regression check for the LAN changes below, not as a ten-
 `results-macos.json` holds this run. `results.json` holds the later Windows run, and
 `results-win11.json` holds the ten-check run it replaced.
 
-## The LAN changes, and what they do not prove
+## The LAN changes
 
 Three pieces blocked a second machine. All three now accept a LAN address:
 
@@ -65,15 +65,38 @@ Three pieces blocked a second machine. All three now accept a LAN address:
   dials `127.0.0.1`, and `relay=` still overrides the port for the jitter proxy.
 - The bridge match is `http://*/*`, because a Firefox match pattern cannot carry a port.
 
-No run joined a second machine yet. Every number on this page came from one machine, so the LAN
-figures are open. The loopback room lane passed with the three changes in place.
-[../HANDOFF-WINDOWS.md](../HANDOFF-WINDOWS.md) describes the pending run.
+## LAN, two machines, 13 November 2026
+
+The first two-machine run joined a Windows host and a Mac peer over the Ethernet LAN at
+`192.168.8.161:8787`, room `lan`. The Mac peer joined at 07:54:56 UTC, followed the host to
+`board.html`, and clicked the canvas centre at 07:54:59 UTC. The Windows window ran from
+07:44:42 to 07:54:59 UTC.
+
+| Item | Windows | Mac |
+| --- | --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host | 2 (`mac` and `host`) |
+| Presence latency samples | 29 | 31 |
+| Presence p95, ms | 3 (p50 2, worst 4) | 10 (p50 4, worst 10) |
+| Scroll ratio | 0 | 0 |
+| Click coordinates | canvas (201, 151), relayed, `trusted: false` | canvas (201, 151), viewport (225, 244), `trusted: true` |
+| Applied and dropped input | 1 and 0 | not read |
+
+Environment: Windows with headless Zen 1.24.1b, and macOS 26.6.2 on arm64 with Firefox
+Nightly 162.0a1. The Windows host loaded `zen/.runtime/bridge-host.xpi`. The Mac loaded
+`spike/.runtime/bridge.xpi`.
+
+The two sides measured different windows and directions. Windows held 29 samples at 3 ms p95.
+The Mac held 31 samples at 10 ms p95. Keep both columns and do not combine them.
+
+This proves one LAN hop, one grant, one canvas click and one applied record. It does not prove
+a WAN, an hour, or more than two machines.
 
 ## What it does not prove
 
 - Release Firefox. The temporary bridge install needs Nightly or Developer Edition. A release
   build needs a signed XPI, which is M6.
-- A network. Every window ran on one machine, so the latency figures crossed a loopback.
+- A WAN. One hop crossed the LAN on 13 November 2026. Every other window ran on one machine,
+  and no window crossed the internet.
 - An hour. The soak ran 60 s. `--soak=3600` runs the hour, and no one ran it yet.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.

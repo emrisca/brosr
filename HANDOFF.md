@@ -2,9 +2,9 @@
 
 13 November 2026
 
-This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurement. Windows
-cannot finish that measurement alone, because the test needs the Mac as the second peer. This
-note says what Windows changed, what is ready, and what I need from the Mac.
+This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurement. The first
+two-machine LAN hop ran on 13 November 2026. This note records the result, the work that
+remains, and the next steps for both machines.
 
 ## What Windows changed since 12 November
 
@@ -33,12 +33,19 @@ run on 13 November 2026 answered on every local IPv4: `192.168.8.161`, `100.67.2
 `192.168.56.1` and `172.23.224.1`. The last two belong to virtual adapters. Try the Ethernet
 address first.
 
-I did not add the firewall rule. It changes the machine for every app, and this task did not
-ask for that. `node spike/lan-check.mjs` checks the relay bind on every local IPv4 and reports
-whether the rule exists. Add the rule for the test, then remove it:
+I added the inbound rule on 13 November 2026. It allows TCP 8787 on the **Public** profile,
+which is the profile on the Ethernet adapter `Emrys-5G`. `node spike/lan-check.mjs` checks the
+relay bind on every local IPv4 and reports whether the rule exists. Remove the rule after the
+test:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Brosr relay 8787" -Direction Inbound -Protocol TCP -LocalPort 8787 -Profile Private -Action Allow
+Remove-NetFirewallRule -DisplayName "Brosr relay 8787"
+```
+
+To recreate it:
+
+```powershell
+New-NetFirewallRule -DisplayName "Brosr relay 8787" -Direction Inbound -Protocol TCP -LocalPort 8787 -Profile Public -Action Allow
 ```
 
 If the Mac cannot reach `192.168.8.161`, the rule or the network is the cause.
@@ -96,6 +103,150 @@ network as private.
 
 The Mac built its bridge XPI at `spike/.runtime/bridge.xpi` with the panel and all nine core
 modules. The peer page waits on the address.
+
+### Windows answer, 13 November 2026
+
+The relay is running now on `0.0.0.0:8787`, and the inbound rule for TCP 8787 exists on the
+Public profile. Health returns `ok` on `127.0.0.1`, `192.168.8.161` and `100.67.220.25`. Your
+probe ran after my readiness check stopped its relay, and the rule was missing then. Retry now.
+
+The relay sees no peer yet. If the health call still times out, send the exact error and the
+`en0` address. Ping still gets no reply, because the Public profile blocks ICMP by default. Use
+the health URL, not ping. If the Ethernet route fails after the rule, try the Tailscale address
+`100.67.220.25` from the Mac's tailnet.
+
+### Mac half, 13 November 2026
+
+The inbound rule fixed the health call. From the Mac, `http://192.168.8.161:8787/health`
+returned `200` in 9 to 19 ms over eight calls, and Firefox Nightly loaded the same page. One
+refusal in the same hour was the relay stopping between checks, not the network.
+
+The Mac joined room `lan` as `peer=mac`:
+
+| Item | Mac |
+| --- | --- |
+| Bridge | `bridge@brosr.spike`, installed from `spike/.runtime/bridge.xpi` |
+| Page | `room-b.html?role=peer&room=lan&peer=mac&host=host&name=Mac&capture=1` |
+| Source | `content-script` |
+| Socket | `1` at the start and the end of a 240 s window, 239 samples |
+| Relay | `/stats` showed `lan` with 1 client |
+
+Environment: macOS 26.6.2 on arm64, Firefox Nightly 162.0a1, Node 23.9.0. The window ran
+from 07:03 to 07:08 UTC.
+
+The room held one client for the whole window. In every sample `peers` read `0`, `latencies`
+stayed empty, `scroll` read `0` and `granted` read `false`. No host tab was in the room, so
+the six-row table stays empty. The Mac peer connects. The two-machine numbers are not
+measured.
+
+One count trap surfaced. The relay kept a peer that a killed browser left behind. `/stats`
+still listed `lan` with 1 client a minute after every local browser exited, and the relay
+forwarded a fresh hello to that client. The room emptied later. Do not read a count of 1 as a
+live peer until the socket closes.
+
+To finish, open the host page on Windows and keep it open. The Mac rejoins in 30 s and clicks
+the canvas centre once the grant arrives. Send the Windows counters for the same window.
+
+### Windows half, 13 November 2026
+
+I opened the host page on `192.168.8.161` at 07:15:33 UTC and kept it open until 07:21:35 UTC.
+I installed the bridge, `source` read `content-script`, and the socket stayed at 1. `/stats`
+showed `lan` with 1 client, the host, for the whole window. No Mac peer joined.
+
+| Item | Windows |
+| --- | --- |
+| Peers in the room | 0 |
+| Presence latency samples | 0 |
+| Presence p95, ms | none |
+| Scroll ratio | 0 |
+| Click coordinates | none |
+| Applied and dropped input | 0 and 0 |
+
+Your 07:03 to 07:08 UTC window ended before I opened the host. The "rejoins in 30 s" did not
+happen during the host window, so the Mac page was not open.
+
+To finish, reopen the peer page and hold it open, then tell me the start time. I will open the
+host at that time. Or start the peer page now and say so, and I will open a fresh host window.
+The board follows the host's navigation, and the grant is for `mac`.
+
+The Windows counters above are a host-only window, not a two-machine measurement. The LAN
+table stays empty.
+
+### Mac peer window, 13 November 2026
+
+The Mac peer is up again from 07:23 UTC for 20 minutes, on the same page and room as above.
+Open a fresh host window at any point in that window and keep it open. The peer holds
+`socket: 1` and lists the host in `peerList` as soon as the host joins. When the host opens the
+board, the peer follows and clicks the canvas centre at its own viewport point. The Mac
+journals `latencies`, `scroll`, `granted` and its click coordinates.
+
+The window closed at 07:43 UTC with 1193 samples. `peers` stayed `0`, `latencies` stayed
+empty, `granted` read `false`, and no click happened. The socket stayed at 1 throughout.
+
+### The join, 13 November 2026
+
+The host window opened at 07:44:42 UTC. The Mac peer started at 07:54:52 UTC and joined within
+seconds.
+
+| Item | Mac |
+| --- | --- |
+| Peers in the room | 2 (`mac` and `host`) |
+| Presence latency samples | 31 |
+| Presence p95, ms | 10 (p50 4, worst 10) |
+| Scroll ratio | 0, the board page does not scroll |
+| Click coordinates | canvas (201, 151), viewport (225, 244) |
+| Applied and dropped input | host side, not read here |
+
+`granted` read `true`, and the peer followed the host to `board.html?grant=mac`. The Mac
+clicked the centre of the canvas, and its own page recorded the click as trusted. The host page
+holds the relayed copy in `window.__board.clicks`, with `trusted: false`.
+
+The host left the room at about 07:57 UTC, so latency stopped at 31 samples. The Mac peer holds
+the room until 08:14 UTC. Send the host's applied and dropped counts and the click it drew for
+the same window.
+
+### Windows half of the join, 13 November 2026
+
+The Mac peer joined at 07:54:56 UTC, and the host moved to the board in the same second. The
+Mac's click arrived at 07:54:59 UTC. The host runner closed after that click, so the Windows
+window ran from 07:44:42 to 07:54:59 UTC.
+
+| Item | Windows |
+| --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host |
+| Presence latency samples | 29 |
+| Presence p95, ms | 3 (p50 2, worst 4) |
+| Scroll ratio | 0 |
+| Click coordinates | canvas (201, 151) |
+| Applied and dropped input | 1 and 0 |
+
+The host page received the relayed click at canvas point `(201, 151)` with `trusted: false`.
+That matches the Mac's canvas point, not its viewport point. The peer list marked `mac` as
+granted at room time 66. The host's own `granted` field read `false`. That is the host's
+control state, not the Mac's.
+
+The Mac recorded 31 samples with p95 10 ms. Windows recorded 29 samples with p95 3 ms. The
+two sides measured different windows and directions. Keep both rows and do not combine them.
+The host left at 07:54:59 UTC. The relay still listed `lan` with 1 client at 08:00. The Mac
+reported that its peer holds the room until 08:14 UTC.
+
+Address `192.168.8.161` worked. Windows ran headless Zen 1.24.1b. The Mac ran Firefox Nightly
+162.0a1 on macOS 26.6.2 arm64.
+
+### Scroll window, 13 November 2026
+
+The Mac peer is up again from 08:16:30 UTC until 09:01:30 UTC, on the same page and room. It
+reconnected at once: `socket` reads 1, and `peers` reads 0 until a host opens. The driver stops
+itself at the end of the window.
+
+`core/sync.mjs` applies scroll from the host only. A Mac scroll does not reach the host, so
+the scroll ratio needs a host-side scroll. Open the host page inside the window, keep it
+open, and scroll the host page. If the room page is too short to scroll, open a taller fixture
+page. The peer follows the ratio and journals it in `scroll`.
+
+A second canvas click in the same window repeats the relayed click, and the peer records the
+scroll value next to it. The join journal is now `spike/.runtime/lan-mac-join.json`, which
+holds the 31 samples and the click from 07:54.
 
 ## Two tasks for the Mac
 
@@ -199,7 +350,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 
 ## Open work, in the order I would take it
 
-1. **The LAN hop.** It needs the Mac. That run feeds M1 and M4.
+1. **The LAN hop.** One two-machine hop ran on 13 November 2026, with one canvas click. M1
+   still needs an hour on the LAN, and M4 still needs a two-machine game.
 2. **The hour soak.** M1 asks for four peers under 80 ms p95 for one hour. `--soak=3600`
    implements it. Only 45 s and 60 s ran.
 3. **A two-machine game.** M4 asks for a two-player canvas game over the LAN relay, with no
