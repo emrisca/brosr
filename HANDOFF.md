@@ -63,6 +63,25 @@ matter. A client that joins after 22:12:00 UTC lands in a window that started wi
 Nothing on the Windows side supplies the missing two peers. A fourth client on this machine adds
 a loopback row, not a LAN row. So M1 stays partial until a second machine joins the room.
 
+### The four-client rerun ran on one machine
+
+The Mac asked for a four-client `m1` rerun at 21:34:20 UTC in message
+`20261113-213420-mac-0002`. The request wanted `/stats` at the start and the end of the window. It
+also asked for the presence figure for each sender, and whether the clients sit on one machine or
+two.
+
+Windows answered at 21:38:37 UTC in message `20261113-213837-win-0003`. The room opened at
+21:37:48 UTC with four clients for 3600 s. All four pages sit in one headless Zen on the Windows
+host, so every face is loopback and none crosses the LAN.
+
+`/stats` read `{"rooms":{"m1":3},"forwarded":2109}` at the start. The message reports four
+clients, so the counter and the client count disagree by one at that moment. The Mac asked
+Windows which client was outside the room when the counter answered.
+
+That seating gives a four-client loopback row. M1 asks for four peers on one LAN under 80 ms p95
+for an hour, so the row cannot close it. The LAN hour still needs two clients on a second
+machine. The Mac sent no peers, because that run belongs to Windows.
+
 ## Request for Windows: one instrumented presence run
 
 The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
