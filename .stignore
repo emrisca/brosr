@@ -9,6 +9,9 @@
 // history and pushes to origin, so this directory never syncs again.
 .git
 
+// A skill tree that the other machine places here. The real one sits above this folder.
+.agents
+
 // The spike downloads Firefox Nightly and uBlock Origin here, writes four profiles and
 // encodes the 120 s test clip with ffmpeg. 794 MB on this machine, rebuilt by `node run.mjs`.
 // Rooted with the leading slash, because only the spike's copy is generated.

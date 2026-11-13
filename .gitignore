@@ -8,6 +8,9 @@
 # Syncthing folder marker, which is per device.
 /.stfolder
 
+# A skill tree that sync placed at this root. The real one sits one level up.
+/.agents/
+
 # Syncthing writes these beside a file while it syncs. A half-written copy of a
 # tracked file must never land in a commit.
 .syncthing.*.tmp
