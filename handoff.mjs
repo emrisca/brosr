@@ -12,6 +12,8 @@
 //   node handoff.mjs send --from=win --to=mac --type=setup --payload='{"a":1}'
 //   node handoff.mjs list --side=win
 //   node handoff.mjs check --side=win   exits 3 when a message waits
+//   node handoff.mjs status             waiting and claimed work, with its age
+//   node handoff.mjs tidy --dry-run     removes stale Syncthing temp files
 //   node handoff.mjs claim --side=win
 //   node handoff.mjs reply --side=win --id=<id> --type=result --payload='{"ok":true}'
 //   node handoff.mjs watch --side=win
@@ -222,6 +224,92 @@ function check() {
   process.exit(pending.length ? 3 : 0)
 }
 
+// Open work at a glance: what waits in each inbox and what sits claimed.
+function status() {
+  ensureTree()
+  const now = Date.now()
+  const rows = []
+  const collect = (side, target, state) => {
+    for (const name of messagesIn(target)) {
+      const full = path.join(target, name)
+      let body
+      try {
+        body = JSON.parse(fs.readFileSync(full, 'utf8'))
+      } catch {
+        rows.push({ side, state, name, unreadable: true })
+        continue
+      }
+      const created = Date.parse(body.created)
+      rows.push({
+        side,
+        state,
+        id: body.id,
+        from: body.from,
+        type: body.type,
+        created: body.created,
+        ageMinutes: Number.isFinite(created) ? Math.round((now - created) / 60000) : null,
+        inReplyTo: body.in_reply_to || null,
+      })
+    }
+  }
+  for (const side of SIDES) {
+    collect(side, dir.inbox(side), 'waiting')
+    collect(side, dir.processing(side), 'claimed')
+  }
+  const waiting = rows.filter((row) => row.state === 'waiting').length
+  const claimed = rows.filter((row) => row.state === 'claimed').length
+  emit({ event: 'status', waiting, claimed, rows })
+}
+
+// Syncthing writes a temp beside a file while it copies it. A stopped transfer leaves
+// that half-written file behind, and it once hid a deleted tracked file.
+function tidy() {
+  ensureTree()
+  const dryRun = argv.includes('--dry-run')
+  const keepSeconds = Number(args.get('younger-than') || 900)
+  if (!Number.isFinite(keepSeconds) || keepSeconds < 0) fail('--younger-than must be 0 or more')
+  const cutoff = Date.now() - keepSeconds * 1000
+  const removed = []
+  const kept = []
+
+  const walk = (target) => {
+    let entries
+    try {
+      entries = fs.readdirSync(target, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(target, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === '.git' || entry.name === 'node_modules') continue
+        walk(full)
+        continue
+      }
+      const name = entry.name
+      const isTemp =
+        (name.startsWith('.syncthing.') && name.endsWith('.tmp')) || name.startsWith('~syncthing~')
+      if (!isTemp) continue
+      let stat
+      try {
+        stat = fs.statSync(full)
+      } catch {
+        continue
+      }
+      const shown = path.relative(root, full)
+      if (stat.mtimeMs > cutoff) {
+        kept.push(shown)
+        continue
+      }
+      if (!dryRun) fs.rmSync(full, { force: true })
+      removed.push(shown)
+    }
+  }
+
+  walk(root)
+  emit({ event: 'tidy', root, dryRun, youngerThanSeconds: keepSeconds, removed, kept })
+}
+
 function claim() {
   const side = sideArg()
   const message = claimOne(side)
@@ -296,6 +384,12 @@ switch (cmd) {
   case 'check':
     check()
     break
+  case 'status':
+    status()
+    break
+  case 'tidy':
+    tidy()
+    break
   case 'claim':
     claim()
     break
@@ -306,5 +400,5 @@ switch (cmd) {
     watch()
     break
   default:
-    fail('use send, list, check, claim, reply or watch')
+    fail('use send, list, check, status, tidy, claim, reply or watch')
 }

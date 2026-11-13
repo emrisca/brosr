@@ -125,6 +125,56 @@ test('an empty inbox reports empty and exits 2', () => {
   }
 });
 
+test('status shows waiting and claimed work, with an age', () => {
+  const root = tempRoot();
+  try {
+    const sent = run(root, 'send', '--from=win', '--to=mac', '--type=request', '--payload={}');
+
+    const before = run(root, 'status');
+    assert.equal(before.event, 'status');
+    assert.equal(before.waiting, 1);
+    assert.equal(before.claimed, 0);
+    assert.equal(before.rows[0].id, sent.id);
+    assert.equal(before.rows[0].state, 'waiting');
+    assert.equal(typeof before.rows[0].ageMinutes, 'number');
+    assert.ok(before.rows[0].ageMinutes >= 0, 'an age counts from the message stamp');
+
+    run(root, 'claim', '--side=mac');
+    const after = run(root, 'status');
+    assert.equal(after.waiting, 0);
+    assert.equal(after.claimed, 1);
+    assert.equal(after.rows[0].id, sent.id);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('tidy removes a stale Syncthing temp and keeps a fresh one', () => {
+  const root = tempRoot();
+  try {
+    const stale = path.join(root, '.syncthing.HANDOFF.md.tmp');
+    const fresh = path.join(root, '.syncthing.plan.md.tmp');
+    const tracked = path.join(root, 'plan.md');
+    fs.writeFileSync(stale, 'half a file');
+    fs.writeFileSync(fresh, 'half a file');
+    fs.writeFileSync(tracked, 'a real file');
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    fs.utimesSync(stale, old, old);
+
+    const dry = run(root, 'tidy', '--dry-run');
+    assert.deepEqual(dry.removed, ['.syncthing.HANDOFF.md.tmp']);
+    assert.ok(fs.existsSync(stale), 'a dry run removes nothing');
+
+    const done = run(root, 'tidy');
+    assert.deepEqual(done.removed, ['.syncthing.HANDOFF.md.tmp']);
+    assert.equal(fs.existsSync(stale), false, 'a stale temp goes');
+    assert.ok(fs.existsSync(fresh), 'a recent temp may belong to a live transfer');
+    assert.ok(fs.existsSync(tracked), 'a real file never goes');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a message cannot name the same side twice', () => {
   const root = tempRoot();
   try {
