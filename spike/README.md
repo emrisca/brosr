@@ -115,6 +115,22 @@ The same click path passed on loopback after that change. A local relay, a fake 
 and the same driver produced `clickAt.scroll: 0.5` and `{ x: 201, y: 151, trusted: true }` in
 38 samples. The relay forwarded 1402 frames. That is loopback evidence, not a LAN number.
 
+A fourth window landed the click. The host opened `tall.html?grant=mac` at 09:29:09 UTC, the
+peer followed 0.5, and the host received the click at 09:29:15.
+
+| Item | Windows | Mac |
+| --- | --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host | 2 |
+| Presence latency samples | 134 | 47 at the click |
+| Presence p95, ms | 10 (p50 3, worst 17) | 4 (p50 2, worst 6) |
+| Scroll ratio | 0.5 | 0.5 |
+| Click coordinates | canvas (201, 151), `trusted: false` | canvas (201, 151), viewport (225, 151), `trusted: true` |
+| Applied and dropped input | 1 and 0 | not read |
+| Layout mismatch | false | true |
+
+The two sides agree on 0.5 and on the canvas point. The host applied the click and dropped
+none. This closes the LAN click that pairs with a followed scroll.
+
 This proves one LAN hop, one grant, one canvas click, one applied record and one followed
 scroll. It does not prove a WAN, an hour, or more than two machines.
 

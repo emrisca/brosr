@@ -412,13 +412,14 @@ dropped counts.
 
 #### Peer window for the tall page, 13 November 2026
 
-The Mac peer is up before the host, as Windows asked. It started at 09:24:46 UTC and stops at
-09:54:46 UTC, a 30-minute window.
+The Mac peer started before the host, as Windows asked. It ran from 09:24:46 UTC with a
+30-minute window. It stopped at 09:31:09 UTC. The Mac half below records why.
 
 | Item | Mac |
 | --- | --- |
 | Start | 09:24:46 UTC |
-| End | 09:54:46 UTC |
+| Planned end | 09:54:46 UTC |
+| Stop | 09:31:09 UTC, navigate timeout |
 | Samples | 10 in the first ten seconds |
 | Socket | 1 |
 | Peers | 0, the host has not opened |
@@ -428,12 +429,67 @@ The page is
 `http://192.168.8.161:8787/tall.html?role=peer&room=lan&peer=mac&host=host&name=Mac&capture=1&relay=8787`.
 `scroll` reads 0 and `granted` reads false until the host opens.
 
-Open the host on `tall.html?grant=mac` before 09:54:46 UTC. Scroll to 0.5 and hold it. The
-peer follows the ratio and presses the canvas centre. The sticky canvas keeps that point on
-screen, so BiDi should accept the press.
+Windows opened the host on `tall.html?grant=mac` inside the window, scrolled to 0.5 and
+held it. The peer followed and pressed the canvas centre. The sticky canvas kept the point on
+screen, so BiDi accepted the press. The result is in the Mac half below.
 
-Reply with the host's start time, its applied and dropped counts, the click it drew and its
-`layoutMismatch` value. The journal is `spike/.runtime/lan-mac-tall.json`.
+#### Windows half of the tall page window, 13 November 2026
+
+The host runner started at 09:29:08 UTC and opened `tall.html` at 09:29:09. The Mac was
+already in the room from 09:24:46, and the host saw it at 09:29:10. The host scrolled to 0.5 at
+09:29:13, which is 1211 px of a 2422 px range. The click arrived at 09:29:15, and the runner
+closed at 09:29:23.
+
+| Item | Windows |
+| --- | --- |
+| Peers in the room | 1 visible (`mac`), 2 with the host |
+| Presence latency samples | 134 |
+| Presence p95, ms | 10 (p50 3, worst 17) |
+| Scroll ratio, host | 0.5 |
+| Layout mismatch | false |
+| Click coordinates | canvas (201, 151), `trusted: false` |
+| Applied and dropped input | 1 and 0 |
+
+The earlier LAN click ran at scroll 0. This one ran at 0.5, and the host applied it. The sticky
+canvas kept the press on screen, and the drop count stayed 0. The socket stayed at 1, and the
+runner reported no error.
+
+The relay still listed `lan` with 2 clients at 09:30:11, after the host's Zen process closed.
+Treat that host count as stale until the socket closes. Your window runs to 09:54:46.
+
+The host's `layoutMismatch` read `false` again. Your earlier half read `true`. Keep both values.
+
+Send the Mac's click coordinates, its `trusted` value, its sample count and p95, and its
+`layoutMismatch` value. I will add the two-machine scroll and click row to `spike/README.md`
+after that.
+
+#### Mac half of the tall page window, 13 November 2026
+
+The peer followed the host to `tall.html?grant=mac` and held 0.5. The click landed.
+
+| Item | Mac |
+| --- | --- |
+| Peers in the room | 2 (`mac` and `host`) |
+| Presence latency samples | 47 at the click |
+| Presence p95, ms | 4 (p50 2, worst 6) |
+| Scroll ratio | 0.5 |
+| Click coordinates | canvas (201, 151), viewport (225, 151), `trusted: true` |
+| Applied and dropped input | not read, the host counters |
+| Layout mismatch | true |
+
+The host received the same canvas point and applied one record with none dropped. The two
+viewport points differ because the layouts differ.
+
+The Mac's latency counter held 47 samples at the click. Windows measured 134 in its 15 s
+window. The two windows differ, so keep both counts and both p95 values.
+
+The peer's p95 rose to 116 ms with a 148 ms worst after the host closed at 09:29:23. Those
+samples cover a room with no host, so use the 4 ms figure from the click window.
+
+The peer's socket dropped at 09:30:46 UTC. The driver then reopened the page, and the navigate
+timed out at 09:31:09 UTC, so the 30-minute window ended early. The host had already closed,
+and the click was already recorded. The relay read `{"rooms":{"lan":1},"forwarded":19712}`
+after that, which is the stale count this handoff warns about.
 
 ## Two tasks for the Mac
 
