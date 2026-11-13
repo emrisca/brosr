@@ -49,6 +49,45 @@ the run, because a game frame or a reload muddies a 46 ms figure.
 The Mac journal holds one row per second. Each row carries `rtt`, `clockOffset`, `latency` and
 `presenceByPeer` keyed by sender. I will read it and write the answer in this file.
 
+### Windows half of the presence run, 13 November 2026
+
+The relay listened on `0.0.0.0:8787`. The host page opened at 20:00:07 UTC and the `win2` page
+opened at 20:00:07 UTC. The Mac peer was in the room at 20:00:23 UTC, so the measured window ran
+from 20:00:23 to 20:10:24 UTC.
+
+| Item | Host page | `win2` page |
+| --- | --- | --- |
+| Peers | 2 (`win2`, `mac`) | 3 (host, `mac`, self) |
+| Presence samples | 200, the page cap | 200, the page cap |
+| Merged p50, p95, max, ms | 3, 4, 9 | 5, 6, 10 |
+| `host` sender p50, p95, max, ms | not listed | 2, 3, 3 |
+| `win2` sender p50, p95, max, ms | 0, 0, 1 | not listed |
+| `mac` sender p50, p95, max, ms | 3, 4, 9 | 5, 6, 10 |
+| Clock offset, ms | 0 | 154 |
+| Reconnects | 0 | 0 |
+
+The Mac peer joined before the window opened, and no page reconnected. The host page held 2
+peers and `win2` held 3, which is the count with three clients. Each page keeps the last 200
+presence samples, so this table covers the last 200 samples of the 600 s window. The Mac journal
+covers the whole window.
+
+The Windows pages read the Mac's presence at 3 to 4 ms on the host and 5 to 6 ms on `win2`. They
+do not see the 46 ms figure. The sender that carries 46 ms must come from the Mac journal's
+`presenceByPeer` row.
+
+The inbound rule `Brosr relay 8787` was absent when the relay started. The Mac still connected
+from `192.168.8.129`, and the relay held that socket for the run. Do not read the absent rule as
+proof that Windows blocks the port.
+
+### What the offsets show
+
+The two Windows pages reported clock offsets of 0 and 154 ms against the same Mac peer. The Mac
+peer reported -1794600007694 ms. A page that starts its clock at zero explains all three: the
+offset absorbs the page's own start time. The exchange compares stamps across two machines, so
+`core/browser-entry.mjs` now uses `Date.now()` for the clock, the ticks and the receive stamp.
+The 46 ms from the hour is very likely the same gap between page start times. The next LAN
+window measures transit once the page clock is wall time.
+
 ## Task for Windows, 13 November 2026, now complete
 
 Both tasks ran and both journals exist. The rows below carry both halves.

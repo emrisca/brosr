@@ -126,9 +126,10 @@ export async function start() {
       origin: location.origin,
     },
     // One time base for the clock, the media ticks and the presence stamps.
-    // performance.now() is per process, so Date.now() here would poison the
-    // four-timestamp exchange.
-    now: () => performance.now(),
+    // The exchange compares stamps from two machines, so it needs the wall
+    // clock. performance.now() starts at zero in each process, and the offset
+    // then absorbs the page's own start time instead of a clock difference.
+    now: () => Date.now(),
     send: (frame) => {
       if (socket && socket.readyState === 1) socket.send(frame);
     },
@@ -197,14 +198,14 @@ export async function start() {
       `ws://${relayHost}:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
     );
     socket.onmessage = (event) => {
-      client.receive(event.data, performance.now());
+      client.receive(event.data, Date.now());
       publish();
     };
     socket.onopen = () => {
       // A hello asks the host for a snapshot, so a rejoin lands on the room's
       // page and scroll instead of starting over.
       client.hello();
-      client.tick(performance.now());
+      client.tick(Date.now());
       publish();
     };
     socket.onerror = () => publish();
@@ -258,7 +259,7 @@ export async function start() {
   }
 
   setInterval(() => {
-    client.tick(performance.now());
+    client.tick(Date.now());
   }, 50);
 
   setInterval(() => {

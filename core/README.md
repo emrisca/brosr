@@ -25,7 +25,7 @@ const client = createRoomClient({
   peerId: 'alice',
   hostId: 'host',
   document,
-  now: () => performance.now(),
+  now: () => Date.now(),
   viewport: () => ({ url: location.href, scroll: 0, fingerprint }),
   navigate: (url) => location.assign(url),
   scrollTo: (ratio) => window.scrollTo(0, ratio * maxScroll),
@@ -33,16 +33,17 @@ const client = createRoomClient({
   send: (frame) => socket.send(frame),
 });
 
-socket.onmessage = (event) => client.receive(event.data, performance.now());
-setInterval(() => client.tick(performance.now()), 50);
+socket.onmessage = (event) => client.receive(event.data, Date.now());
+setInterval(() => client.tick(Date.now()), 50);
 ```
 
 ## Five rules the code depends on
 
 Each one cost a spike run to learn.
 
-1. One time base per side. `now` feeds the clock, the media stamps and presence. Mixing
-   `Date.now()` with `performance.now()` makes every round trip negative.
+1. One wall clock per side. `now` feeds the clock, the media stamps and presence. Each
+   machine stamps the exchange from its wall clock, because `performance.now()` starts at zero
+   in each process. Mixing the two makes every round trip negative.
 2. Room time belongs to the host. The host stamps `roomTime` with its own local time, and a
    peer converts its local time with the offset it measured. Only a peer pings.
 3. A seek gets a settle window. Deciding again inside it stacks seeks, and the player never

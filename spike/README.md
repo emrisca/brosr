@@ -297,6 +297,10 @@ does not prove a WAN, an hour, or more than two machines.
 - One time base per side. Mixing `Date.now()` with `performance.now()` made every round trip
   negative, so the clock rejected each sample and the offset stayed zero. The two videos then
   looked converged because a clock error and a position error cancelled each other out.
+- A page clock inside one process. Two Windows pages reported clock offsets of 0 and 154 ms
+  against the same Mac peer. The Mac peer read -1794600007694 ms. Both came from
+  `performance.now()`, which starts at zero in each process. The page now stamps the exchange
+  with `Date.now()`, so the offset is a real clock difference.
 - Room time belongs to the host. When the host stamped room time through its own offset, the
   time pointed at the peer's base and every comparison was seconds off.
 - A seek must settle before the next decision. A decision every 250 ms stacked seeks, each one
