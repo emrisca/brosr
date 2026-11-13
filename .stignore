@@ -14,6 +14,10 @@
 // Rooted with the leading slash, because only the spike's copy is generated.
 /spike/.runtime
 
+// The Zen check writes a whole Firefox profile here, plus the built XPI and its results.
+// Syncthing churns on the profile while a check runs, so no machine syncs it.
+/zen/.runtime
+
 // Node and package manager state.
 node_modules
 .npm
