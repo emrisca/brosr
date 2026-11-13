@@ -44,16 +44,27 @@ test('an impossible sample is dropped', () => {
   assert.equal(clock.offset(), 0);
 });
 
+test('a pong with no start stamp is dropped', () => {
+  const clock = new ClockEstimator();
+  // A reply that lost t0 reads as a round trip of the whole wall clock. The Lan
+  // journals hold one such sample, at 1794594601870 ms.
+  assert.equal(clock.onPong({ type: 'pong', t0: 0, t1: 1, t2: 2 }, 1794594601871), null);
+  assert.equal(clock.samples, 0);
+  assert.equal(clock.offset(), 0);
+});
+
 test('a new measurement is due after the interval only', () => {
-  let now = 0;
+  // The fake clock starts at a real wall-clock value, because a start stamp of
+  // zero means the reply lost it and the estimator drops that sample.
+  let now = 1000;
   const clock = new ClockEstimator({ now: () => now });
   assert.equal(clock.due(), true);
   clock.ping();
   assert.equal(clock.due(), false, 'a ping in flight holds the next one');
-  clock.onPong(clock.answer({ type: 'ping', t0: 0 }, 1, 2), 10);
+  clock.onPong(clock.answer({ type: 'ping', t0: 1000 }, 1001, 1002), 1010);
   assert.equal(clock.due(), false);
-  now = PING_INTERVAL_MS - 1;
+  now = 1000 + PING_INTERVAL_MS - 1;
   assert.equal(clock.due(), false);
-  now = PING_INTERVAL_MS + 10;
+  now = 1000 + PING_INTERVAL_MS + 10;
   assert.equal(clock.due(), true);
 });

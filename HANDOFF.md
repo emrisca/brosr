@@ -87,7 +87,13 @@ The page keeps the last 200 latency samples, so the p95 covers the last 200 samp
 whole hour. The Mac journals cover the whole hour: 3596 samples each at 46 ms p50 and 158 to
 161 ms p95. Each peer reconnected once at 18:31:16. Every page ended on 0.35, so the hour has
 both halves. The Mac peers counted four presence entries once Windows joined, and the host
-counted three.
+counted three. `peer.mjs` now journals `peerIds`, which names the extra entry next run.
+
+The two latency columns measure different hops. The Windows pages talk to a relay on their own
+host, so 1 to 2 ms there is loopback. The Mac column crosses Wi-Fi. That figure is not a transit
+time. The room's clock exchange held 3 to 4 ms round trip for the whole hour, while presence
+read 46 ms p50. No frame takes 46 ms one way over a path with a 3 ms round trip. The presence
+figure carries a bias of about 40 ms. No row here names it.
 
 ## What Windows changed since 12 November
 
@@ -106,7 +112,7 @@ counted three.
   recorded `open-room-panel`. The Mac still has no proof from a frontmost window. See the two
   shortcut notes below.
 - **The suite.** Ten harness checks pass with `--soak=60`. Q7 held 527 samples at 2 ms p95, and
-  the soak held 2 ms p95. 65 core tests pass.
+  the soak held 2 ms p95. 66 core tests pass.
 
 ## The LAN hop, Windows half
 
@@ -799,9 +805,11 @@ The first early host run started at 17:27:15 UTC and ended at 17:37:16 UTC. The 
 peer died at 17:28:35 UTC, so that run covered a room with no live peer for most of its window.
 It is not a game row. `lan-game-host-game-run1.json` holds it.
 
-The Mac's `peer-game.json` is not in this folder. Without its `statesReceived` and last score,
-this file cannot show `scoresMatch` or close M4. Copy the journal outside `.runtime` or paste
-the counters here.
+The Mac half of this run is in `spike/README.md`. It received 8645 states at 14.4 per second,
+sent 5960 paddles, dropped none, and ended at sequence 8656 and 97 to 0. It held 200 latency
+samples at 3 ms p50 and 4 ms p95. The two scores match. The host sent 13 more states than the
+Mac received, and the paddle counts differ by 9. The Mac journal is on the Mac, not in this
+folder.
 
 ## Two tasks for the Mac
 
@@ -871,24 +879,26 @@ match, in that order. Each one fails quietly.
 ## State on 13 November 2026
 
 - **M0 passed.** All four questions answered on this machine.
-- **M1 held one hour on loopback.** Four peers on this Mac held 600 latency samples at 2 ms
-  p95 and 3 ms worst across 60 minutes. The relay restart cost four to five reconnects per
-  peer, and every peer ended on the host scroll of 0.2. A second hour ran on the LAN on
-  13 November 2026. The Windows host and `win2` held 3600 s in room `soak` with `mac1` and
-  `mac2`. The host held 200 latency samples at 1 ms p95, and the Mac journals hold 3596
-  samples each at 46 ms p50. M1 holds on the LAN, and the Mac p95 of 158 to 161 ms stays an
-  open question.
+- **M1 partial.** One hour on loopback held 600 latency samples at 2 ms p95 and 3 ms worst
+  across 60 minutes. Four peers on this Mac ran it. The relay restart cost four to five
+  reconnects per peer, and every peer ended on the host scroll of 0.2. A second hour ran on
+  the LAN on 13 November 2026. The Windows host and `win2` held 3600 s in room `soak` with
+  `mac1` and `mac2`, and all four pages ended on 0.35. The Windows latency column is
+  loopback. The Mac column reads 46 ms p50 against a 3 to 4 ms room clock, so no column
+  measures the LAN hop. M1 stays open on that gap, not on the hour.
 - **M3 partial.** The spike relay keeps one table per room, and a test proves isolation. No
   invites, no sealing, no axum relay.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
   field guard, CSS-path and canvas targeting, and replay. Canvas clicks at scroll 0 and 0.5
   proved it. Two 600 s games ran across the LAN with a Windows host and a Mac peer. The
   second ended at 111 to 0 with 8648 states sent and 5958 paddles received. The Mac journal
-  recorded 111 to 0 on the same frame, so the two scores match.
+  recorded 111 to 0 on the same frame, so the two scores match. The game is the spike's
+  `game.html`, not an open-source project, and the layout-diff notice is not proven, so M4
+  stays open.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
   The check drives the real buttons against a second peer. The Windows console proved the
   Ctrl+Alt+B chord from a foreground window. Spaces stay manual.
-- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 65 core
+- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 66 core
   tests pass. Three relay tests pass, including one for a busy relay port.
 
 ## Run it
@@ -922,14 +932,14 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 
 ## Open work, in the order I would take it
 
-1. **The LAN hop.** Two two-machine LAN windows drew a canvas click, one at scroll 0 and one
-   at 0.5. The LAN hour and the two-machine game now have both halves.
-2. **The Mac latency.** The Mac peers measured 46 ms p50 and 158 to 161 ms p95 against 1 to
-   2 ms on Windows. The hour held, but the two columns differ by two orders of magnitude. A
-   wired run and a Wi-Fi run would name the side that owns the gap.
-3. **The peer count.** The Mac peers counted four entries once Windows joined, and the host
-   counted three. The journals do not name the extra entry. Log presence ids on connect and
-   on reconnect to name it.
+1. **The M4 acceptance.** The two-machine game is the spike's `game.html`, not an open-source
+   project, and the layout-diff notice is not proven. M4 stays open until both run.
+2. **The Mac latency.** The Windows column is loopback, so it says nothing about the LAN. The
+   Mac column reads 46 ms p50. Instrument the presence path against the clock exchange in one
+   run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
+   at 43 ms after a jump from 8 ms and stayed there.
+3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
+   made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A
    frontmost window still does not take activation on the Mac. The Windows console proved the
    chord from a foreground window. Try a local Mac console run.
@@ -964,8 +974,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - The Ctrl+Alt+B chord is proven on Windows from a foreground window, and on the Mac by a
   chord posted to the Zen process. The Mac still has no proof from a frontmost window. The
   page records no keydown in either case, because the browser consumes the chord.
-- The LAN hour has both halves, but the sides disagree. Windows held 1 to 2 ms p95 and the
-  Macs held 158 to 161 ms. No row explains the gap.
+- A LAN latency number. The Windows column is loopback, and the Mac column disagrees with the
+  room's own 3 to 4 ms clock exchange. This note does not quote either one as the LAN hop.
 - The LAN game has both halves and matching scores. The host sent 8648 states against 8641
   received, and received 5958 paddles against 5957 sent, so the sides are not frame exact.
 - The app channel has a loopback restart test. It passes on macOS. On Windows, both tests fail.

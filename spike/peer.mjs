@@ -86,6 +86,9 @@ function sample() {
   journal.samples.push({
     at: new Date().toISOString(),
     peers: status.peers,
+    // A snapshot copies the host's whole peer table, so an id that the host
+    // still lists arrives here as a peer. The ids name it.
+    peerIds: (status.peerList || []).map((peer) => peer.id),
     rtt: status.rtt,
     scroll: status.scroll,
     granted: Boolean(status.granted),

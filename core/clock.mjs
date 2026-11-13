@@ -32,6 +32,9 @@ export class ClockEstimator {
   onPong(message, local = this.now()) {
     const { t0, t1, t2 } = message;
     const t3 = local;
+    // A reply that lost its start stamp reads as a round trip of the whole wall
+    // clock, and that bogus sample can then win the minimum for the session.
+    if (!(t0 > 0) || !Number.isFinite(t1) || !Number.isFinite(t2)) return null;
     const rtt = t3 - t0 - (t2 - t1);
     if (!(rtt >= 0)) return null;
     const offset = (t1 - t0 + (t2 - t3)) / 2;

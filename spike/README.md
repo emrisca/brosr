@@ -163,7 +163,8 @@ A second 600 s game ran at 18:11 UTC, after the Mac restarted its peer. The host
 
 The two scores match, so `scoresMatch` is true. The host sent 7 more states than the Mac
 received, and the paddle counts differ by one, so the sides are not frame exact. The host p95
-read 2189 ms at 18:14 and 8 ms at the end. The final row uses the last 200 samples.
+read 2189 ms at 18:14 and 8 ms at the end. The final row uses the last 200 samples. The Mac's 43
+ms is the same figure the hour shows: the clock exchange held 3 ms, so it is not a transit time.
 
 ## LAN hour, 13 November 2026
 
@@ -183,9 +184,19 @@ opened at 18:30:01 and started at 18:30:02.885 UTC.
 | Reconnects | 0 | 0 | 1 at 18:31:16 | 1 at 18:31:16 |
 
 The page keeps the last 200 latency samples, so its p95 covers the last 200 samples. The Mac
-journal keeps all 3596, so its p95 covers the whole hour. The Mac peers report the host ratio
-rather than scrolling a page. The Mac max lands on the reconnect minute. The Mac peers counted
-four entries once Windows joined, and the host counted three.
+journal keeps a rolling summary rather than each sample, so each Mac row is a percentile of the
+peer's own 200-sample percentiles. The Mac peers report the host ratio rather than scrolling a
+page. The Mac max lands on the reconnect minute. The Mac peers counted four entries once
+Windows joined, and the host counted three. `peer.mjs` now journals `peerIds`, which will name
+the extra entry.
+
+The two latency columns measure different hops. The Windows pages talk to a relay on their own
+host, so 1 to 2 ms is a loopback figure and not a LAN one. The Mac column crosses Wi-Fi: 802.11ax
+on channel 56 at -49 dBm. That column is not a transit time either. The room's own clock
+exchange held 3 to 4 ms round trip for the whole hour, while presence read 46 ms p50. No frame
+takes 46 ms one way on a path with a 3 ms round trip. The presence figure carries a bias of
+about 40 ms. No row here names it. A TCP connect from the Mac to the relay took 4.5 to 13 ms
+over six tries.
 
 ## LAN, two machines, 13 November 2026
 
@@ -262,8 +273,8 @@ does not prove a WAN, an hour, or more than two machines.
   build needs a signed XPI, which is M6.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
-- An explained LAN hour. Both halves exist, but Windows held 1 to 2 ms p95. The Macs held
-  158 to 161 ms. No measurement in this folder explains the gap.
+- A LAN latency number. The Windows column is loopback, and the Mac column disagrees with the
+  room's own 3 to 4 ms clock exchange. This document does not quote either column as the LAN hop.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
