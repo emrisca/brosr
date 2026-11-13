@@ -186,3 +186,37 @@ test('replay drops a record without a grant, without a target, or on a password 
   assert.equal(result.reasons.sensitive, 1);
   assert.equal(result.reasons.move, undefined, 'a move is not a failure');
 });
+
+test('a click across a layout mismatch is dropped, and the reason says so', () => {
+  const button = {
+    tagName: 'BUTTON',
+    ownerDocument: null,
+    getAttribute: () => '',
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+    dispatchEvent: () => true,
+  };
+  const root = {
+    activeElement: null,
+    defaultView: {
+      Event: class {},
+      MouseEvent: class {
+        constructor(type) {
+          this.type = type;
+        }
+      },
+      KeyboardEvent: class {},
+      WheelEvent: class {},
+    },
+    querySelectorAll: (path) => (path === '#go' ? [button] : []),
+    dispatchEvent: () => true,
+  };
+
+  const matched = replayInput([{ kind: 'click', path: '#go' }], { root });
+  assert.equal(matched.applied, 1, 'the same layout still applies the click');
+
+  const mismatch = replayInput([{ kind: 'click', path: '#go' }], { root, layoutMatches: false });
+  assert.equal(mismatch.applied, 0);
+  assert.equal(mismatch.dropped, 1);
+  assert.equal(mismatch.reasons.layout, 1);
+  assert.equal(mismatch.reasons.target, undefined, 'the target resolved, so it is not a target drop');
+});

@@ -232,7 +232,10 @@ function setFieldValue(element, value) {
 
 // Replay one batch. Every record passes the grant, the target and the field
 // guards before anything reaches the page.
-export function replayInput(records, { root, allowed = () => true, onDrop = () => {} } = {}) {
+export function replayInput(
+  records,
+  { root, allowed = () => true, onDrop = () => {}, layoutMatches = true } = {}
+) {
   const view = root && root.defaultView ? root.defaultView : globalThis;
   const result = { applied: 0, dropped: 0, reasons: {} };
   const drop = (reason) => {
@@ -247,6 +250,13 @@ export function replayInput(records, { root, allowed = () => true, onDrop = () =
       continue;
     }
     if (record.kind === 'move') continue;
+
+    // A click on a page that laid out differently lands somewhere else. The
+    // receiver shows a notice and drops the record.
+    if (!layoutMatches && !FREE_KINDS.has(record.kind)) {
+      drop('layout');
+      continue;
+    }
 
     const target = record.path ? resolvePath(root, record.path) : null;
 

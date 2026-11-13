@@ -74,6 +74,7 @@ export function createRoomClient({
     convergedAt: null,
     scroll: 0,
     layoutMismatch: false,
+    layoutNotice: null,
     inputApplied: 0,
     inputDropped: 0,
     inputReasons: {},
@@ -181,11 +182,21 @@ export function createRoomClient({
     const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
     const applied = replayInput(message.records, {
       root: doc,
+      // A peer that laid out the page differently sends a point that lands
+      // elsewhere here. Drop the record and say so.
+      layoutMatches: !stats.layoutMismatch,
       allowed: (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind }),
       onDrop: (reason) => {
         stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
       },
     });
+    if (applied.reasons.layout) {
+      stats.layoutNotice = {
+        at: Math.round(now()),
+        peerId: message.peerId,
+        dropped: applied.reasons.layout,
+      };
+    }
     stats.inputApplied += applied.applied;
     stats.inputDropped += applied.dropped;
     return { ok: true, ...applied };
@@ -599,6 +610,7 @@ export function createRoomClient({
       url: state.url,
       scroll: Math.round(state.scroll * 1000) / 1000,
       layoutMismatch: stats.layoutMismatch,
+      layoutNotice: stats.layoutNotice,
       latency: latencyStats(),
       latencies: latencies.slice(-latencyLimit),
       presenceByPeer: Object.fromEntries(

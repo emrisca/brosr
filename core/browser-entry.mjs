@@ -155,8 +155,33 @@ export async function start() {
     reconnects,
   });
 
+  // A click that arrives across a layout mismatch is dropped. A silent drop
+  // looks like a broken room, so the receiver says what happened.
+  const showLayoutNotice = (notice) => {
+    if (!notice || notice.at === showLayoutNotice.shown) return;
+    if (!document.body) return;
+    showLayoutNotice.shown = notice.at;
+    let banner = document.getElementById('brosr-notice');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'brosr-notice';
+      banner.setAttribute('role', 'status');
+      banner.style.cssText =
+        'position:fixed;bottom:12px;left:12px;z-index:2147483647;max-width:320px;' +
+        'padding:8px 12px;border-radius:8px;background:#2b2b2b;color:#f5f5f5;' +
+        'font:13px/1.4 system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.35)';
+      document.body.appendChild(banner);
+    }
+    banner.textContent = 'This page laid out differently, so that click was not applied.';
+    clearTimeout(showLayoutNotice.timer);
+    showLayoutNotice.timer = setTimeout(() => banner.remove(), 6000);
+  };
+  showLayoutNotice.shown = null;
+
   const publish = () => {
-    document.documentElement.dataset.brosr = JSON.stringify(status());
+    const next = status();
+    document.documentElement.dataset.brosr = JSON.stringify(next);
+    showLayoutNotice(next.layoutNotice);
   };
 
   const video = client.media.pick(null);
