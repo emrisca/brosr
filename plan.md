@@ -527,9 +527,11 @@ still works after ten tab switches.
 Firefox extension host, so the same bridge loads. [zen/](zen/) adds a room profile with
 vertical tabs and compact chrome, and a room panel wired as `sidebar_action` and
 `browser_action`. A headless check installed the bridge in Zen, opened a room page and read
-`source: content-script` with the socket open. The room panel reported itself live, and the
-check drove both Grant and Revoke. The toolbar button opens the sidebar. Zen stores spaces in its session store, so a room per
-space is still open.
+`source: content-script` with the socket open. The room panel reported itself live. The check drove Grant and Revoke against a second peer
+tab, and that peer reported control true then false. Each peer row has its own button, and the
+panel lists the last control changes. The toolbar button opens the sidebar. The manifest declares the Ctrl+Alt+B
+command, but no run proved the chord. Zen stores spaces in its session store, so a
+room per space is still open.
 
 ### M6 · Packaging, signing and relay
 

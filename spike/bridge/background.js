@@ -27,7 +27,12 @@ function openPanel(selftest) {
 browser.runtime.onMessage.addListener((message, sender) => {
   if (!message) return undefined;
   if (message.type === 'brosr:room-hello') {
-    if (sender && sender.tab) roomTabId = sender.tab.id;
+    // Two room tabs both say hello. The panel needs the host tab, because only
+    // the host can change control.
+    if (sender && sender.tab) {
+      if (message.role === 'host') roomTabId = sender.tab.id;
+      else if (roomTabId === null) roomTabId = sender.tab.id;
+    }
     return Promise.resolve({ ok: true });
   }
   if (message.type === 'brosr:room-tab') {
@@ -75,5 +80,13 @@ browser.browserAction.onClicked.addListener(() => {
 });
 
 browser.commands.onCommand.addListener((command) => {
-  if (command === 'open-room-panel') openRoomPanel(false);
+  if (command !== 'open-room-panel') return;
+  // The room tab records the command, so a headless run can prove the key
+  // chord reached the bridge even when the sidebar opens without a new tab.
+  if (roomTabId !== null) {
+    browser.tabs
+      .sendMessage(roomTabId, { type: 'brosr:command', command })
+      .catch(() => {});
+  }
+  openRoomPanel(false);
 });

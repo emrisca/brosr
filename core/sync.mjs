@@ -73,6 +73,11 @@ export function createRoomClient({
     inputDropped: 0,
     inputReasons: {},
     capture: false,
+    controlSent: 0,
+    controlReceived: 0,
+    lastControl: null,
+    controls: [],
+    sentControls: [],
   };
   let firstSeen = false;
   let firstAt = 0;
@@ -116,6 +121,13 @@ export function createRoomClient({
     if (allowed) grants.grant(peer, { tabId, origin });
     else grants.revoke(peer, tabId);
     sendMessage({ type: 'control', peerId: peer, allowed, tabId, origin, roomTime: roomTimeOf() });
+    stats.controlSent += 1;
+    stats.sentControls.push({
+      peerId: peer,
+      allowed: Boolean(allowed),
+      roomTime: Math.round(roomTimeOf()),
+    });
+    if (stats.sentControls.length > 8) stats.sentControls.shift();
     return true;
   }
 
@@ -388,6 +400,14 @@ export function createRoomClient({
         }
         return { ok: true };
       case 'control':
+        stats.controlReceived += 1;
+        stats.controls.push({ peerId: message.peerId, allowed: Boolean(message.allowed) });
+        if (stats.controls.length > 8) stats.controls.shift();
+        stats.lastControl = {
+          peerId: message.peerId,
+          allowed: Boolean(message.allowed),
+          mine: message.peerId === peerId,
+        };
         if (message.peerId === peerId) {
           remoteGrant = Boolean(message.allowed);
           stats.granted = remoteGrant;
@@ -535,6 +555,11 @@ export function createRoomClient({
       latency: latencyStats(),
       latencies: latencies.slice(-latencyLimit),
       granted: remoteGrant,
+      controlSent: stats.controlSent,
+      controlReceived: stats.controlReceived,
+      lastControl: stats.lastControl,
+      controls: stats.controls,
+      controlHistory: stats.sentControls,
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,

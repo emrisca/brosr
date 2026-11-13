@@ -152,23 +152,56 @@ async function waitForDataset(bidi, context, predicate, timeoutMs = 30000) {
 // The panel reports itself through the background page, and the content
 // script copies that report into the dataset. The grant arrives last, so that
 // is the condition to wait for.
-async function waitForPanel(bidi, context, phrase, timeoutMs = 40000, extra = () => true) {
+async function readPanel(bidi, panelContext) {
+  const raw = await evaluate(
+    bidi,
+    panelContext,
+    "JSON.stringify({ notice: document.getElementById('notice').textContent, control: !document.getElementById('control').hidden, names: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent), grantedPeers: [...document.querySelectorAll('#peers li')].filter((node) => node.dataset.granted === '1').map((node) => node.dataset.peer), history: [...document.querySelectorAll('#history li')].map((node) => node.textContent), state: document.getElementById('dot').dataset.state, room: document.getElementById('room').textContent })"
+  );
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function waitPanelReady(bidi, timeoutMs = 40000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const tree = await bidi.cmd('browsingContext.getTree', {}).catch(() => null);
+    const panel =
+      tree && tree.contexts.find((item) => String(item.url || '').includes('/panel/room.html'));
+    if (panel) {
+      await bidi.cmd('browsingContext.activate', { context: panel.context }).catch(() => {});
+      await evaluate(bidi, panel.context, "document.getElementById('refresh').click(); true").catch(
+        () => {}
+      );
+      const state = await readPanel(bidi, panel.context).catch(() => null);
+      if (state && state.control && state.names.some((name) => String(name).includes(PEER_NAME))) {
+        return panel.context;
+      }
+    }
+    await sleep(400);
+  }
+  return null;
+}
+
+async function waitPanelNotice(bidi, panelContext, phrase, timeoutMs = 20000) {
   const end = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < end) {
-    const data = await readDataset(bidi, context).catch(() => null);
-    last = data && data.panelState ? data.panelState : null;
-    if (last && last.notice && String(last.notice).includes(phrase) && extra(last)) return last;
+    last = await readPanel(bidi, panelContext).catch(() => null);
+    if (last && String(last.notice).includes(phrase)) return last;
     await sleep(300);
   }
-  return last;
+  return null;
 }
 
 async function main() {
   const zen = findZen() || arg('zen', '');
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary. Pass --zen=<path>.');
   const info = readIni(zen);
-  const profile = writeProfile(arg('profile', path.join(runtime, 'profile')));
+  // A reused profile restores the room and panel tabs from the last run, and
+  // their panels drive control too. The default profile is disposable.
+  const givenProfile = arg('profile', '');
+  if (!givenProfile) fs.rmSync(path.join(runtime, 'profile'), { recursive: true, force: true });
+  const profile = writeProfile(givenProfile || path.join(runtime, 'profile'));
   const xpi = buildXpi();
   const manifest = JSON.parse(
     fs.readFileSync(path.join(spike, 'bridge', 'manifest.json'), 'utf8')
@@ -208,7 +241,10 @@ async function main() {
       '900',
       'about:blank',
     ],
-    { stdio: 'ignore', env: { ...process.env, MOZ_HEADLESS: '1' } }
+    {
+      stdio: 'ignore',
+      env: { ...process.env, MOZ_HEADLESS: '1', MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+    }
   );
 
   let result = { zen: info, check: { ok: false, error: 'not run' }, dataset: null, panel: null };
@@ -225,7 +261,7 @@ async function main() {
     const created = await bidi.cmd('browsingContext.create', { type: 'tab' });
     const context = created.context;
     const room = arg('room', 'zen');
-    const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${room}&peer=host&name=Host&panel=1&selftest=1`;
+    const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${room}&peer=host&name=Host&panel=1`;
     await bidi.cmd('browsingContext.navigate', { context, url, wait: 'complete' });
 
     const data = await waitForDataset(bidi, context, (d) => d.socket === 1);
@@ -256,41 +292,66 @@ async function main() {
       throw new Error('the host never saw the second peer');
     }
 
-    const granted = await waitForPanel(
+    const panelContext = await waitPanelReady(bidi);
+    if (!panelContext) throw new Error('the panel did not render the peer list');
+
+    await evaluate(
       bidi,
-      context,
-      'Control granted',
-      40000,
-      (panel) => Array.isArray(panel.grantedPeers) && panel.grantedPeers.includes(PEER)
+      panelContext,
+      `document.querySelector('#peers li[data-peer="${PEER}"] .peer-control').click(); true`
     );
-    if (!granted) throw new Error('the panel did not report a grant');
-    if (granted.state !== 'live') throw new Error(`panel state was ${granted.state}`);
-    if (granted.room !== room) throw new Error(`panel room was ${granted.room}`);
-    if (!granted.control) throw new Error('the host controls are hidden');
-    if (!granted.peers || !granted.peers.some((name) => String(name).includes(PEER_NAME))) {
+    const grantedPanel = await waitPanelNotice(bidi, panelContext, 'Control granted');
+    if (!grantedPanel) throw new Error('the panel did not report a grant');
+    if (!grantedPanel.control) throw new Error('the host controls are hidden');
+    if (!grantedPanel.names.some((name) => String(name).includes(PEER_NAME))) {
       throw new Error(`the panel did not list ${PEER_NAME}`);
+    }
+    if (!Array.isArray(grantedPanel.grantedPeers) || !grantedPanel.grantedPeers.includes(PEER)) {
+      throw new Error(`the panel did not mark ${PEER} as controlled`);
+    }
+    if (
+      !Array.isArray(grantedPanel.history) ||
+      !grantedPanel.history.some((row) => row.includes(PEER) && row.includes('granted'))
+    ) {
+      throw new Error('the panel history did not record the grant');
     }
 
     const peerGranted = await waitForDataset(bidi, peerContext, (d) => d.granted === true, 20000);
     if (!peerGranted || peerGranted.granted !== true) {
       throw new Error('the peer did not receive control');
     }
-
-    const revoked = await waitForPanel(
+    const hostGranted = await waitForDataset(
       bidi,
       context,
-      'Control revoked',
-      40000,
-      (panel) => Array.isArray(panel.grantedPeers) && !panel.grantedPeers.includes(PEER)
+      (d) =>
+        Array.isArray(d.peerList) &&
+        d.peerList.some((peer) => peer.id === PEER && peer.granted === true),
+      20000
     );
-    if (!revoked) throw new Error('the panel did not report a revoke');
-    if (!String(revoked.notice).includes('Control revoked')) {
-      throw new Error(`revoke notice was ${JSON.stringify(revoked.notice)}`);
+    if (!hostGranted) throw new Error('the host did not record the grant');
+
+    await evaluate(
+      bidi,
+      panelContext,
+      `document.querySelector('#peers li[data-peer="${PEER}"] .peer-control').click(); true`
+    );
+    const revokedPanel = await waitPanelNotice(bidi, panelContext, 'Control revoked');
+    if (!revokedPanel) throw new Error('the panel did not report a revoke');
+    if (!Array.isArray(revokedPanel.grantedPeers) || revokedPanel.grantedPeers.includes(PEER)) {
+      throw new Error(`the panel still marks ${PEER} as controlled`);
+    }
+    if (
+      !Array.isArray(revokedPanel.history) ||
+      !revokedPanel.history.some((row) => row.includes(PEER) && row.includes('revoked'))
+    ) {
+      throw new Error('the panel history did not record the revoke');
     }
     const peerRevoked = await waitForDataset(bidi, peerContext, (d) => d.granted === false, 20000);
     if (!peerRevoked || peerRevoked.granted !== false) {
       throw new Error('the peer kept control after the revoke');
     }
+
+    const shortcut = { key: 'Ctrl+Alt+B', proven: false, reason: 'headless run' };
 
     result = {
       zen: info,
@@ -312,8 +373,18 @@ async function main() {
         joined: joined.peerList.some((peer) => peer.id === PEER),
         granted: peerGranted.granted,
         revoked: peerRevoked.granted,
+        controls: peerRevoked.controls,
       },
-      panel: { ...revoked, grantedNotice: granted.notice },
+      shortcut,
+      panel: {
+        state: grantedPanel.state,
+        room: grantedPanel.room,
+        control: grantedPanel.control,
+        peers: revokedPanel.names,
+        grantedPeers: revokedPanel.grantedPeers,
+        grantedNotice: grantedPanel.notice,
+        notice: revokedPanel.notice,
+      },
     };
     log('[zen] room live:', JSON.stringify(result.dataset));
     log('[zen] panel:', JSON.stringify(result.panel));

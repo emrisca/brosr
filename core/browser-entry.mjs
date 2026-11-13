@@ -54,6 +54,7 @@ export async function start() {
   const started = performance.now();
   let socket = null;
   let panelState = null;
+  let lastCommand = null;
 
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
@@ -131,6 +132,7 @@ export async function start() {
     source,
     panelUrl,
     panelState,
+    command: lastCommand,
     bias,
     socket: socket ? socket.readyState : -1,
     elapsed: Math.round(performance.now() - started),
@@ -218,7 +220,7 @@ export async function start() {
     // The panel cannot see this tab with tabs.query in a headless window, so
     // the tab registers itself instead.
     const hello = () =>
-      browser.runtime.sendMessage({ type: 'brosr:room-hello' }).catch(() => {});
+      browser.runtime.sendMessage({ type: 'brosr:room-hello', role }).catch(() => {});
     hello();
     setInterval(hello, 2000);
     setInterval(async () => {
@@ -263,6 +265,10 @@ export async function start() {
       if (message.type === 'brosr:grant') {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
         return Promise.resolve({ ok: Boolean(applied), granted: Boolean(message.allowed) });
+      }
+      if (message.type === 'brosr:command') {
+        lastCommand = String(message.command || '');
+        return Promise.resolve({ ok: true });
       }
       return undefined;
     });
