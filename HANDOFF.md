@@ -113,8 +113,10 @@ The offset reads -142 ms. That size fits a clock difference between two machines
 clock reported 0, 154 and -1794600007694 ms for this pair, which was process start time. So the
 hour's 46 ms is consistent with the old stamp, and this window does not reproduce it.
 
-This is the Mac half. The Windows pages' own counters and window are still open. The run is
-420 s, not 600 s. Room `diag` still holds its dead `mac` socket, so use `diag2` next time.
+The pages opened at 20:22:38 and stayed to 20:37:36, so both halves cover 20:25:41 to 20:32:41.
+Their counters in the section below stop at 20:23, before `mac` joined, so those samples are
+loopback only. The two Windows pages read an offset of 0 against each other, and one machine
+explains it. This run is 420 s, not 600 s, and room `diag` still holds its dead `mac` socket.
 
 The loopback room lane also ran with the wall clock, in room `soak` on the Mac. It gave 374
 presence samples at 5 ms p50, 10 ms p95 and 52 ms worst, with 3 cursors per peer. That is one
@@ -1076,7 +1078,8 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
    does a figure get quoted. The page clock is wall time now. The 20:25 window reads 4 to 5 ms
-   per sender, so the 46 ms figure no longer holds. The Windows half of that window is open.
+   per sender, so the 46 ms figure no longer holds. The Windows page counters for that window
+   stop before `mac` joined, so they add no LAN row.
 3. **The peer count.** `peer.mjs` now journals `peerIds`, so the next hour names the entry that
    made four on the Macs and three on the host.
 4. **The shortcut.** It registers, and a chord posted to the Zen process opened the panel. A

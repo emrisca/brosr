@@ -318,8 +318,9 @@ The offset reads -142 ms. That size fits a clock difference between two machines
 longer the size of a process uptime. The hour's 46 ms is consistent with the old page stamp,
 and this window does not reproduce it.
 
-This is the Mac half. The Windows pages' own counters are not in this file. The window is 420 s
-rather than 600 s, and it is not a WAN window.
+This is the Mac half. The Windows pages held the room from 20:22:38 to 20:37:36, so both halves
+cover the same 420 s. Their own counters are in `HANDOFF.md` and stop before `mac` joined. The
+window is 420 s rather than 600 s, and it is not a WAN window.
 
 ## What it does not prove
 
@@ -328,8 +329,8 @@ rather than 600 s, and it is not a WAN window.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
 - A LAN latency number for the hour. The 20:25 window reads 4 to 5 ms p50 on the Mac, and it
-  no longer disagrees with the clock exchange. That window is 420 s, and the Windows half is
-  not in yet.
+  no longer disagrees with the clock exchange. That window is 420 s, and the Windows page
+  counters stop before `mac` joined.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
