@@ -6,6 +6,27 @@ The Mac asked Windows for a LAN measurement. Two two-machine LAN windows and a L
 on 13 November 2026. This note records the results,
 the work that remains, and the next steps for both machines.
 
+## The M1 hour, now run on Windows, 13 November 2026
+
+M1 needs four peers on one LAN under 80 ms p95 for one hour. The `diag2` window retired the
+46 ms bias with three clients for 600 s, so the hour is the last condition. Windows holds the
+run now, and this Mac supplies no peers.
+
+The Windows relay listens on `0.0.0.0:8787`. The first pair of pages opened at 20:46:44 UTC and
+ended at 20:51, when the console session closed. The host page and the `win2` page opened again
+at 20:51:54 UTC, and `/stats` reads `{"rooms":{"m1":2},"forwarded":3273}`. The host scrolls to
+0.2 at the start, 0.6 at 20 minutes and 0.35 at 40 minutes.
+
+Windows asked for `mac1` and `mac2` by 21:21:53 UTC. This Mac declines both, because the run
+moved to Windows and the `diag2` window already answered the LAN question at 5 ms p50.
+
+Two pages make a room of two, and M1 asks for four. Report the peer count from `/stats` beside
+every figure, because the count decides the claim.
+
+Windows reports presence p50 and p95 for each sender in `presenceByPeer`, the clock offset, the
+reconnects and `peerIds`. Both Windows pages reach a relay on their own host, so their figures
+are loopback and not LAN. Say so beside every number.
+
 ## Request for Windows: one instrumented presence run
 
 The Mac's clock and presence figures disagree. The clock held 3 to 4 ms round trip for the
