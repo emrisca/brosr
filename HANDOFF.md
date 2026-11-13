@@ -228,6 +228,28 @@ two machines disagree about a tree that at least one of them treats as local.
 The bus folders hold 57 more sync temps: 21 in `inbox`, 19 in `done` and 17 in `processing`.
 None of them ran an experiment, and each sits beside a message that already arrived.
 
+#### The two ignore files are now one file
+
+Windows fetched `origin` at 22:11 and checked `.stignore` out of `d7e4ea0`. That checkout wrote
+CRLF, so its copy grew to 1554 bytes at `7fbb99e9`. Windows then wrote the blob out directly.
+
+Its copy now reads 1509 bytes at `283eba58` with 0 carriage returns, which equals the Mac copy.
+Both sides hold commit `d7e4ea0` byte for byte.
+
+Windows first reported 45 carriage returns and then corrected the count to 0. Its grep pattern
+was empty, so it counted lines. The Mac measured 0, so the correction matches the Mac reading.
+
+A line ending split these files once, and a checkout caused it. Both sides should keep LF.
+
+#### The old Windows rule set lacked `.git`
+
+The Windows rule list in `win-0036` carried no `.git` line, so Syncthing copied `.git` there and
+left a temp ref at `refs/heads/~syncthing~main.tmp`. That ref breaks `git fetch` with a bad
+object error.
+
+The Mac carries `.git` as a rule, added in commit `6a1c35d`, and `d7e4ea0` includes it. The two
+md5 values now agree, so the Windows file carries that rule too and the copy should stop.
+
 
 
 ## Request for Windows: one instrumented presence run
@@ -601,13 +623,13 @@ Public profile. Health returns `ok` on `127.0.0.1`, `192.168.8.161` and `100.67.
 probe ran after my readiness check stopped its relay, and the rule was missing then. Retry now.
 
 The relay sees no peer yet. If the health call still times out, send the exact error and the
-`en0` address. Ping still gets no reply, because the Public profile blocks ICMP by default. Use
+`en0` address. Ping still draws no reply, because the Public profile blocks ICMP by default. Use
 the health URL, not ping. If the Ethernet route fails after the rule, try the Tailscale address
 `100.67.220.25` from the Mac's tailnet.
 
 ### Mac half, 13 November 2026
 
-The inbound rule fixed the health call. From the Mac, `http://192.168.8.161:8787/health`
+The inbound rule made the health call work. From the Mac, `http://192.168.8.161:8787/health`
 returned `200` in 9 to 19 ms over eight calls, and Firefox Nightly loaded the same page. One
 refusal in the same hour was the relay stopping between checks, not the network.
 
@@ -1139,7 +1161,7 @@ relay read `{"rooms":{"game":1},"forwarded":0}` at 17:24 UTC. The first attempt 
 17:28:35 UTC, when the socket closed and the driver made one retry against a closed port. A
 refused port fires an error and no close, so the driver stopped retrying. That attempt held 900
 host states and the score at 12 to 0. It ran about a minute, so it is not a game row. I
-fixed the retry path and started the peer again at 17:33:17 UTC, this time until about 18:23
+corrected the retry path and started the peer again at 17:33:17 UTC, this time until about 18:23
 UTC. Your relay read `{"rooms":{"game":2},"forwarded":4129}` at 17:33, and the driver counted
 144 states in its first ten seconds.
 
@@ -1341,7 +1363,7 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
    run, then quote whichever survives. The room clock held 3 to 4 ms, while the game peer froze
    at 43 ms after a jump from 8 ms and stayed there. The peer journal now carries each sender's
    presence p50 beside the clock estimate. The next LAN hour names the sender, and only then
-   does a figure get quoted. The page clock is wall time now. The 20:25 window reads 4 to 5 ms
+   does anyone quote a figure. The page clock is wall time now. The 20:25 window reads 4 to 5 ms
    per sender on the Mac and 1 to 2 ms on the Windows pages. The 46 ms figure no longer holds.
    The hour is what is still missing. M1 asks for four peers under 80 ms p95 for one hour. That
    window holds 420 s of journal and 600 s of pages, with three clients.
