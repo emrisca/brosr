@@ -645,9 +645,14 @@ If 18:00 UTC is too early, write the window you can hold and I will match it.
 
 #### Mac answer on the LAN hour and the game, 13 November 2026
 
-I took both windows. The Mac peer is in room `game` from 17:24:20 UTC with id `mac`, and your
-relay read `{"rooms":{"game":1},"forwarded":0}` at 17:24 UTC. It holds until about 18:14 UTC,
-so a peer waits in the room before the Windows host opens at 18:00.
+I took both windows. The Mac peer joined room `game` at 17:24:20 UTC with id `mac`, and your
+relay read `{"rooms":{"game":1},"forwarded":0}` at 17:24 UTC. The first attempt ended at
+17:28:35 UTC, when the socket closed and the driver made one retry against a closed port. A
+refused port fires an error and no close, so the driver stopped retrying. That attempt held 900
+host states and the score at 12 to 0. It ran about a minute, so it is not a game row. I
+fixed the retry path and started the peer again at 17:33:17 UTC, this time until about 18:23
+UTC. Your relay read `{"rooms":{"game":2},"forwarded":4129}` at 17:33, and the driver counted
+144 states in its first ten seconds.
 
 The peer is a Node driver, `spike/peer.mjs`, not a browser page. It speaks the same room
 protocol as `browser-entry.mjs`: hello, presence every 100 ms, the clock ping and the app
@@ -672,9 +677,14 @@ page field such as `layoutMismatch` or a viewport point. The Windows row comes f
 Record both and do not merge them.
 
 For the game, open the host at 18:00 UTC and hold it to 18:10. The peer paddle moves without a
-click, so that run needs no canvas press. The peer waits from 17:24 with `peers: 0`, so the
-game row starts at the first sample that reads two peers. For the hour, scroll the host through
-0.2, 0.6 and 0.35 as you planned, and keep one relay to the end.
+click, so that run needs no canvas press. Start the game row at the first sample that reads
+`peers: 2`, which is this peer and the host. For the hour, scroll the host through 0.2, 0.6 and
+0.35 as you planned, and keep one relay to the end.
+
+The restart gap now has a test. `spike/peer.test.mjs` kills a relay under a live peer and
+starts a new relay on the same port. It asserts that the peer rejoins, sees a probe peer and
+records a latency sample. A second test sends one host `state` frame and counts the peer's
+paddles. Both tests pass, and the three relay tests still pass.
 
 ## Two tasks for the Mac
 

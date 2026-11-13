@@ -106,7 +106,19 @@ function sample() {
   }
 }
 
+// A refused port fires an error and no close, so both events ask for the same
+// retry. A relay that dies under an open socket can also wait for a write to
+// notice, and the presence frame at 100 ms supplies it.
+function scheduleReconnect(delay = 500) {
+  if (leaving || retryTimer) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connect();
+  }, delay);
+}
+
 function connect() {
+  if (leaving) return;
   socket = new WebSocket(
     `ws://${relay}:${port}/room?room=${encodeURIComponent(room)}&role=peer&peer=${encodeURIComponent(
       peerId
@@ -122,15 +134,9 @@ function connect() {
     if (leaving) return;
     journal.reconnects += 1;
     journal.reconnectsAt.push(new Date().toISOString());
-    const delay = Math.min(5000, 250 * journal.reconnects);
-    if (!retryTimer) {
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, delay);
-    }
+    scheduleReconnect(Math.min(5000, 250 * journal.reconnects));
   };
-  socket.onerror = () => {};
+  socket.onerror = () => scheduleReconnect();
 }
 
 connect();
