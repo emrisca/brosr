@@ -23,8 +23,9 @@ stay out of git.
 ## Syncthing temp files
 
 Syncthing writes `.syncthing.<name>.tmp` beside a file while it copies it. This Mac ran two
-Syncthing installs at once, so one instance orphaned a partial write and `SKILL.md` vanished
-while its temp stayed. One install should own this folder.
+Syncthing installs at once, so one instance orphaned a partial write. The duplicate is gone, and
+`SKILL.md` vanished a second time anyway, so a delete can also arrive from the other machine.
+Check that both folder roots map to `brosr/` before you trust a sync.
 
-Run `node handoff.mjs tidy` to remove temps older than 15 minutes. `tidy --dry-run` lists them
-and removes nothing. `git checkout -- <file>` brings back a tracked file that goes missing.
+Run `node handoff.mjs tidy` to clear temps older than 15 minutes. `tidy --dry-run` lists them
+and clears nothing. `git checkout -- <file>` brings back a tracked file that goes missing.
