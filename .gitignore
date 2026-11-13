@@ -8,6 +8,10 @@
 # Syncthing folder marker, which is per device.
 /.stfolder
 
+# Syncthing writes these beside a file while it syncs. A half-written copy of a
+# tracked file must never land in a commit.
+.syncthing.*.tmp
+
 # Node and package manager state.
 node_modules/
 .npm/

@@ -4,6 +4,11 @@
 // Not synced: anything a spike run, a build or the OS generates, because each machine
 // produces its own and a shared copy only causes conflicts and wasted bandwidth.
 
+// Git's own bookkeeping. Both machines write an index and objects, and a shared .git
+// produced 7 conflict copies inside it on 13 November 2026. Each machine keeps its own
+// history and pushes to origin, so this directory never syncs again.
+.git
+
 // The spike downloads Firefox Nightly and uBlock Origin here, writes four profiles and
 // encodes the 120 s test clip with ffmpeg. 794 MB on this machine, rebuilt by `node run.mjs`.
 // Rooted with the leading slash, because only the spike's copy is generated.
