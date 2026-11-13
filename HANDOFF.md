@@ -101,26 +101,66 @@ sample every second. This section carries no final figure, because the window st
 One signal is already odd. Both peers read presence p95 near 2785 ms, from sample 302 on `mac1`
 and sample 202 on `mac2`. Their round trip stayed at 4 ms across that spell.
 
-The jump landed on both peers at once. It held for eight samples. It then fell back to about
-31 ms. A stall that size would fail the 80 ms p95 cap if it held. The Mac asked Windows what the
-relay saw.
+The jump landed on both peers at once. On `mac1` the merged p95 crossed 80 ms at sample 293 and
+fell back at sample 313, so the spell ran 21:50:55 to 21:51:15 UTC. `mac2` read sample 192 to
+213 over the same seconds. An earlier note said eight samples, and that was wrong.
 
-Windows reports presence p50 and p95 per sender when its 3600 s window closes.
+The Windows clock starts at 21:47:42.034 and stops at 22:57:42.034, as message `win-0013` states.
 
-#### Provisional read at 21:54 UTC
+#### Read at 21:58 UTC, thirteen minutes in
 
-This read covers the first six minutes of sixty. Median presence p95 read 30 ms on `mac1` and
-31 ms on `mac2`. That median sits under the 80 ms cap.
+This read covers thirteen minutes of sixty. The merged p95 crossed 80 ms in 21 of 780 `mac1`
+samples and 22 of 680 `mac2` samples. Every breach sits inside the one 21 s burst above.
 
-One sender breaks the pattern. Both Mac journals put `host` at p50 29 ms and p95 972 ms, with a
-2632 ms worst frame. `win2` read p95 27 ms, and the two Mac peers read 4 to 6 ms.
+The burst did not pick on the host. At 21:50:56 `win2` read p95 690 ms. `mac2` read 677 ms at
+that second, and `host` read 37 ms. Both Windows side pages carried the spell.
 
-A single sender at 972 ms cannot pass an 80 ms p95 gate. M1 stays unproven, and six minutes is
-not an hour. The final verdict waits for the close at 22:48:12 UTC and the Windows counters.
+The host carries a longer slow spell. Its per-sender p95 crossed 80 ms in 194 samples on both
+journals, against 31 or 32 for every other sender. The host p95 sat at 972 ms from 21:52:42 to
+21:54:14, when no burst was running.
+
+M1 stays unproven. A quarter of the window at a host p95 of 972 ms cannot pass an 80 ms cap, and
+thirteen minutes is not an hour.
+
+#### What the two latency fields mean
+
+`latency` merges every sender into one 200 sample ring, which turns over in about 7 s at four
+clients. `presenceByPeer` keeps a 200 sample ring per sender, which turns over in about 20 s at
+10 frames a second. A burst leaves the merged ring at once and the per-sender ring 20 s later.
+Read both, or a burst looks like a steady fault.
+
+`endedAt` in a peer journal is the last flush, not the stop time. `peer.mjs` stamps it on every
+write, which falls every tenth sample. A reader who trusts it calls a live run finished.
+
+#### The hour this run can prove
+
+`mac1` stops at 22:56:10 and `mac2` at 22:55:42, so the last two minutes hold three clients.
+Four clients held from 21:47:42.115. `mac1` logged 100 samples at three peers before that
+second and none after.
+
+The hour the run can prove starts at 21:47:42 and ends at 22:47:42. That window keeps four
+clients the whole way and swallows the late `mac2` join.
 
 Windows also explains the counter gap in message `20261113-214017-win-0005`. Its `peers_seen`
 reads 3 for `host` and 4 for the other three pages, which matches `rooms.m1` = 3. The host had
 not counted one client, so the gap sits in the host view and not in the client count.
+
+#### The folder id matches and a second install is the suspect
+
+Windows answered at 21:56 in messages `win-0014` through `win-0021`. Its marker reads folder id
+`bxzsc-v9d4t` at `C:\Users\abelm\Documents\Avalon\apps\brosr`. The Mac reads the same id at
+`/Users/abelmora/Documents/Avalon/brosr`.
+
+Both indexes name one folder, and the paths differ only by `apps`. The folder root is not the
+cause. Windows restored its `.stignore` and still runs two Syncthing installs, `12320` and
+`13924`, and only `13924` owns port `8384`.
+
+Two installs that load one config share a device id, so each can hold its own index of this
+folder. That is the leading suspect, not a proven cause. One check settles it. Stop one install
+and watch whether `SKILL.md` survives a restart of the other.
+
+`SKILL.md` went a third time tonight, at 21:55 UTC, and this time no conflict copy appeared. The
+Mac restored it from git at hash `36990cb1`, 434 lines. The Mac restores it each time.
 
 ## Request for Windows: one instrumented presence run
 
