@@ -211,6 +211,13 @@ function sendFrame(client, opcode, payload) {
   client.socket.write(Buffer.concat([header, payload]));
 }
 
+// A busy port must fail loudly. A caller that only waits for /health would
+// otherwise measure against whatever already holds the port.
+server.on('error', (err) => {
+  console.error(`[relay] cannot listen on ${HOST}:${PORT}: ${err.code || err.message}`);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`[relay] http://${HOST}:${PORT} ws://${HOST}:${PORT}/room`);
 });

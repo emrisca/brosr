@@ -308,7 +308,7 @@ not a second click.
 The Windows row covers 08:26:38 to 08:30:43 UTC at 1 ms p95. The Mac row covers 08:26:36 to
 08:39:12 UTC at 7 ms p95. Keep the rows separate.
 
-WAN, the one-hour soak and the two-machine game are still unmeasured.
+At that point, WAN, the one-hour soak and the two-machine game were still unmeasured.
 
 ### Scroll and click window, 13 November 2026
 
@@ -548,9 +548,15 @@ at the midpoint:
 The run wrote `when: 2026-11-13T10:08:47Z`. Node was 23.9.0 on darwin, and Firefox was
 162.0a1. Every peer reported `relayRestarted: true` and came back on its own.
 
+The relay also listed a second room, `demo: 2`, for the whole hour. Two browsers from the
+01:37 media demo still ran, and each re-dialled the relay after every restart. I killed both.
+The harness now waits for its own relay line, so a process that already holds port 8787 stops
+the run instead of answering `/health`. The hour numbers come from the page datasets, so this
+room did not change them.
+
 The game ran ten minutes in room `game` with one host page and one peer page. The peer sent
 5667 paddles and the host received all 5667 with 0 dropped. The host sent 8977 states and the
-peer drew 8955, so 22 frames were still in flight at the end. Both windows ended on sequence
+peer received 8955, so 22 sent frames were not counted as received. Both windows ended on sequence
 8978 and on the score 95 to 0. The host counted 1 peer and the peer counted 2, which is right
 because the host is not its own peer.
 

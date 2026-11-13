@@ -83,3 +83,16 @@ test('closing every client of a room removes the room', async () => {
   const stats = await (await fetch(`${BASE}/stats`)).json();
   assert.equal(stats.rooms.gamma, undefined);
 });
+
+test('a relay on a busy port exits instead of serving', async () => {
+  const second = spawn(process.execPath, [path.join(here, 'relay.js')], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PORT: String(PORT) },
+  });
+  let text = '';
+  second.stdout.on('data', (chunk) => (text += chunk.toString()));
+  second.stderr.on('data', (chunk) => (text += chunk.toString()));
+  const code = await new Promise((resolve) => second.once('exit', resolve));
+  assert.notEqual(code, 0, 'the second relay did not exit cleanly');
+  assert.match(text, /cannot listen on/, 'the second relay named the busy port');
+});

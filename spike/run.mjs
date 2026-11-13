@@ -325,12 +325,34 @@ async function waitHealthOn(port) {
   throw new Error(`no health on port ${port}`);
 }
 
+// The harness must talk to the relay it started. A listener that already holds
+// port 8787 answers /health, so a restart would look successful while the old
+// process served every lane.
+function waitRelayReady(child) {
+  return new Promise((resolve, reject) => {
+    let seen = '';
+    const timer = setTimeout(() => reject(new Error('relay printed no ready line')), 10000);
+    child.stdout.on('data', (chunk) => {
+      seen += chunk.toString();
+      if (seen.includes('[relay] http://')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`relay exited before it listened (code ${code}); port 8787 is in use`));
+    });
+  });
+}
+
 async function startRelay() {
   const child = spawn(process.execPath, [path.join(here, 'relay.js')], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.on('data', (chunk) => process.stdout.write(chunk));
   child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+  await waitRelayReady(child);
   await waitHealthOn(8787);
   return child;
 }

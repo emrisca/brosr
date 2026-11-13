@@ -53,7 +53,7 @@ node run.mjs --only=bidi,ad --firefox="$PWD/.runtime/firefox-mac.app/Contents/Ma
 
 The room lane ran as a regression check for the LAN changes below, not as a ten-check run.
 `results-macos.json` holds this run. `results-win11.json` holds the Windows ten-check run.
-`results.json` holds the last run on this Mac, the game.
+`results.json` holds the last run.
 
 ## Loopback hour, 13 November 2026
 
@@ -113,7 +113,7 @@ Two windows on macOS 26.6.2, Node 23.9.0 and Firefox Nightly 162.0a1 joined room
 | Verdict | Pass, `game.ok: true` |
 | Peer state frames received | 8955, about 15 per second |
 | Host paddles received | 5667 of 5667 sent, 0 dropped |
-| State frames | 8977 sent, 8955 received, 22 in flight at the end |
+| State frames | 8977 sent, 8955 received, 22 sent frames not counted as received |
 | Scores on both windows | 95 to 0, `scoresMatch: true` |
 | Sequence on both windows | 8978 |
 | Frames drawn | 36302 on the host, 36215 on the peer |
@@ -237,6 +237,10 @@ does not prove a WAN, an hour, or more than two machines.
   first turns the caller's connection error into a status code.
 - uBlock Origin sideloads from an AMO XPI into a fresh profile. Firefox reports `active: true`
   and `signedState: 2`.
+- A stray page makes a phantom room. Two browsers left by the 01:37 media demo stayed open and
+  re-dialled `demo` on every relay restart, so `/stats` listed `demo: 2` beside `soak: 4` for
+  the whole hour. The harness now waits for its own relay line, and a busy port stops the run
+  with `port 8787 is in use` instead of answering `/health` from another process.
 
 ## Files
 
