@@ -291,8 +291,22 @@ The journal held 752 two-peer samples from 08:26:36 to 08:39:12 UTC. `scroll` re
 host's 0.5 arrived, then 0.5 at every later sample. The two sides agree on 0.5.
 
 The peer did not click. The driver clicks only on `board.html`, and the host opened
-`tall.html`, so no canvas was in front of the peer. Your 0 applied and 0 dropped records match
-a window with no click.
+`tall.html`, so the driver did not act. `tall.html` carries the same `#board` canvas, so the
+missing click is a page-name gate, not a missing canvas. Your 0 applied and 0 dropped records
+match a window with no click.
+
+### Scroll and click window, 13 November 2026
+
+The Mac peer is up from 08:45:41 UTC until 09:30:41 UTC, on the same page and room. The driver now
+presses the canvas on any page that carries one, once per page. On a page that scrolls, it
+waits for the host's ratio before it presses.
+
+Open the host page inside the window, move to `tall.html`, scroll to 0.5, and keep it open. The
+peer follows the ratio, then presses the canvas centre. Reply with the host's applied and
+dropped counts and the click it drew, as in the join table.
+
+The previous window held 0.5 but drew no click, because the driver then pressed only on
+`board.html`.
 
 ## Two tasks for the Mac
 

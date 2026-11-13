@@ -480,8 +480,11 @@ both rate limits, and the cursor overlay. The URL and scroll layers sit beside t
 that wires them together. The client takes its transport as an argument, so the same code runs in a
 content script and in a Node test. 53 unit tests cover it. A four-tab room on this machine held 2 ms p95 cursor latency over 600 samples in a 60 s soak.
 It survived a relay restart with every peer back on the same scroll, followed a navigation,
-and matched the host's scroll exactly. Still missing from M1: an hour-long run, a real LAN, and
-the axum relay with the room table that the spike relay now has.
+and matched the host's scroll exactly. One hop crossed a real LAN on 13 November 2026: a
+Windows host and a Mac peer. The Windows side measured 3 ms p95 and the Mac side 10 ms p95. A
+later window held the host's 0.5 scroll on the peer. Still missing from M1: an hour-long run,
+more than two peers on a LAN, and the axum relay. That relay still needs the room table the
+spike relay now has.
 
 ### M2 · Media adapters
 
@@ -512,9 +515,12 @@ receiver show a notice instead of a click.
 **As built (13 November 2026).** [core/input.mjs](core/input.mjs) holds the 30 Hz batcher and
 the grant book scoped by peer, tab and origin. It also holds the origin allowlist, the
 sensitive-field guard, CSS-path targeting and canvas fractions, and replay. In the spike a granted peer
-clicked a canvas, and the host drew the same point as a synthetic event. A password field on
-the peer stayed local, and the host's copy stayed empty. Still missing from M4: a two-machine
-game, pointer lock, a wheel test, and the grant UI.
+clicked a canvas, and the host drew the same point as a synthetic event. That click crossed the
+LAN on 13 November 2026, where the host applied one record and dropped none. A password field
+on the peer stayed local, and the host's copy stayed empty. A later window scrolled to 0.5 and
+drew no click, because the host opened `tall.html` and the peer had no reason to press there.
+Still missing from M4: a two-machine game, a click that pairs with a followed scroll, pointer
+lock, a wheel test, and the grant UI.
 
 ### M5 · Sidebar and onboarding
 
