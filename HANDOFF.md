@@ -1497,6 +1497,8 @@ The relay held the two Windows pages alone for at least 27 s. The Mac page kept 
 because nothing deleted `mac2` from its map. My earlier line that the room held three clients was
 wrong arithmetic, and this paragraph replaces it.
 
+The Mac agreed with the socket reading. The frame I asked for exists, and it is stale.
+
 Four-peer presence at 21:57 read p95 6 ms for `mac1` and 5 ms for `mac2` on the host page. The
 `win2` page read 7 ms and 6 ms. Reconnects read 0 and the clock offset read 0 and 1.
 
@@ -1519,3 +1521,51 @@ the child holds port 8384. The earlier note that called them two installs is wro
 
 The temp files fit other causes. `.git` sits inside the synced folder, the ignore rewrite at 21:51:01
 forced a rebuild, and one checkout wrote CRLF. Nothing needs stopping.
+
+## Syncthing over the tailnet
+
+Both devices carried `dynamic` only, so sync depended on discovery. The Windows side now lists
+`dynamic` and `tcp://100.85.253.36:22000` for the device `MacOS`. The Mac must add
+`tcp://100.67.220.25:22000` to the device `emrys`.
+
+Tailnet names are `emrys-3` at 100.67.220.25 and `4831` at 100.85.253.36. A tailnet ping from
+Windows to the Mac returned in 5 ms over a direct path.
+
+The GUI stays on `127.0.0.1:8384`. Tailscale Serve publishes it at
+`https://emrys-3.tailde46b4.ts.net/` for the tailnet only. One attempt set the GUI to `0.0.0.0`,
+which opened it on every interface, and I reverted it.
+
+### Mac pin applied
+
+The Mac now lists three addresses for the device `emrys`: `tcp://100.67.220.25:22000`,
+`quic://100.67.220.25:22000` and `dynamic`. The write returned HTTP 200. The connection stayed up at
+`[fd7a:115c:a1e0::e035:dc19]:22000` with `isLocal false`.
+
+The Windows side still owes the reverse. It should hold `tcp://100.85.253.36:22000` and
+`quic://100.85.253.36:22000` for the device `5DM7YBB`, which is the Mac.
+
+## Peer counts now expire
+
+A peer count that only grows cannot be trusted. The `Room` map kept every peer it ever saw, so a
+dropped socket left the page count too high. This is the win-0080 argument, and it held up.
+
+`Room` now stamps `seenAt` on each join and presence frame. `prune()` drops any peer unseen for
+`PEER_TTL_MS`, which is 5 s, and `tick()` calls it on both roles. The pages send presence on a
+timer, so a live page refreshes its stamp without a pointer move.
+
+Two tests cover it. One peer goes quiet and leaves the map. A peer inside the window stays, and the
+local peer is never pruned. Core passes 74 of 74 and spike passes 14 of 14.
+
+`spike/peer.mjs --probe=<seconds>` now reads `/stats` into `journal.probes`, so a run records the
+relay's own count. A four second smoke test against a local relay produced 4 probes, each with
+`roomSockets` 1.
+
+## `lan2`, not yet booked
+
+`lan2` stays unbooked. It needs a start time from you, and I will not pick one.
+
+That run should show whether the peer count now falls after a socket drop. It should record
+`/stats` probes, so the count comes from the relay and not from a page.
+
+The limits from `lan1` still apply. Mac and Windows latency stay in separate columns. Four live
+peers must run past 26 minutes to replace the partial M1.

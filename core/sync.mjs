@@ -536,6 +536,9 @@ export function createRoomClient({
   }
 
   function tick(local = now()) {
+    // A dropped socket leaves its entry behind. The count only means live peers
+    // once the map forgets a peer that stopped sending presence.
+    state.prune({ at: local });
     if (batcher && local - lastInputFlush >= POINTER_INTERVAL_MS) {
       lastInputFlush = local;
       batcher.flush();

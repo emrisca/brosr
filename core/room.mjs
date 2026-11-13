@@ -3,6 +3,8 @@
 
 export const MAX_INPUT_PER_SECOND = 120;
 export const MAX_NAV_PER_SECOND = 1;
+// Presence frames arrive every 100 ms. A peer unseen for this long has gone.
+export const PEER_TTL_MS = 5000;
 
 export class Room {
   constructor({ role = 'peer', peerId = 'me', now = () => Date.now() } = {}) {
@@ -10,6 +12,7 @@ export class Room {
     this.peerId = peerId;
     this.now = now;
     this.peers = new Map();
+    this.seen = new Map();
     this.sequence = 0;
     this.inputSeq = new Map();
     this.inputWindow = new Map();
@@ -24,13 +27,27 @@ export class Room {
     const existing = this.peers.get(peer.id);
     const next = { ...(existing || {}), ...peer, joinedAt: existing ? existing.joinedAt : this.now() };
     this.peers.set(peer.id, next);
+    this.seen.set(peer.id, this.now());
     return next;
   }
 
   leave(id) {
     this.inputSeq.delete(id);
     this.inputWindow.delete(id);
+    this.seen.delete(id);
     return this.peers.delete(id);
+  }
+
+  // A room map outlives a dropped socket, so a count needs an age. Presence
+  // frames arrive every 100 ms, and a peer that stops sending is gone.
+  prune({ ttl = PEER_TTL_MS, at = this.now() } = {}) {
+    const gone = [];
+    for (const [id, seenAt] of this.seen) {
+      if (id === this.peerId) continue;
+      if (at - seenAt > ttl) gone.push(id);
+    }
+    for (const id of gone) this.leave(id);
+    return gone;
   }
 
   nextSequence() {

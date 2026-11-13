@@ -23,6 +23,9 @@ const hostId = args.get('host') || 'host';
 const seconds = Number(args.get('seconds') || 60);
 const game = args.get('game') === '1';
 const out = args.get('out') || path.join('.runtime', `peer-${room}.json`);
+// A read of the relay table each minute. The page map cannot show a live
+// socket, so a future hour needs this witness beside its own samples.
+const probeEvery = Number(args.get('probe') || 0);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -38,6 +41,7 @@ const journal = {
   reconnects: 0,
   reconnectsAt: [],
   samples: [],
+  probes: [],
   statesReceived: 0,
   last: null,
 };
@@ -47,6 +51,7 @@ let leaving = false;
 let retryTimer = null;
 let samples = 0;
 let lastLine = 0;
+let probeTimer = null;
 
 const client = createRoomClient({
   role: 'peer',
@@ -113,6 +118,25 @@ function sample() {
   }
 }
 
+async function probeRelay() {
+  const url = `http://${relay}:${port}/stats`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    const body = await res.json();
+    journal.probes.push({
+      at: new Date().toISOString(),
+      ok: true,
+      rooms: body.rooms || null,
+      roomSockets: body.rooms ? body.rooms[room] ?? 0 : null,
+      forwarded: body.forwarded ?? null,
+    });
+    console.log(`[peer] relay ${url} rooms=${JSON.stringify(body.rooms || {})}`);
+  } catch (error) {
+    journal.probes.push({ at: new Date().toISOString(), ok: false, error: error.message });
+    console.log(`[peer] relay ${url} failed: ${error.message}`);
+  }
+}
+
 // A refused port fires an error and no close, so both events ask for the same
 // retry. A relay that dies under an open socket can also wait for a write to
 // notice, and the presence frame at 100 ms supplies it.
@@ -159,6 +183,10 @@ const presence = setInterval(
   100
 );
 const sampler = setInterval(sample, 1000);
+if (probeEvery > 0) {
+  probeRelay();
+  probeTimer = setInterval(probeRelay, probeEvery * 1000);
+}
 
 // The peer paddle moves at 10 Hz, like the browser page does. One frame a
 // second still tracks, but it would not match the loopback game row.
@@ -175,6 +203,7 @@ async function stop(reason) {
   clearInterval(presence);
   clearInterval(sampler);
   clearInterval(paddles);
+  if (probeTimer) clearInterval(probeTimer);
   write();
   try {
     if (socket) socket.close();

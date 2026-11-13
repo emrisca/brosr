@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Room, MAX_INPUT_PER_SECOND } from '../room.mjs';
+import { Room, MAX_INPUT_PER_SECOND, PEER_TTL_MS } from '../room.mjs';
 
 function fixedClock(value = 0) {
   let now = value;
@@ -106,6 +106,31 @@ test('a scroll ratio is clamped and a different window size is flagged', () => {
   });
   assert.equal(different.scroll, 0.3);
   assert.equal(different.mismatch, true);
+});
+
+test('a peer that stops sending presence leaves the map', () => {
+  const now = fixedClock(0);
+  const room = new Room({ role: 'peer', peerId: 'me', now });
+  room.join({ id: 'bob', name: 'Bob' });
+  now.advance(1000);
+  room.join({ id: 'bob', name: 'Bob' });
+  now.advance(PEER_TTL_MS + 1);
+  assert.deepEqual(room.prune(), ['bob']);
+  assert.equal(room.peers.size, 0);
+});
+
+test('a peer seen inside the window stays, and the local peer is never pruned', () => {
+  const now = fixedClock(0);
+  const room = new Room({ role: 'peer', peerId: 'me', now });
+  room.join({ id: 'me', name: 'Me' });
+  room.join({ id: 'bob', name: 'Bob' });
+  now.advance(PEER_TTL_MS - 1);
+  assert.deepEqual(room.prune(), []);
+  assert.equal(room.peers.size, 2);
+  now.advance(2);
+  assert.deepEqual(room.prune(), ['bob']);
+  assert.equal(room.peers.size, 1);
+  assert.equal(room.peers.has('me'), true);
 });
 
 test('a snapshot carries the page, and a joiner adopts it', () => {
