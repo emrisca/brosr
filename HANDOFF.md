@@ -2,8 +2,8 @@
 
 13 November 2026
 
-This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurement. Two
-two-machine LAN windows and a LAN hour ran on 13 November 2026. This note records the results,
+The Mac asked Windows for a LAN measurement. Two two-machine LAN windows and a LAN hour ran
+on 13 November 2026. This note records the results,
 the work that remains, and the next steps for both machines.
 
 ## Task for Windows, 13 November 2026, now complete
