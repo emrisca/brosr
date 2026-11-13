@@ -44,6 +44,21 @@ test('a media message needs an action the plan defines', () => {
   );
 });
 
+test('an app message carries a named payload', () => {
+  const message = decode(
+    encode({ type: 'app', peerId: 'alice', name: 'paddle', data: { y: 120 }, roomTime: 1000 })
+  );
+  assert.equal(message.name, 'paddle');
+  assert.deepEqual(message.data, { y: 120 });
+});
+
+test('an app message needs a payload object', () => {
+  assert.throws(
+    () => encode({ type: 'app', peerId: 'alice', name: 'paddle', data: 'y' }),
+    /app needs a data object/
+  );
+});
+
 test('a frame over the limit is refused', () => {
   const big = 'x'.repeat(MAX_FRAME_BYTES);
   assert.throws(() => encode({ ...presence, name: big }), /over the 16384 byte limit/);

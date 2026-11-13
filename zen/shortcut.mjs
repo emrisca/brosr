@@ -55,7 +55,11 @@ function buildXpi() {
 }
 
 function readIni(zen) {
-  for (const base of [path.dirname(zen), path.join(path.dirname(zen), '..')]) {
+  for (const base of [
+    path.dirname(zen),
+    path.join(path.dirname(zen), '..'),
+    path.join(path.dirname(zen), '..', 'Resources'),
+  ]) {
     const file = path.join(base, 'application.ini');
     if (!fs.existsSync(file)) continue;
     const text = fs.readFileSync(file, 'utf8');
@@ -66,8 +70,21 @@ function readIni(zen) {
 }
 
 function killTree(child) {
-  if (!child) return;
-  spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  if (!child || child.killed) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  // Zen starts child processes. One signal to the group stops all of them.
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 async function waitHealth() {
@@ -133,6 +150,7 @@ async function waitForDataset(bidi, context, predicate, timeoutMs = 30000) {
 }
 
 function pressShortcut() {
+  if (process.platform === 'darwin') return pressShortcutMac();
   const script = `
 $ErrorActionPreference = 'Stop'
 $p = Get-Process zen -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like '*Brosr*' } | Select-Object -First 1
@@ -182,6 +200,60 @@ Write-Output ('focused ' + $focused + ' handle ' + $handle)
   };
 }
 
+function focusZenWindow() {
+  // A browser command needs a frontmost window with the page focused. This is
+  // setup; the proof is the chord.
+  if (process.platform !== 'darwin') return { ok: true, out: 'not-mac', err: '', status: 0 };
+  const script = `
+tell application "Zen" to activate
+delay 0.8
+tell application "System Events"
+  set p to first process whose frontmost is true
+  set frontName to name of p
+  tell p
+    set frontmost to true
+    try
+      perform action "AXRaise" of window 1
+    end try
+    set pos to position of window 1
+    set sz to size of window 1
+  end tell
+  delay 0.3
+  click at {(item 1 of pos) + (item 1 of sz) / 2, (item 2 of pos) + (item 2 of sz) / 2}
+end tell
+return frontName & " " & (item 1 of pos) & "," & (item 2 of pos) & " " & (item 1 of sz) & "x" & (item 2 of sz)
+`;
+  const res = spawnSync('osascript', ['-e', script], { encoding: 'utf8', timeout: 15000 });
+  return {
+    ok: res.status === 0,
+    out: String(res.stdout || '').trim(),
+    err: String(res.stderr || '').trim(),
+    status: res.status,
+  };
+}
+
+function pressShortcutMac() {
+  // key code 11 is the physical B key. keystroke "b" with Option composes a
+  // character, so the command matcher never sees a plain b.
+  // A global chord needs the window to be key. Targeting the process posts the
+  // chord straight to Zen's event queue instead.
+  const script = `
+tell application "System Events"
+  tell process "zen"
+    set frontmost to true
+    key code 11 using {control down, option down}
+  end tell
+end tell
+`;
+  const res = spawnSync('osascript', ['-e', script], { encoding: 'utf8', timeout: 15000 });
+  return {
+    ok: res.status === 0,
+    out: String(res.stdout || '').trim(),
+    err: String(res.stderr || '').trim(),
+    status: res.status,
+  };
+}
+
 async function main() {
   const zen = findZen();
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary');
@@ -208,6 +280,8 @@ async function main() {
     {
       stdio: 'ignore',
       env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+      // killTree() kills a POSIX process group, so the browser needs its own.
+      detached: process.platform !== 'win32',
     }
   );
 
@@ -223,7 +297,20 @@ async function main() {
     // Headful create hangs on this build, so reuse the window's own tab.
     const tree = await bidi.cmd('browsingContext.getTree', {});
     if (!tree.contexts.length) throw new Error('no window context');
-    const context = tree.contexts[0].context;
+    log(
+      '[shortcut] contexts',
+      JSON.stringify(
+        tree.contexts.map((item) => ({
+          id: item.context,
+          url: item.url,
+          active: item.active,
+          window: item.clientWindow,
+        }))
+      )
+    );
+    // A launched window can carry a background context. The key chord only
+    // reaches the active one, so the room page goes into that.
+    const context = (tree.contexts.find((item) => item.active) || tree.contexts[0]).context;
     const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=shortcut&peer=host&name=Host&panel=1`;
     await bidi.cmd('browsingContext.navigate', { context, url, wait: 'complete' });
     const data = await waitForDataset(bidi, context, (d) => d.socket === 1);
@@ -245,14 +332,54 @@ async function main() {
       log('[shortcut] commands', list);
     }
 
+    // The room tab records the chord itself, so a failed proof separates OS
+    // delivery from command registration.
+    await evaluate(
+      bidi,
+      context,
+      'window.__brosrKeys = []; window.addEventListener("keydown", (e) => window.__brosrKeys.push({ key: e.key, code: e.code, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey }), true); "armed"'
+    );
+    // Activation is test setup, not the proof: it puts the cursor in the page
+    // so the operating system chord has a focused window to reach.
+    await bidi.cmd('browsingContext.activate', { context }).catch((error) =>
+      log('[shortcut] activate failed', error.message)
+    );
+    await sleep(400);
+    const windowFocus = focusZenWindow();
+    log('[shortcut] window', JSON.stringify(windowFocus));
+    await sleep(400);
+    const focus = await evaluate(
+      bidi,
+      context,
+      'JSON.stringify({ focus: document.hasFocus(), active: document.activeElement && document.activeElement.tagName })'
+    ).catch((error) => 'read failed: ' + error.message);
+    log('[shortcut] focus', focus);
+    // A plain key proves the window accepts System Events input at all. It
+    // never matches a command, so it cannot pass the proof on its own.
+    if (process.platform === 'darwin') {
+      const plain = spawnSync('osascript', ['-e', 'tell application "System Events" to key code 0'], {
+        encoding: 'utf8',
+        timeout: 15000,
+      });
+      log('[shortcut] plain key', plain.status, String(plain.stderr || '').trim());
+    }
     const sent = pressShortcut();
     log('[shortcut] keys', JSON.stringify(sent));
+    const pageKeys = await evaluate(
+      bidi,
+      context,
+      'JSON.stringify(window.__brosrKeys || [])'
+    ).catch((error) => 'read failed: ' + error.message);
+    log('[shortcut] page keys', pageKeys);
+    result.diag = { focus, sent, pageKeys };
     const hit = await waitForDataset(bidi, context, (d) => d.command === 'open-room-panel', 15000);
     if (!sent.ok) {
       throw new Error(`the key chord did not send (${sent.out || sent.err || 'no output'})`);
     }
     if (!hit || hit.command !== 'open-room-panel') {
-      throw new Error('the key chord reached Windows but not the bridge');
+      throw new Error(
+        `the key chord did not reach the bridge (frontmost: ${sent.out || 'unknown'})`
+      );
     }
     result = {
       zen: result.zen,
@@ -261,7 +388,10 @@ async function main() {
         key: 'Ctrl+Alt+B',
         proven: true,
         command: hit.command,
-        via: 'Windows SendKeys to a headful Zen window',
+        via:
+          process.platform === 'darwin'
+            ? 'macOS System Events key code to a frontmost Zen window'
+            : 'Windows SendKeys to a headful Zen window',
         sent,
       },
     };

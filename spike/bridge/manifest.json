@@ -34,7 +34,8 @@
   "commands": {
     "open-room-panel": {
       "suggested_key": {
-        "default": "Ctrl+Alt+B"
+        "default": "Ctrl+Alt+B",
+        "mac": "MacCtrl+Alt+B"
       },
       "description": "Open the Brosr room panel"
     }

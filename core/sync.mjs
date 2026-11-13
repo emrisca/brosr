@@ -42,6 +42,8 @@ export function createRoomClient({
   viewport = null,
   navigate = null,
   scrollTo = null,
+  // A page-level message from another peer. The room does not interpret it.
+  onApp = null,
   now = () => Date.now(),
   overlay = true,
   sampleLimit = 200,
@@ -78,6 +80,10 @@ export function createRoomClient({
     lastControl: null,
     controls: [],
     sentControls: [],
+    appSent: 0,
+    appReceived: 0,
+    appDropped: 0,
+    lastApp: null,
   };
   let firstSeen = false;
   let firstAt = 0;
@@ -108,6 +114,16 @@ export function createRoomClient({
 
   function hello() {
     sendMessage({ type: 'hello', peerId, name, colour, roomTime: roomTimeOf() });
+  }
+
+  // A page names its own messages. An empty name or a non-object payload is
+  // refused here, so the wire never carries a message no handler can use.
+  function sendApp(appName, data = {}) {
+    if (typeof appName !== 'string' || !appName) return false;
+    const payload = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    sendMessage({ type: 'app', peerId, name: appName, data: payload, roomTime: roomTimeOf() });
+    stats.appSent += 1;
+    return true;
   }
 
   function sendSnapshot() {
@@ -436,6 +452,26 @@ export function createRoomClient({
         return { ok: true };
       case 'media':
         return applyMedia(message, local);
+      case 'app': {
+        // The relay fans out to every socket including our own; a page handler
+        // should not see its own message come back.
+        if (message.peerId === peerId) return { ok: true, ignored: 'self' };
+        stats.appReceived += 1;
+        stats.lastApp = { peerId: message.peerId, name: message.name, data: message.data };
+        if (!onApp) return { ok: true };
+        try {
+          onApp({
+            from: message.peerId,
+            name: message.name,
+            data: message.data,
+            roomTime: message.roomTime,
+          });
+        } catch (error) {
+          stats.appDropped += 1;
+          return { ok: false, reason: 'handler', error: error.message };
+        }
+        return { ok: true };
+      }
       case 'bye':
         return { ok: true };
       default:
@@ -565,6 +601,12 @@ export function createRoomClient({
       inputDropped: stats.inputDropped,
       inputReasons: stats.inputReasons,
       input: batcher ? batcher.stats() : null,
+      app: {
+        sent: stats.appSent,
+        received: stats.appReceived,
+        dropped: stats.appDropped,
+        last: stats.lastApp,
+      },
       debug: stats.debug || null,
     };
   }
@@ -580,6 +622,7 @@ export function createRoomClient({
     room,
     peerId,
     receive,
+    sendApp,
     grants,
     setGrant,
     tick,

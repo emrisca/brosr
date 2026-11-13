@@ -2,8 +2,8 @@
 
 13 November 2026
 
-This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurement. The first
-two-machine LAN hop ran on 13 November 2026. This note records the result, the work that
+This file answers `HANDOFF-WINDOWS.md`. The Mac asked Windows for a LAN measurement. Two
+two-machine LAN windows ran on 13 November 2026. This note records the results, the work that
 remains, and the next steps for both machines.
 
 ## What Windows changed since 12 November
@@ -18,11 +18,12 @@ remains, and the next steps for both machines.
 - **A grant survives a hello.** When a peer says hello again, the host resends an active
   grant. A panel that reopens keeps one owner.
 - **The shortcut is not proven.** The manifest declares Ctrl+Alt+B, and
-  `browser.commands.getAll()` returns it. A headful Windows run sent Ctrl+Alt+B, and the bridge
-  did not receive it. A second run with Alt+Shift+B failed the same way. Treat the shortcut as
-  unproven until a run records it.
+  `browser.commands.getAll()` returns it. A run from this SSH session sent Ctrl+Alt+B, but the
+  process ran in Windows session 0 and the Zen window never took focus. The page recorded no
+  key. A second run with Alt+Shift+B failed the same way. This run cannot settle the shortcut.
+  Treat it as unproven until a run at the console records the command.
 - **The suite.** Ten harness checks pass with `--soak=60`. Q7 held 527 samples at 2 ms p95, and
-  the soak held 2 ms p95. 63 core tests pass.
+  the soak held 2 ms p95. 65 core tests pass.
 
 ## The LAN hop, Windows half
 
@@ -362,7 +363,7 @@ The peer started at 08:45:41 UTC and ran 1184 one-second samples. The host page 
 | Applied and dropped input | not read, the host counters |
 
 The follow worked. The last sample, 1191.6 s after the driver started, holds 0.5 with two
-peers and a granted click. The two samples before it hold 0. The peer also reports
+peers and the grant active. The two samples before it hold 0. The peer also reports
 `layoutMismatch: true`, because the two viewports differ in size.
 
 The click did not land. At 0.5 the `#board` canvas sat above the viewport, so the driver asked
@@ -509,6 +510,53 @@ machines.
 
 Task 2 below now holds the numbers from this window.
 
+#### Mac note on the shortcut, 13 November 2026
+
+I ran `node zen/shortcut.mjs` on the Mac against Zen 1.24.1b. The bridge installed, and
+`browser.commands.getAll` listed `open-room-panel`. The manifest now carries a `mac` variant,
+`MacCtrl+Alt+B`, because Firefox maps `Ctrl` to Command on macOS. Without it the declared
+Ctrl+Alt+B registers as Command+Option+B.
+
+The chord still did not reach the page, and the runs recorded why:
+
+- `keystroke "b"` with Option composes a character, so the sender uses physical key code 11.
+- A global `key code` reached TextEdit and typed `a` into the document. The Accessibility
+  grant and the injection path both work.
+- Zen reported as the frontmost process, and its window reported 1200 by 720 at (240, 180).
+  The page still read `document.hasFocus() === false` and recorded no keydown.
+- Raising the window, clicking its centre, activating the browsing context, and addressing
+  the chord to the `zen` process changed none of that.
+
+So the command and its handler exist, and the chord has no proof. This is macOS focus and
+delivery in this session, not a bridge refusal.
+
+#### Mac note on the hour and the game, 13 November 2026
+
+I ran both followups on this Mac. Neither one crossed the LAN, so neither one closes M1 or M4.
+
+The hour ran four headless windows in room `soak` on loopback, and the lane restarted the relay
+at the midpoint:
+
+| Item | Result |
+| --- | --- |
+| Presence samples | 600 |
+| Presence p50, p95, worst, ms | 0, 2, 3 |
+| Reconnects, peer 2, 3, 4 | 5, 4, 5 |
+| Sockets after a reconnect | 1 on every peer |
+| Scroll ratio | 0.2 on every peer |
+
+The run wrote `when: 2026-11-13T10:08:47Z`. Node was 23.9.0 on darwin, and Firefox was
+162.0a1. Every peer reported `relayRestarted: true` and came back on its own.
+
+The game ran ten minutes in room `game` with one host page and one peer page. The peer sent
+5667 paddles and the host received all 5667 with 0 dropped. The host sent 8977 states and the
+peer drew 8955, so 22 frames were still in flight at the end. Both windows ended on sequence
+8978 and on the score 95 to 0. The host counted 1 peer and the peer counted 2, which is right
+because the host is not its own peer.
+
+`spike/README.md` holds both tables and both commands. The shortcut is still the open item:
+the command registers as `MacCtrl+Alt+B` and no keydown reaches the page.
+
 ## Two tasks for the Mac
 
 Run these in order. Task 1 gives Task 2 a working harness.
@@ -545,10 +593,10 @@ addresses above. The peer and the numbers are in the table below.
 
 1. Ask Windows to add the firewall rule, or check that port 8787 already passes.
 2. Load the bridge XPI on both machines.
-3. Open the host page on Windows, then the peer page on the Mac.
+3. Open the peer page on the Mac, then the host page on Windows.
 4. Wait for the peer count on both sides.
-5. Open the board on Windows. The Mac follows the navigation.
-6. Click the board at a known point on the Mac.
+5. Open `tall.html` on Windows and scroll to 0.5. The Mac follows the ratio.
+6. Click the canvas on the Mac. The sticky canvas keeps the point on screen.
 
 Record the table below. Keep every number as measured, and do not round a p95 down.
 
@@ -577,37 +625,41 @@ match, in that order. Each one fails quietly.
 ## State on 13 November 2026
 
 - **M0 passed.** All four questions answered on this machine.
-- **M1 runs, not finished.** Four peers held 2 ms p95 over a 60 s soak. A relay restart left
-  every peer on the host scroll. M1 asks for an hour on a LAN.
+- **M1 held one hour on loopback.** Four peers on this Mac held 600 latency samples at 2 ms
+  p95 and 3 ms worst across 60 minutes. The relay restart cost four to five reconnects per
+  peer, and every peer ended on the host scroll of 0.2. M1 asks for that hour on a LAN, which
+  this run is not.
 - **M3 partial.** The spike relay keeps one table per room, and a test proves isolation. No
   invites, no sealing, no axum relay.
 - **M4 partial.** `core/input.mjs` holds the grant book, the origin allowlist, the sensitive
   field guard, CSS-path and canvas targeting, and replay. Canvas clicks at scroll 0 and 0.5
-  proved it. M4 asks for a two-machine game.
+  proved it, and a 600 s canvas game ran on one Mac over loopback. M4 asks for that game
+  across the LAN.
 - **Zen panel.** The panel lists peers, shows control, and grants and revokes from each row.
   The check drives the real buttons against a second peer. Spaces stay manual.
-- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 63 core
+- **Verified.** Ten harness checks pass with `--soak=60`, and the Zen check passes. 65 core
   tests pass. Two relay tests pass.
 
 ## Run it
 
-Requirements: Windows (the harness assumes it, little else does), Node 24, ffmpeg on PATH,
+Requirements: Windows or macOS (macOS passes `--firefox`), Node 24, ffmpeg on PATH,
 network for the first run, and ports 8787 and 8799 free.
 
 ```
 cd spike
 node run.mjs                 # ten checks
 node run.mjs --only=input    # one lane
-node run.mjs --soak=3600     # the hour run, never done yet
+node run.mjs --soak=3600     # the hour run, loopback only
+node run.mjs --only=game --game=600   # two windows on one machine
 node --test relay.test.mjs   # room isolation
-cd ../core && npm test       # 63 unit tests
+cd ../core && npm test       # 65 unit tests
 ```
 
 The Zen check runs from the repo root:
 
 ```
 node apps/brosr/zen/check.mjs
-node apps/brosr/zen/shortcut.mjs          # key proof, fails on this machine
+node apps/brosr/zen/shortcut.mjs          # key proof, needs a foreground session
 ```
 
 Read `spike/results.json` and `zen/.runtime/results.json` for the numbers. Lint every document
@@ -621,12 +673,14 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 
 1. **The LAN hop.** Two two-machine LAN windows drew a canvas click, one at scroll 0 and one
    at 0.5. M1 still needs an hour on the LAN, and M4 still needs a two-machine game.
-2. **The hour soak.** M1 asks for four peers under 80 ms p95 for one hour. `--soak=3600`
-   implements it. Only 45 s and 60 s ran.
-3. **A two-machine game.** M4 asks for a two-player canvas game over the LAN relay, with no
-   visible desync for ten minutes.
-4. **The shortcut.** It registers and does not fire. Try the chord in a foreground session, and
-   check for a Zen or Windows conflict.
+2. **The LAN hour.** The hour ran on this Mac with four local peers: 600 samples at 2 ms p95.
+   M1 asks for the same hour over the LAN, which needs the Windows relay and a second machine.
+3. **A two-machine game.** The ten-minute game ran two windows on this Mac. M4 asks for the
+   same game over the LAN relay, with one side on Windows, and no visible desync for ten
+   minutes.
+4. **The shortcut.** It registers, and no run has fired it. The SSH run could not focus the
+   window, so it is not a product verdict. Try the chord at the Windows console, and check for a
+   Zen or Windows conflict.
 5. **The axum relay.** The spike relay is Node. M3 and M6 want one Rust binary.
 6. **A signed XPI.** Release Firefox refuses the temporary bridge. That is M6.
 
@@ -653,8 +707,10 @@ python <avalon>/.agents/skills/ste100/ste100-lint.py plan.md
 - A synthetic event has `isTrusted: false`. The trusted actuator is M7.
 - Do not claim a speed or a pass without the counter behind it.
 - The Zen panel runs in a tab. No run drew the sidebar or pressed the real toolbar button.
-- No run proves the Ctrl+Alt+B chord. The command and its handler exist. The chord does
-  not.
+- No run proves the Ctrl+Alt+B chord. The command and its handler exist. The macOS attempt
+  and the SSH run on 13 November never put a keydown in the page. The SSH run could not focus
+  the window.
+- No LAN hour and no two-machine game. Both ran on one Mac over loopback on 13 November 2026.
 
 ## Suggested skills
 

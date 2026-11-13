@@ -9,9 +9,9 @@ Run it with `node run.mjs`. The harness downloads Firefox Nightly and uBlock Ori
 repository excludes `.runtime`, so the downloaded browser and the profiles never reach a
 commit.
 
-`--only=` takes a comma list of `ad`, `bidi`, `media`, `room`, `jitter`, `input` and `agent`.
-`--soak=60` adds the reconnect soak, and the full run takes about four minutes. Use
-`--soak=3600` for the one-hour M1 run.
+`--only=` takes a comma list of `ad`, `bidi`, `media`, `room`, `jitter`, `input`, `agent`,
+`game` and `soak`. `--soak=3600` adds the one-hour reconnect soak. `--game=SECONDS` runs the
+two-window canvas game. The ten-check run takes about four minutes.
 
 ## Result, 13 November 2026
 
@@ -52,8 +52,31 @@ node run.mjs --only=bidi,ad --firefox="$PWD/.runtime/firefox-mac.app/Contents/Ma
 | Q7 four-peer room | Pass | 467 presence samples at 3 ms p95. Each peer drew three cursors and reported the host's 0.55 scroll ratio. |
 
 The room lane ran as a regression check for the LAN changes below, not as a ten-check run.
-`results-macos.json` holds this run. `results.json` holds the later Windows run, and
-`results-win11.json` holds the ten-check run it replaced.
+`results-macos.json` holds this run. `results-win11.json` holds the Windows ten-check run.
+`results.json` holds the last run on this Mac, the game.
+
+## Loopback hour, 13 November 2026
+
+Environment: macOS 26.6.2 on arm64, Node 23.9.0, Firefox Nightly 162.0a1 from the macOS DMG.
+One Mac ran four headless windows in room `soak` on `127.0.0.1:8787`. The lane restarted the
+relay at the midpoint.
+
+```
+cd spike && node run.mjs --soak=3600 --only=soak \
+  --firefox="$PWD/.runtime/firefox-mac.app/Contents/MacOS/firefox"
+```
+
+| Item | Result |
+| --- | --- |
+| Presence samples | 600 |
+| Presence p50, p95, worst, ms | 0, 2, 3 |
+| Reconnects, peer 2, 3, 4 | 5, 4, 5 |
+| Sockets after a reconnect | 1 on every peer |
+| Scroll ratio | 0.2 on every peer |
+| Relay restart | Every peer reconnected and reported `relayRestarted: true` |
+
+p50 rounds to 0 ms at this sample rate. The run wrote `when: 2026-11-13T10:08:47Z`. This is one
+hour on one machine over loopback. It is not a LAN hour, and it is not a two-machine hour.
 
 ## The LAN changes
 
@@ -64,6 +87,41 @@ Three pieces blocked a second machine. All three now accept a LAN address:
 - `core/browser-entry.mjs` dials `ws://${location.hostname}:${relayPort}`. A loopback page still
   dials `127.0.0.1`, and `relay=` still overrides the port for the jitter proxy.
 - The bridge match is `http://*/*`, because a Firefox match pattern cannot carry a port.
+
+## The game channel
+
+A page cannot reach the content script, so `browser-entry.mjs` carries page messages over the
+room as an `app` frame. A page posts `{source: 'brosr-app', type: 'send', name, data}` to its
+own window. The room relays it, and the other page receives
+`{source: 'brosr-app', type: 'message', from, name, data}`. The protocol requires a name and an
+object payload, and the 16 KB frame ceiling still applies.
+
+`fixtures/game.html` is a two-player canvas game on that channel. The host simulates the ball
+and sends state at 15 Hz. The peer sends its paddle target and draws the state it receives.
+
+```
+node run.mjs --only=game --game=600
+```
+
+### Game result, 13 November 2026
+
+Two windows on macOS 26.6.2, Node 23.9.0 and Firefox Nightly 162.0a1 joined room `game` over
+`127.0.0.1:8787`. The host simulated for 600 s, and the peer moved its paddle every 2 s.
+
+| Item | Result |
+| --- | --- |
+| Verdict | Pass, `game.ok: true` |
+| Peer state frames received | 8955, about 15 per second |
+| Host paddles received | 5667 of 5667 sent, 0 dropped |
+| State frames | 8977 sent, 8955 received, 22 in flight at the end |
+| Scores on both windows | 95 to 0, `scoresMatch: true` |
+| Sequence on both windows | 8978 |
+| Frames drawn | 36302 on the host, 36215 on the peer |
+| Peers | 1 on the host, 2 on the peer |
+
+The host never counts itself, so 1 and 2 are the right counts for two pages. The host won 95 to
+0 because the peer paddle only moved between two positions. The scores still match on both
+windows, which is the check that matters.
 
 ## LAN, two machines, 13 November 2026
 
@@ -140,15 +198,18 @@ does not prove a WAN, an hour, or more than two machines.
   build needs a signed XPI, which is M6.
 - A WAN. The two-machine windows crossed the Ethernet LAN on 13 November 2026. No window
   crossed the internet.
-- An hour. The soak ran 60 s. `--soak=3600` runs the hour, and no one ran it yet.
+- A LAN hour. The Windows run soaked 60 s. The one-hour run on 13 November 2026 was loopback
+  on one Mac, so no hour crossed the LAN.
 - A peer that closes a tab and returns. The reconnect path was tested by restarting the relay,
   not by closing and reopening a tab.
 - The production relay. Room isolation runs in the spike's Node relay. The axum relay is M3.
 - The launcher. The token agent ran inside the harness, not in a Tauri process. The harness
   minted the token and the grant, and no UI showed either.
 - The grant UI. The spike grants control with a query parameter, and it has no Revoke button.
-- Input beyond one click. No two-player game, no pointer lock, no wheel test, and no typing
-  into an ordinary field.
+- A two-machine game. The 600 s game ran two windows on one Mac over loopback. No game
+  crossed the LAN.
+- Input beyond a click and a paddle. No pointer lock, no wheel test, and no typing into an
+  ordinary field.
 - Media beyond one 120 s clip: no ad, no DRM, no live stream, no 40-minute run.
 
 ## Findings that changed the code
@@ -192,6 +253,6 @@ does not prove a WAN, an hour, or more than two machines.
 | `zip.mjs` | A minimal stored ZIP writer, for the XPI |
 | `bridge/manifest.json` | Manifest V2 bridge with a content script and the core modules |
 | `bridge/content.js` | Content script that loads the core and starts a room |
-| `fixtures/` | Media, form, ad, sync, board and the two room pages |
+| `fixtures/` | Media, form, ad, sync, board, game, tall and the two room pages |
 | `../core/` | Protocol, clock, drift, media, room, overlay, input and the sync client |
 | `results.json` | The last run's output |

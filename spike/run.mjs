@@ -21,6 +21,8 @@ const arg = (name, fallback) => {
 const seconds = Number(arg('seconds', '25'));
 const jitterSeconds = Number(arg('jitter', '20'));
 const soakSeconds = Number(arg('soak', '0'));
+// A two-window canvas game over the app channel.
+const gameSeconds = Number(arg('game', '0'));
 // A comma list of checks: ad, bidi, media, room, jitter, agent. The default is all.
 const only = arg('only', 'all');
 // A full path to a browser binary. ensureFirefox() downloads a Windows build, so
@@ -402,6 +404,7 @@ const results = {
   q8Jitter: null,
   q9Input: null,
   soak: null,
+  game: null,
 };
 
 let relay = null;
@@ -871,6 +874,81 @@ try {
     };
   }
 
+  // Game: two windows, one canvas game. The host simulates and sends state;
+  // the peer sends its paddle and renders what it receives.
+  if (gameSeconds > 0) {
+    const url = (role, peer) =>
+      `${BASE}/game.html?role=${role}&room=game&peer=${peer}&host=host&name=${peer}`;
+    await navigate(bidiA, ctxA, url('host', 'host'));
+    await sleep(1200);
+    await navigate(bidiB, ctxB, url('peer', 'peer'));
+    const hostReady = await waitForDataset(bidiA, ctxA, 20000);
+    const peerReady = await waitForDataset(bidiB, ctxB, 20000);
+    log(`[game] running ${gameSeconds}s, host=${hostReady ? hostReady.source : 'missing'}, peer=${peerReady ? peerReady.source : 'missing'}`);
+    // The peer follows the host's clean URL once and keeps the room from
+    // sessionStorage. Drive its paddle after that reload settles.
+    await sleep(2500);
+    const until = Date.now() + gameSeconds * 1000;
+    let moves = 0;
+    while (Date.now() < until) {
+      const y = moves % 2 === 0 ? 130 : 235;
+      moves += 1;
+      await bidiB
+        .cmd('input.performActions', {
+          context: ctxB,
+          actions: [
+            {
+              type: 'pointer',
+              id: 'mouse',
+              parameters: { pointerType: 'mouse' },
+              actions: [{ type: 'pointerMove', x: 420, y, origin: 'viewport' }],
+            },
+          ],
+        })
+        .catch(() => {});
+      await sleep(2000);
+    }
+
+    const hostData = (await readDataset(bidiA, ctxA)) || {};
+    const peerData = (await readDataset(bidiB, ctxB)) || {};
+    const hostGame = JSON.parse(
+      await evaluate(bidiA, ctxA, 'JSON.stringify(window.__game || null)')
+    );
+    const peerGame = JSON.parse(
+      await evaluate(bidiB, ctxB, 'JSON.stringify(window.__game || null)')
+    );
+    const scoresMatch = Boolean(
+      hostGame &&
+        peerGame &&
+        JSON.stringify(hostGame.scores) === JSON.stringify(peerGame.scores)
+    );
+    results.game = {
+      ok: Boolean(
+        hostData.app &&
+          hostData.app.received > 0 &&
+          peerData.app &&
+          peerData.app.received > 0 &&
+          hostGame &&
+          peerGame &&
+          peerGame.states > 10 &&
+          hostGame.paddles > 10 &&
+          scoresMatch &&
+          hostData.peers >= 1 &&
+          peerData.peers >= 2
+      ),
+      seconds: gameSeconds,
+      moves,
+      channel: { host: hostData.app || null, peer: peerData.app || null },
+      host: hostGame,
+      peer: peerGame,
+      scoresMatch,
+      peers: { host: hostData.peers ?? null, peer: peerData.peers ?? null },
+    };
+    log(
+      `[game] peer states ${peerGame ? peerGame.states : '?'}, host paddles ${hostGame ? hostGame.paddles : '?'}, scores ${JSON.stringify(hostGame ? hostGame.scores : null)}`
+    );
+  }
+
   // Q6: the launcher's loopback channel, with a token and a grant.
   if (want('agent')) {
     await navigate(bidiA, ctxA, `${BASE}/form.html`);
@@ -978,6 +1056,7 @@ try {
   if (want('jitter')) verdicts.push(['Q8 jitter link', results.q8Jitter && results.q8Jitter.ok]);
   if (want('input')) verdicts.push(['Q9 input relay', results.q9Input && results.q9Input.ok]);
   if (soakSeconds > 0) verdicts.push([`Soak ${soakSeconds}s`, results.soak && results.soak.ok]);
+  if (gameSeconds > 0) verdicts.push([`Game ${gameSeconds}s`, results.game && results.game.ok]);
   if (want('agent')) verdicts.push(['Q6 agent', results.q6Agent && results.q6Agent.ok]);
   log('');
   for (const [name, ok] of verdicts) log(`${name}: ${ok ? 'PASS' : 'FAIL'}`);

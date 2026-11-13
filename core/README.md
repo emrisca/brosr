@@ -5,14 +5,14 @@ script and a Node test drive the same modules.
 
 | Module | Job |
 | --- | --- |
-| `protocol.mjs` | Message types, validation, the 16 KB frame ceiling, input splitting |
+| `protocol.mjs` | Message types including page app messages, validation, the 16 KB frame ceiling, input splitting |
 | `clock.mjs` | Four-timestamp offset, smallest round trip wins, a re-measure every 30 s |
 | `drift.mjs` | Seek over 300 ms, rate nudge over 40 ms, pause for buffering and ads |
 | `media.mjs` | `HTMLMediaElement` adapter keyed by a source URL |
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
 | `overlay.mjs` | Cursor overlay inside one closed shadow root |
 | `input.mjs` | Batcher, grants, origin allowlist, sensitive fields, targeting, replay |
-| `sync.mjs` | The client that wires the rest, with an injected transport |
+| `sync.mjs` | The client that wires the rest, relays app messages, with an injected transport |
 | `browser-entry.mjs` | Content-script entry: relay socket, reconnect, ticks, `dataset.brosr` |
 
 ## Use
@@ -52,7 +52,7 @@ Each one cost a spike run to learn.
 5. An input frame names its sender. The receiver looks up the grant by peer, and it refuses a
    frame without `peerId`.
 
-`npm test` runs 63 tests with the Node test runner and no dependencies.
+`npm test` runs 65 tests with the Node test runner and no dependencies.
 
 Nothing here opens a socket, draws outside the shadow root, or reads a cookie. Input and grants
 live in `input.mjs`, and the trusted actuator is M7.

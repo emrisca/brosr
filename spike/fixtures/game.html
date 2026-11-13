@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr game</title>
+  <style>
+    body { margin: 0; background: #0d1117; color: #c9d1d9; font: 14px/1.5 system-ui, sans-serif; }
+    main { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; }
+    canvas { background: #161b22; border: 1px solid #30363d; }
+    .row { display: flex; gap: 20px; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="row">
+      <span id="role">waiting for the room</span>
+      <span id="score">0 : 0</span>
+      <span id="seq">state 0</span>
+    </div>
+    <canvas id="court" width="640" height="360"></canvas>
+    <div class="row"><span>host paddle left, peer paddle right</span></div>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const role = params.get('role') === 'host' ? 'host' : 'peer';
+    const auto = params.get('auto') === '1';
+    const court = document.getElementById('court');
+    const context = court.getContext('2d');
+    const W = court.width;
+    const H = court.height;
+    const PADDLE = { width: 8, height: 64, speed: 300, inset: 16 };
+    const BALL = { radius: 7, speed: 220 };
+    const labels = {
+      role: document.getElementById('role'),
+      score: document.getElementById('score'),
+      seq: document.getElementById('seq'),
+    };
+
+    let hostPaddle = H / 2;
+    let peerPaddle = H / 2;
+    let peerTarget = H / 2;
+    let ball = { x: W / 2, y: H / 2, vx: BALL.speed, vy: BALL.speed * 0.4 };
+    let scores = { host: 0, peer: 0 };
+    let seq = 0;
+
+    window.__game = {
+      role,
+      auto,
+      frames: 0,
+      states: 0,
+      paddles: 0,
+      seq: 0,
+      scores: { ...scores },
+      ball: { x: Math.round(ball.x), y: Math.round(ball.y) },
+      ready: false,
+    };
+
+    const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+
+    function send(name, data) {
+      window.postMessage({ source: 'brosr-app', type: 'send', name, data }, location.origin);
+    }
+
+    function resetBall(direction) {
+      ball = {
+        x: W / 2,
+        y: H / 2,
+        vx: BALL.speed * direction,
+        vy: (Math.random() - 0.5) * BALL.speed,
+      };
+    }
+
+    // Only the host runs this. The peer sends a paddle target and follows the
+    // state it receives, so a lost frame cannot fork the score.
+    function hostStep(dt) {
+      hostPaddle += clamp(ball.y - hostPaddle, -PADDLE.speed * dt, PADDLE.speed * dt);
+      peerPaddle += clamp(peerTarget - peerPaddle, -PADDLE.speed * dt, PADDLE.speed * dt);
+
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+
+      if (ball.y < BALL.radius) {
+        ball.y = BALL.radius;
+        ball.vy = Math.abs(ball.vy);
+      }
+      if (ball.y > H - BALL.radius) {
+        ball.y = H - BALL.radius;
+        ball.vy = -Math.abs(ball.vy);
+      }
+
+      const left = PADDLE.inset + PADDLE.width + BALL.radius;
+      const right = W - PADDLE.inset - PADDLE.width - BALL.radius;
+      const reach = PADDLE.height / 2 + BALL.radius;
+
+      if (ball.x < left && ball.vx < 0 && Math.abs(ball.y - hostPaddle) <= reach) {
+        ball.x = left;
+        ball.vx = Math.abs(ball.vx) * 1.04;
+        ball.vy += (ball.y - hostPaddle) * 2;
+      }
+      if (ball.x > right && ball.vx > 0 && Math.abs(ball.y - peerPaddle) <= reach) {
+        ball.x = right;
+        ball.vx = -Math.abs(ball.vx) * 1.04;
+        ball.vy += (ball.y - peerPaddle) * 2;
+      }
+
+      if (ball.x < -BALL.radius) {
+        scores.peer += 1;
+        resetBall(1);
+      }
+      if (ball.x > W + BALL.radius) {
+        scores.host += 1;
+        resetBall(-1);
+      }
+    }
+
+    court.addEventListener('mousemove', (event) => {
+      if (role !== 'peer') return;
+      const rect = court.getBoundingClientRect();
+      peerTarget = clamp(event.clientY - rect.top, PADDLE.height / 2, H - PADDLE.height / 2);
+    });
+
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      if (!message || message.source !== 'brosr-app') return;
+      if (message.type === 'ready') {
+        window.__game.ready = true;
+        labels.role.textContent = role + ' in ' + (message.room || 'room');
+        return;
+      }
+      if (message.type !== 'message') return;
+      if (role === 'peer' && message.name === 'state') {
+        const data = message.data || {};
+        if (data.ball) ball = data.ball;
+        if (data.paddles) {
+          hostPaddle = data.paddles.host;
+          peerPaddle = data.paddles.peer;
+        }
+        if (data.scores) scores = data.scores;
+        seq = data.seq || seq;
+        window.__game.states += 1;
+        window.__game.seq = seq;
+      }
+      if (role === 'host' && message.name === 'paddle') {
+        const y = Number(message.data && message.data.y);
+        if (Number.isFinite(y)) {
+          peerTarget = clamp(y, PADDLE.height / 2, H - PADDLE.height / 2);
+          window.__game.paddles += 1;
+        }
+      }
+    });
+
+    function draw() {
+      context.fillStyle = '#161b22';
+      context.fillRect(0, 0, W, H);
+
+      context.strokeStyle = '#30363d';
+      context.setLineDash([6, 8]);
+      context.beginPath();
+      context.moveTo(W / 2, 0);
+      context.lineTo(W / 2, H);
+      context.stroke();
+      context.setLineDash([]);
+
+      context.fillStyle = '#e2603f';
+      context.fillRect(
+        PADDLE.inset,
+        hostPaddle - PADDLE.height / 2,
+        PADDLE.width,
+        PADDLE.height
+      );
+      context.fillStyle = '#3f86e2';
+      context.fillRect(
+        W - PADDLE.inset - PADDLE.width,
+        peerPaddle - PADDLE.height / 2,
+        PADDLE.width,
+        PADDLE.height
+      );
+
+      context.fillStyle = '#c9d1d9';
+      context.beginPath();
+      context.arc(ball.x, ball.y, BALL.radius, 0, Math.PI * 2);
+      context.fill();
+
+      labels.score.textContent = scores.host + ' : ' + scores.peer;
+      labels.seq.textContent = 'state ' + seq;
+      window.__game.scores = { ...scores };
+      window.__game.ball = { x: Math.round(ball.x), y: Math.round(ball.y) };
+    }
+
+    let last = performance.now();
+    let accumulator = 0;
+    let lastState = 0;
+    let lastPaddle = 0;
+
+    function frame(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+
+      if (role === 'host') {
+        accumulator += dt;
+        while (accumulator >= 1 / 120) {
+          hostStep(1 / 120);
+          accumulator -= 1 / 120;
+        }
+        if (now - lastState >= 66) {
+          lastState = now;
+          seq += 1;
+          send('state', {
+            seq,
+            ball: {
+              x: Math.round(ball.x),
+              y: Math.round(ball.y),
+              vx: Math.round(ball.vx),
+              vy: Math.round(ball.vy),
+            },
+            paddles: { host: Math.round(hostPaddle), peer: Math.round(peerPaddle) },
+            scores: { ...scores },
+          });
+          window.__game.seq = seq;
+        }
+      } else {
+        if (auto) peerTarget = H / 2 + Math.sin(now / 500) * (H / 3);
+        if (now - lastPaddle >= 100) {
+          lastPaddle = now;
+          send('paddle', { y: Math.round(peerTarget) });
+        }
+      }
+
+      draw();
+      window.__game.frames += 1;
+      requestAnimationFrame(frame);
+    }
+
+    labels.role.textContent = role + ', waiting for the room';
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

@@ -12,6 +12,7 @@ export const TYPES = [
   'view',
   'media',
   'input',
+  'app',
   'presence',
   'control',
   'ping',
@@ -53,6 +54,15 @@ export function validate(message) {
     case 'input':
       if (!Array.isArray(message.records) || !message.records.length) fail('input needs records');
       if (!isNumber(message.seq)) fail('input needs a seq');
+      break;
+    case 'app':
+      // A page-level message: the name picks the handler, the data stays opaque
+      // to the room. The frame ceiling still applies.
+      if (typeof message.peerId !== 'string' || !message.peerId) fail('app needs a peerId');
+      if (typeof message.name !== 'string' || !message.name) fail('app needs a name');
+      if (!message.data || typeof message.data !== 'object' || Array.isArray(message.data)) {
+        fail('app needs a data object');
+      }
       break;
     case 'presence':
       if (!message.point || !isNumber(message.point.x) || !isNumber(message.point.y)) {

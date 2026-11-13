@@ -105,6 +105,20 @@ export async function start() {
     viewport,
     navigate,
     scrollTo,
+    onApp: (message) => {
+      // The page owns its own protocol. This only forwards it, under the page's
+      // own origin, so a room page needs no content-script change.
+      window.postMessage(
+        {
+          source: 'brosr-app',
+          type: 'message',
+          from: message.from,
+          name: message.name,
+          data: message.data,
+        },
+        location.origin
+      );
+    },
     input: {
       capture: Boolean(config.capture),
       grantTo: config.grant || null,
@@ -208,6 +222,16 @@ export async function start() {
     };
   };
   connect();
+
+  // A page cannot reach this content script directly. A page-level game talks
+  // through window.postMessage, and the room carries it as an app message.
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    const message = event.data;
+    if (!message || message.source !== 'brosr-app' || message.type !== 'send') return;
+    client.sendApp(String(message.name || ''), message.data);
+  });
+  window.postMessage({ source: 'brosr-app', type: 'ready', role, peerId, room }, location.origin);
 
   // The panel lives in the browser chrome. The background page opens it, and
   // it carries the panel's own render report back here for the harness.
