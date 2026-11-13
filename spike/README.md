@@ -5,8 +5,9 @@ M4 work in [../core/](../core/) on this machine. It is a spike, not the app.
 
 Run it with `node run.mjs`. The harness downloads Firefox Nightly and uBlock Origin into
 `.runtime/` and encodes a 120 s test clip with ffmpeg. Then it starts a relay on
-`127.0.0.1:8787`, four headless instances, and writes `results.json`. The root `.gitignore`
-excludes `apps/`, so the downloaded browser and the profiles never reach a commit.
+`127.0.0.1:8787`, four headless instances, and writes `results.json`. The `.gitignore` in this
+repository excludes `.runtime`, so the downloaded browser and the profiles never reach a
+commit.
 
 `--only=` takes a comma list of `ad`, `bidi`, `media`, `room`, `jitter`, `input` and `agent`.
 `--soak=60` adds the reconnect soak, and the full run takes about four minutes. Use
@@ -29,6 +30,43 @@ no system Firefox on the machine.
 | Q8 jitter link | Pass | The proxy added 120 ms each way and dropped 5 percent, which cost 20 messages up and 29 down. The peer converged with one seek, then held 57 samples at 39 ms p95 and 47 ms worst. |
 | Q9 input relay | Pass | A granted peer clicked the canvas at its centre. The host drew the same point as a synthetic event at (201, 151) and applied one record. A password field on the peer stayed local, so the host's copy stayed empty. |
 | Soak 60 s | Pass | Four peers scrolled together while the relay restarted in the middle. 600 presence samples at 2 ms p95. Every peer reconnected and came back to the host's 0.6 scroll ratio. |
+
+## macOS, 12 November 2026
+
+Environment: macOS on arm64, Node 23.9.0, ffmpeg 9.0.2, Firefox Nightly 162.0a1 from the
+macOS DMG. The harness unpacks the build into `.runtime/firefox-mac.app`, so the system keeps
+no Firefox install.
+
+`ensureFirefox()` downloads a Windows build, so macOS passes a binary instead:
+
+```
+node run.mjs --only=bidi,ad --firefox="$PWD/.runtime/firefox-mac.app/Contents/MacOS/firefox"
+```
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Q1 profile | Pass | Four profiles as four instances, each on a BiDi session. |
+| Q2 bridge | Pass | The temporary XPI installed on all four profiles, and the content script reported from the room tabs. |
+| Q3 uBlock Origin | Pass | uBlock Origin 1.76.0 blocked the Taboola request, active with `signedState: 2`. |
+| Q4 BiDi key | Pass | `isTrusted: true`, and the field held `a`. |
+| Q7 four-peer room | Pass | 467 presence samples at 3 ms p95. Each peer drew three cursors and reported the host's 0.55 scroll ratio. |
+
+The room lane ran as a regression check for the LAN changes below, not as a ten-check run.
+`results.json` holds this run. `results-win11.json` holds the full ten-check Windows run.
+
+## The LAN changes, and what they do not prove
+
+Three pieces blocked a second machine. All three now accept a LAN address:
+
+- `relay.js` reads `HOST` and defaults to `127.0.0.1`. `HOST=0.0.0.0 node relay.js` listens on
+  the LAN. The relay has no authentication, so use that only on a trusted network.
+- `core/browser-entry.mjs` dials `ws://${location.hostname}:${relayPort}`. A loopback page still
+  dials `127.0.0.1`, and `relay=` still overrides the port for the jitter proxy.
+- The bridge match is `http://*/*`, because a Firefox match pattern cannot carry a port.
+
+No run joined a second machine yet. Every number on this page came from one machine, so the LAN
+figures are open. The loopback room lane passed with the three changes in place.
+[../HANDOFF-WINDOWS.md](../HANDOFF-WINDOWS.md) describes the pending run.
 
 ## What it does not prove
 

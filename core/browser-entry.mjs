@@ -31,6 +31,8 @@ export async function start() {
         relayPort: params.get('relay') || '8787',
         capture: params.get('capture') === '1',
         grant: params.get('grant') || null,
+        openPanel: params.get('panel') === '1',
+        selftest: params.get('selftest') === '1',
       }
     : stored;
   if (fresh) {
@@ -51,6 +53,7 @@ export async function start() {
     typeof browser !== 'undefined' && browser.runtime && browser.runtime.id ? 'content-script' : 'page';
   const started = performance.now();
   let socket = null;
+  let panelState = null;
 
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
@@ -116,17 +119,27 @@ export async function start() {
     },
   });
 
+  // One object feeds the dataset and the room panel, so the UI cannot show a
+  // different number from the harness.
+  const panelUrl =
+    typeof browser !== 'undefined' && browser.runtime && browser.runtime.getURL
+      ? browser.runtime.getURL('panel/room.html')
+      : null;
+
+  const status = () => ({
+    ...client.publish(),
+    source,
+    panelUrl,
+    panelState,
+    bias,
+    socket: socket ? socket.readyState : -1,
+    elapsed: Math.round(performance.now() - started),
+    location: location.href,
+    reconnects,
+  });
+
   const publish = () => {
-    const data = client.publish();
-    document.documentElement.dataset.brosr = JSON.stringify({
-      ...data,
-      source,
-      bias,
-      socket: socket ? socket.readyState : -1,
-      elapsed: Math.round(performance.now() - started),
-      location: location.href,
-      reconnects,
-    });
+    document.documentElement.dataset.brosr = JSON.stringify(status());
   };
 
   const video = client.media.pick(null);
@@ -159,9 +172,13 @@ export async function start() {
   let leaving = false;
   window.addEventListener('pagehide', () => { leaving = true; }, { once: true });
 
+  // A LAN room reaches the relay on the page's own hostname. relay= still
+  // carries the port, because the jitter proxy listens on 8788.
+  const relayHost = location.hostname || '127.0.0.1';
+
   const connect = () => {
     socket = new WebSocket(
-      `ws://127.0.0.1:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
+      `ws://${relayHost}:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
     );
     socket.onmessage = (event) => {
       client.receive(event.data, performance.now());
@@ -190,6 +207,24 @@ export async function start() {
   };
   connect();
 
+  // The panel lives in the browser chrome. The background page opens it, and
+  // it carries the panel's own render report back here for the harness.
+  if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.sendMessage) {
+    if (config.openPanel) {
+      browser.runtime
+        .sendMessage({ type: 'brosr:open-panel', selftest: Boolean(config.selftest) })
+        .catch(() => {});
+    }
+    setInterval(async () => {
+      try {
+        const reply = await browser.runtime.sendMessage({ type: 'brosr:panel-state' });
+        if (reply && reply.state) panelState = reply.state;
+      } catch {
+        // The background page is restarting.
+      }
+    }, 500);
+  }
+
   setInterval(() => {
     client.tick(performance.now());
   }, 50);
@@ -209,6 +244,23 @@ export async function start() {
 
   setInterval(publish, 200);
   publish();
+
+  // The room panel lives in the browser chrome, so it asks the tab. Only
+  // Firefox exposes browser.runtime here, and a plain page test still works.
+  if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.onMessage) {
+    browser.runtime.onMessage.addListener((message) => {
+      if (!message) return undefined;
+      if (message.type === 'brosr:status') {
+        // Firefox resolves a response only from a Promise or sendResponse.
+        return Promise.resolve({ ok: true, room, peerId, role, source, data: status(), panelUrl });
+      }
+      if (message.type === 'brosr:grant') {
+        const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
+        return Promise.resolve({ ok: Boolean(applied), granted: Boolean(message.allowed) });
+      }
+      return undefined;
+    });
+  }
 
   return { started: true, role, room, peerId, source };
 }

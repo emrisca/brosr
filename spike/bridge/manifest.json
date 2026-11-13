@@ -9,13 +9,34 @@
       "strict_min_version": "115.0"
     }
   },
-  "permissions": ["tabs", "http://127.0.0.1/*"],
+  "permissions": [
+    "tabs",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
-      "js": ["content.js"],
+      "matches": [
+        "http://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": ["core/*.mjs"]
+  "web_accessible_resources": [
+    "core/*.mjs"
+  ],
+  "sidebar_action": {
+    "default_title": "Brosr room",
+    "default_panel": "panel/room.html"
+  },
+  "browser_action": {
+    "default_title": "Brosr room",
+    "default_popup": "panel/room.html"
+  }
 }

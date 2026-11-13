@@ -2,6 +2,9 @@
 # profiles and encodes the 120 s clip, so none of it belongs in a commit.
 /spike/.runtime
 
+# Zen check runtime: the room profile, the built XPI and its results.
+/zen/.runtime
+
 # Syncthing folder marker, which is per device.
 /.stfolder
 

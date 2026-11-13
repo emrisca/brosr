@@ -523,6 +523,13 @@ install step, per-origin settings, the actuator indicator and session restore. *
 person who has never seen the app reaches a working room in under three minutes. The sidebar
 still works after ten tab switches.
 
+**Zen Browser path (12 November 2026).** Zen 1.24.1b is a Gecko 159 fork, and it keeps the
+Firefox extension host, so the same bridge loads. [zen/](zen/) adds a room profile with
+vertical tabs and compact chrome, and a room panel wired as `sidebar_action` and
+`browser_action`. A headless check installed the bridge in Zen, opened a room page and read
+`source: content-script` with the socket open. Zen stores spaces in its session store, so a
+room per space is still open.
+
 ### M6 · Packaging, signing and relay
 
 Launcher installer and updater, following the

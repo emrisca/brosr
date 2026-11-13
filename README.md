@@ -44,7 +44,8 @@ node run.mjs
 ```
 
 `--only=ad,bidi,media,room` runs a subset of the checks. `--soak=3600` runs the one hour
-reconnect soak. A full run takes about four minutes.
+reconnect soak. A full run takes about four minutes. The download in `run.mjs` is a Windows
+build, so macOS passes a binary instead with `--firefox=<path>`.
 
 The `.runtime` directory stays out of git, because a run rebuilds it.
 

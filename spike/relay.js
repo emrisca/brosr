@@ -8,6 +8,9 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 8787);
+// Loopback by default. A LAN test sets HOST=0.0.0.0, and this relay has no
+// authentication, so never do that on a network you do not trust.
+const HOST = process.env.HOST || '127.0.0.1';
 const ROOT = path.join(__dirname, 'fixtures');
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -208,8 +211,8 @@ function sendFrame(client, opcode, payload) {
   client.socket.write(Buffer.concat([header, payload]));
 }
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[relay] http://127.0.0.1:${PORT} ws://127.0.0.1:${PORT}/room`);
+server.listen(PORT, HOST, () => {
+  console.log(`[relay] http://${HOST}:${PORT} ws://${HOST}:${PORT}/room`);
 });
 
 process.on('SIGTERM', () => {

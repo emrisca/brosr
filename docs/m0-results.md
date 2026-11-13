@@ -8,8 +8,10 @@ that changed the code.
 ## Environment
 
 Windows, Node 24.22.0, Firefox 162.0a1 from the Nightly archive and ffmpeg 8.1.1. The machine
-had no system Firefox, so the unsigned bridge needed a channel that accepts a temporary
-add-on.
+had no system Firefox, so the unsigned bridge needed a channel that accepts a temporary add-on.
+
+On 12 November 2026 the macOS Nightly build repeated the ad and BiDi lanes with the same
+results. [spike/README.md](../spike/README.md) records that run.
 
 ## What passed
 

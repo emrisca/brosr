@@ -23,6 +23,9 @@ const jitterSeconds = Number(arg('jitter', '20'));
 const soakSeconds = Number(arg('soak', '0'));
 // A comma list of checks: ad, bidi, media, room, jitter, agent. The default is all.
 const only = arg('only', 'all');
+// A full path to a browser binary. ensureFirefox() downloads a Windows build, so
+// a macOS run passes the path instead.
+const firefoxPath = arg('firefox', '');
 const want = (name) => only === 'all' || only.split(',').includes(name);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,6 +44,9 @@ async function download(url, dest) {
 }
 
 async function ensureFirefox() {
+  if (process.platform !== 'win32') {
+    throw new Error('the download in ensureFirefox() is a Windows build. Pass --firefox=<path>.');
+  }
   const exe = path.join(runtime, 'firefox', 'firefox.exe');
   if (fs.existsSync(exe)) return exe;
 
@@ -165,6 +171,15 @@ function buildBridge() {
     makeZip([
       { name: 'manifest.json', data: fs.readFileSync(path.join(here, 'bridge', 'manifest.json')) },
       { name: 'content.js', data: fs.readFileSync(path.join(here, 'bridge', 'content.js')) },
+      {
+        name: 'background.js',
+        data: fs.readFileSync(path.join(here, 'bridge', 'background.js')),
+      },
+      // The manifest names a room panel, so the XPI has to carry it.
+      ...['room.html', 'room.css', 'room.js'].map((name) => ({
+        name: `panel/${name}`,
+        data: fs.readFileSync(path.join(here, '..', 'zen', 'panel', name)),
+      })),
       ...coreModules(),
     ])
   );
@@ -188,7 +203,12 @@ function launch(exe, profile, port) {
       '900',
       'about:blank',
     ],
-    { stdio: 'ignore', env: { ...process.env, MOZ_HEADLESS: '1' } }
+    {
+      stdio: 'ignore',
+      env: { ...process.env, MOZ_HEADLESS: '1' },
+      // killTree() kills a POSIX process group, so the browser needs its own.
+      detached: process.platform !== 'win32',
+    }
   );
 }
 
@@ -331,14 +351,23 @@ function systemFirefox() {
     'C:/Program Files/Mozilla Firefox/firefox.exe',
     'C:/Program Files (x86)/Mozilla Firefox/firefox.exe',
     `${process.env.LOCALAPPDATA || ''}/Mozilla Firefox/firefox.exe`,
+    '/Applications/Firefox.app/Contents/MacOS/firefox',
+    '/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox',
+    '/Applications/Firefox Nightly.app/Contents/MacOS/firefox',
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 function killTree(child) {
   if (!child || child.killed) return;
-  try {
+  if (process.platform === 'win32') {
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  // Firefox starts content processes. One signal to the group stops all of
+  // them, and a harness run must not leave a browser behind.
+  try {
+    process.kill(-child.pid, 'SIGKILL');
   } catch {
     try {
       child.kill('SIGKILL');
@@ -383,7 +412,8 @@ try {
   mkdir(runtime);
   relay = await startRelay();
 
-  const exe = await ensureFirefox();
+  const exe = firefoxPath ? path.resolve(firefoxPath) : await ensureFirefox();
+  if (!fs.existsSync(exe)) throw new Error(`no Firefox binary at ${exe}`);
   const ubo = await ensureUbo();
   const clip = ensureClip();
   const bridge = buildBridge();
@@ -931,9 +961,15 @@ try {
 
   log('\n--- results ---');
   log(JSON.stringify(results, null, 2));
+  // Only the room, media, jitter and input lanes load the core, so the content
+  // script stays unknown when a run takes none of them.
+  const bridgeInstalled = ['a', 'b', 'c', 'd'].every(
+    (key) => results.q2Bridge && results.q2Bridge[key] && results.q2Bridge[key].ok
+  );
+  const bridgeContent = results.q2Bridge ? results.q2Bridge.contentScript : null;
   const verdicts = [
-    ['Q1 profile', results.q1Profile && results.q1Profile.ok],
-    ['Q2 bridge', results.q2Bridge && results.q2Bridge.a && results.q2Bridge.a.ok && results.q2Bridge.contentScript],
+    ['Q1 profile', Boolean(results.q1Profile && results.q1Profile.ok)],
+    ['Q2 bridge install', bridgeInstalled],
   ];
   if (want('ad')) verdicts.push(['Q3 uBlock', results.q3Ubo && results.q3Ubo.ok]);
   if (want('bidi')) verdicts.push(['Q4 BiDi key', results.q4BidiKey && results.q4BidiKey.ok]);
@@ -945,6 +981,9 @@ try {
   if (want('agent')) verdicts.push(['Q6 agent', results.q6Agent && results.q6Agent.ok]);
   log('');
   for (const [name, ok] of verdicts) log(`${name}: ${ok ? 'PASS' : 'FAIL'}`);
+  const contentVerdict =
+    bridgeContent === null ? 'NOT EXERCISED by these lanes' : bridgeContent ? 'PASS' : 'FAIL';
+  log(`Q2 content script: ${contentVerdict}`);
   log('results.json written');
   process.exit(results.error ? 1 : 0);
 }
