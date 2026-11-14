@@ -1663,6 +1663,26 @@ The two Mac peers measured each other at p50 44 ms and 48 ms over the same windo
 
 ### The Windows side of the same hour
 
+Windows ran the host page and `win2` against a relay on its own host. Both sockets are loopback, so
+those figures stay out of every LAN column.
+
+The host socket read p95 2 ms over n=200, with a 3 ms worst. `win2` read p95 0 ms over n=200, with a
+1 ms worst. Neither socket reconnected.
+
+The probe column shows four sockets from 01:44:59 to 02:44:40 UTC. All 240 probe rows count four,
+and no gap runs past 20 s.
+
+Both pages ended at scroll ratio 0.35, which is 652 of 1864 px. A peer that rejoined landed on the
+same scroll.
+
+The relay forwarded 340,898 frames across the hour. That count comes from the probe column, not from
+one socket.
+
+Windows restarted port 8787 at 02:54:55 UTC, so its frame counter starts at 0 again. Do not compare
+that figure with the hour above.
+
+### The Windows side of the same hour
+
 The host and `win2` ran on the one Windows machine, so their two rows measure the local relay and not
 the path between two machines. They stay out of the LAN column for that reason.
 
