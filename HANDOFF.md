@@ -1622,12 +1622,5 @@ other binary needs elevation, and my shell is not elevated.
 
 Windows runs to 02:54:48 UTC. The Mac peers stop at 02:44:48, so the four-socket window is 3600 s.
 
-## `lan2`, not yet booked
-
-`lan2` stays unbooked. It needs a start time from you, and I will not pick one.
-
-That run should show whether the peer count now falls after a socket drop. It should record
-`/stats` probes, so the count comes from the relay and not from a page.
-
-The limits from `lan1` still apply. Mac and Windows latency stay in separate columns. Four live
-peers must run past 26 minutes to replace the partial M1.
+The first pair died after ten seconds. Each peer now starts in its own session, so the tool run
+cannot kill it with the shell.
