@@ -148,6 +148,17 @@ export async function start() {
     },
   });
 
+  // A page can name its own ad signal. The probe is read on every tick, so a
+  // page script that loads after this entry still works. Without a probe the
+  // HTML adapter never claims an ad.
+  if (!mediaAdapter) {
+    client.media.watchAds((element) =>
+      typeof globalThis.__brosrAdProbe === 'function'
+        ? Boolean(globalThis.__brosrAdProbe(element))
+        : false
+    );
+  }
+
   // One object feeds the dataset and the room panel, so the UI cannot show a
   // different number from the harness.
   const panelUrl =

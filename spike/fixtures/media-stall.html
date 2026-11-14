@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr stall pause fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    pre { font-family: monospace; background: #000; padding: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr stall pause fixture</h1>
+  <!-- The source names a file the relay does not hold, so the element never
+       leaves readyState 0. The adapter reads that as buffering, and the room
+       pauses every peer. This is a no-data state, not a slow network. -->
+  <video id="clip" src="/media/stall.webm" muted playsinline preload="auto"></video>
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    const root = document.documentElement;
+    const state = document.getElementById('state');
+    const clip = document.getElementById('clip');
+
+    setInterval(() => {
+      const raw = root.dataset.brosr;
+      const error = root.dataset.brosrError;
+      if (error) {
+        state.textContent = 'core error: ' + error;
+        return;
+      }
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      state.textContent =
+        'role: ' + data.role + '\n' +
+        'readyState: ' + clip.readyState + ' (0 means no data)\n' +
+        'buffering flag: ' + (clip.readyState < 2) + '\n' +
+        'playing: ' + !clip.paused + '\n' +
+        'seeks: ' + data.seeks + ', nudges: ' + data.nudges;
+    }, 200);
+  </script>
+</body>
+</html>

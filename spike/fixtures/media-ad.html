@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr ad pause fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    video { width: 640px; max-width: 100%; display: block; background: #000; }
+    button { margin-top: 12px; padding: 8px 12px; font: inherit; }
+    pre { font-family: monospace; background: #000; padding: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr ad pause fixture</h1>
+  <!-- The page claims the ad, and the room pauses every peer while it holds.
+       The core reads this probe through MediaAdapter.watchAds. -->
+  <video id="clip" src="/media/clip.webm" muted playsinline preload="auto"></video>
+  <button id="ad" type="button">Ad is off. Click to claim one.</button>
+  <pre id="state">waiting for the sync client</pre>
+  <script>
+    const root = document.documentElement;
+    const button = document.getElementById('ad');
+    const state = document.getElementById('state');
+    const clip = document.getElementById('clip');
+    root.dataset.brosrAd = '0';
+
+    // The core calls this on every media tick. It reads the page flag and
+    // nothing else, so the fixture owns when an ad is claimed.
+    window.__brosrAdProbe = () => root.dataset.brosrAd === '1';
+
+    button.addEventListener('click', () => {
+      const on = root.dataset.brosrAd !== '1';
+      root.dataset.brosrAd = on ? '1' : '0';
+      button.textContent = on ? 'Ad is on. The room pauses.' : 'Ad is off. Click to claim one.';
+    });
+
+    setInterval(() => {
+      const raw = root.dataset.brosr;
+      const error = root.dataset.brosrError;
+      if (error) {
+        state.textContent = 'core error: ' + error;
+        return;
+      }
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      state.textContent =
+        'role: ' + data.role + '\n' +
+        'ad claimed: ' + (root.dataset.brosrAd === '1') + '\n' +
+        'playing: ' + !clip.paused + '\n' +
+        'currentTime: ' + clip.currentTime.toFixed(3) + ' s\n' +
+        'seeks: ' + data.seeks + ', nudges: ' + data.nudges + '\n' +
+        'drift: ' + (data.samples.length ? data.samples[data.samples.length - 1] : 'none') + ' ms';
+    }, 200);
+  </script>
+</body>
+</html>
