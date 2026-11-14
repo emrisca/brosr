@@ -3,7 +3,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoomClient, SEEK_SETTLE_MS } from '../sync.mjs';
+import { createRoomClient, SEEK_SETTLE_MS, SEEK_TIMEOUT_MS } from '../sync.mjs';
 import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -86,6 +86,39 @@ test('after the settle window the next correction is allowed again', () => {
   video.currentTime = 1.9;
   const settled = client.receive(frame(4, later), later);
   assert.equal(settled.step.action, 'seek');
+  assert.equal(client.stats.corrections, 2);
+});
+
+test('a seek that never lands expires, so a peer is not stranded', () => {
+  const video = fakeVideo();
+  const { client, at, frame } = makeClient(video);
+
+  at(5000);
+  client.receive(frame(2, 5000), 5000);
+  assert.equal(client.stats.corrections, 1);
+
+  // The element reports a seek that never finishes, which the long clip does
+  // here. Without a limit the peer waits on it for the rest of the run.
+  video.seeking = true;
+  video.currentTime = 1;
+  at(5300);
+  assert.equal(client.receive(frame(2.1, 5300), 5300).pending, 'seek');
+
+  const lateAt = 5000 + SEEK_TIMEOUT_MS + 1;
+  at(lateAt);
+  const late = client.receive(frame(4, lateAt), lateAt);
+  assert.equal(late.pending, 'seek-retry');
+  assert.equal(client.stats.stuckSeeks, 1);
+  assert.ok(video.currentTime > 3, 'the retry writes the expected point again');
+
+  video.seeking = false;
+  video.currentTime = 4;
+  // The retry starts a settle window of its own, so the next decision waits
+  // for it before the test judges that decision.
+  const afterAt = lateAt + Math.max(SEEK_SETTLE_MS, SEEK_COOLDOWN_MS) + 1;
+  at(afterAt);
+  const after = client.receive(frame(6, afterAt), afterAt);
+  assert.equal(after.step.action, 'seek', 'the next decision is not blocked');
   assert.equal(client.stats.corrections, 2);
 });
 

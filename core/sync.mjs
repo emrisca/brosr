@@ -24,6 +24,9 @@ export const SAMPLE_AFTER_MS = 4000;
 // A seek takes time to land. Deciding again during that window stacks seeks
 // and the player never reaches any of the targets.
 export const SEEK_SETTLE_MS = 1000;
+// A seek that never lands would hold the peer behind for the whole run, so the
+// pending state expires and a later message decides afresh.
+export const SEEK_TIMEOUT_MS = 8000;
 export const VIEW_TICK_MS = 50;
 export const SCROLL_EPSILON = 0.002;
 export const LATENCY_LIMIT = 5000;
@@ -75,6 +78,7 @@ export function createRoomClient({
     seeks: 0,
     nudges: 0,
     corrections: 0,
+    stuckSeeks: 0,
     firstDrift: null,
     convergedAt: null,
     scroll: 0,
@@ -327,6 +331,22 @@ export function createRoomClient({
     // The controller holds a seek for its own cooldown, so the settle window
     // never ends before the controller would allow another one.
     const settleMs = Math.max(SEEK_SETTLE_MS, drift.cooldownMs || 0);
+    // The element can report a seek that never finishes. Waiting on it forever
+    // leaves the peer behind by the whole gap, so the wait has a limit.
+    if (element.seeking && Number.isFinite(lastSeekAt) && local - lastSeekAt > SEEK_TIMEOUT_MS) {
+      // A fresh write to currentTime is what frees this element, so the retry
+      // is issued here. Counting it alone would leave the peer behind.
+      stats.stuckSeeks += 1;
+      const limit = Number.isFinite(element.duration) ? element.duration : expected;
+      element.currentTime = Math.max(0, Math.min(expected, limit));
+      lastSeekAt = local;
+      element.playbackRate = 1;
+      if (message.playing && element.paused) {
+        const started = element.play();
+        if (started && typeof started.catch === 'function') started.catch(() => {});
+      }
+      return { ok: true, pending: 'seek-retry', stuckSeeks: stats.stuckSeeks };
+    }
     if (element.seeking || local - lastSeekAt < settleMs) {
       if (element.playbackRate !== 1) element.playbackRate = 1;
       stats.position = Math.round(actual * 1000) / 1000;
@@ -604,6 +624,7 @@ export function createRoomClient({
       seeks: stats.seeks,
       nudges: stats.nudges,
       corrections: stats.corrections,
+      stuckSeeks: stats.stuckSeeks,
       firstDrift: stats.firstDrift,
       convergedAt: stats.convergedAt,
       sampleCount: samples.length,

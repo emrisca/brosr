@@ -1730,3 +1730,56 @@ One of four changes would create the row:
 
 The first is the smallest change. One router with two free ports carries both machines.
 
+## The `m2a` long clip run failed
+
+This run set out to test drift on the 24.5 MB clip across the tailnet. It failed, so it adds no
+passing row.
+
+Windows opened the host page and `win2` at 03:07:27 UTC. The Mac peers `mac1` and `mac2` joined
+room `m2a` through `100.67.220.25:8787`, and both started at 03:03:59.139.
+
+The relay read four sockets from 03:07:39.257 to 03:27:59.335. All 62 probe rows in that window
+read 4. The counter rose by 116,763 frames across it.
+
+Both Mac peers stopped by their own timer at 03:43:59.191, after 2400.052 s. Each journal holds
+2398 samples, 2191 of them with an RTT, and 0 reconnects.
+
+### The window numbers
+
+Over the 1232 s overlap, `mac1` read p50 30 ms, p95 34 ms and a 351 ms worst over 1233 RTT
+samples. `mac2` reads within 1 ms of that.
+
+Presence on the Mac side read p50 44 ms for `mac2`, 23 ms for `win2` and 23 ms for the host. The
+host p95 reached 177 ms, so one peer carried a long tail.
+
+These figures say the path held. They do not rescue the run, because the playheads did not.
+
+### What broke
+
+The host reached position 1234.643 s. `win2` sat at 321.169 s and had not moved for 600 s. That
+is 913 s of drift against a target of 250 ms.
+
+`win2` counted 2 seeks, 2 corrections and 8 nudges, with an open socket and 0 reconnects. It
+reported playing true while the playhead stood still.
+
+Windows named the cause in `win-0361`. The element reported `seeking` true with `readyState` 1
+after one seek. The settle guard then blocked every later correction, so the peer stayed behind
+for the rest of the run.
+
+Three runs agree. `m2a` froze at 321.169 s. `m2b` ended 40 s behind. `m2c` logged `seeking` true
+from 149 s to 293 s, with the time stuck at 151.069 s.
+
+### The seek timeout
+
+`core/sync.mjs` now holds `SEEK_TIMEOUT_MS` at 8000. A seek that has not landed by then stops
+blocking, counts in `stats.stuckSeeks`, and the next message decides afresh. A test covers the
+expiry.
+
+The core suite reads 90 of 90 and the spike suite 15 of 15 with the change in the tree.
+
+### Verdict
+
+This row is a failure. It never enters an M1 or M2 column, and it does not repeat the `lan2`
+result. A clean run needs a new window with the timeout in both copies, and only the user opens
+that window.
+
