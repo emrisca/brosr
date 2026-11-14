@@ -1630,6 +1630,20 @@ Windows runs to 02:54:48 UTC. The Mac peers stop at 02:44:48, so the four-socket
 The first pair died after ten seconds. Each peer now starts in its own session, so the tool run
 cannot kill it with the shell.
 
+### The hour closed
+
+Both peers stopped by their own timer at 02:44:48.30 UTC, after 3600.012 s. Each journal holds 3596
+samples, and 3591 of those carry an RTT.
+
+`mac1` read p50 30 ms, p95 40 ms and a 46 ms worst. `mac2` read p50 29 ms, p95 40 ms and a 46 ms
+worst. The relay logged 0 reconnects across the window, and neither peer socket dropped.
+
+Each journal also counts presence per peer over its last 200 samples. `win2` held p50 13 ms with p95
+25 ms against `mac1`, and p50 14 ms with p95 24 ms against `mac2`. That line is a Windows reading
+and stays outside the Mac row.
+
+The two Mac peers measured each other at p50 44 ms and 48 ms over the same window.
+
 ## The loopback baseline beside `lan2`
 
 A two-peer run on `127.0.0.1` gives the floor for the `lan2` numbers. Both peers stopped after 179
@@ -1640,8 +1654,8 @@ samples, with 0 reconnects.
 | b1 | 1 ms | 4 ms | 1 ms |
 | b2 | 1 ms | 2 ms | 1 ms |
 
-The tailnet row reads p95 49 ms and 48 ms through the same code path. The network owns that gap,
-not the harness.
+The tailnet row reads p50 30 ms and 29 ms, with p95 40 ms on both peers, through the same code
+path. The network owns that gap, not the harness.
 
 ## What a LAN row needs
 
