@@ -88,8 +88,15 @@ async function waitFor(predicate, message, timeoutMs = 10000) {
 
 const exitOf = (child) => new Promise((resolve) => child.once('exit', resolve));
 
-async function stopPeer(peer) {
+// Windows ends a process at once when it gets a signal, so the peer never runs
+// its stop path and writes no journal. On Windows this waits for the duration
+// timer instead, which is why startPeer sets a short one.
+async function stopPeer(peer, timeoutMs = 20000) {
   if (peer.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    await waitFor(() => peer.exitCode !== null, 'the peer did not stop by itself', timeoutMs);
+    return;
+  }
   const exited = exitOf(peer);
   peer.kill('SIGTERM');
   await exited;
@@ -101,7 +108,7 @@ test('the peer rejoins on its own after a relay restart', async () => {
   const port = 8801;
   let relay = await startRelay(port);
   const out = path.join(tmp, 'reconnect.json');
-  const peer = startPeer({ port, room: 'reconnect', peer: 'mac', seconds: 30, out });
+  const peer = startPeer({ port, room: 'reconnect', peer: 'mac', seconds: 14, out });
 
   await waitFor(() => joinedTimes(peer) === 1, 'the peer did not join the first relay');
 
@@ -113,18 +120,21 @@ test('the peer rejoins on its own after a relay restart', async () => {
   // peer looks for after it rejoins.
   const probe = await connect(port, 'reconnect');
   await waitFor(() => joinedTimes(peer) === 2, 'the peer did not rejoin the second relay', 12000);
-  probe.send(
-    JSON.stringify({
-      v: 1,
-      type: 'presence',
-      peerId: 'probe',
-      name: 'Probe',
-      point: { x: 1, y: 2 },
-      roomTime: Date.now(),
-    })
-  );
+  // A stale presence leaves the room map, and on Windows the peer runs to its
+  // own timer. So the probe keeps sending until the peer has stopped.
+  const presenceFrame = JSON.stringify({
+    v: 1,
+    type: 'presence',
+    peerId: 'probe',
+    name: 'Probe',
+    point: { x: 1, y: 2 },
+    roomTime: Date.now(),
+  });
+  probe.send(presenceFrame);
+  const presenceTimer = setInterval(() => probe.send(presenceFrame), 200);
   await sleep(1500);
-  await stopPeer(peer);
+  await stopPeer(peer, 20000);
+  clearInterval(presenceTimer);
 
   const journal = JSON.parse(fs.readFileSync(out, 'utf8'));
   const last = journal.samples[journal.samples.length - 1];
@@ -138,7 +148,7 @@ test('the game peer sends paddles and counts host states', async () => {
   const port = 8802;
   await startRelay(port);
   const out = path.join(tmp, 'game.json');
-  const peer = startPeer({ port, room: 'game', peer: 'mac', seconds: 30, game: true, out });
+  const peer = startPeer({ port, room: 'game', peer: 'mac', seconds: 8, game: true, out });
 
   await waitFor(() => joinedTimes(peer) === 1, 'the peer did not join the game room');
   const host = await connect(port, 'game');
@@ -161,7 +171,7 @@ test('the game peer sends paddles and counts host states', async () => {
     })
   );
   await sleep(600);
-  await stopPeer(peer);
+  await stopPeer(peer, 12000);
 
   const journal = JSON.parse(fs.readFileSync(out, 'utf8'));
   assert.ok(journal.statesReceived >= 1, 'the peer counted no host state');
