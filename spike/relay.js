@@ -45,8 +45,10 @@ const server = http.createServer((req, res) => {
     res.end(body);
     return;
   }
-  if (url.pathname === '/media/clip.webm') {
-    serveMedia(path.join(__dirname, '.runtime', 'clip.webm'), req, res);
+  // Any clip in the runtime folder, so a long fixture needs no new route.
+  // The base name strips a traversal attempt before it reaches the disk.
+  if (url.pathname.startsWith('/media/')) {
+    serveMedia(path.join(__dirname, '.runtime', path.basename(url.pathname)), req, res);
     return;
   }
   const rel = url.pathname === '/' ? '/sync.html' : url.pathname;

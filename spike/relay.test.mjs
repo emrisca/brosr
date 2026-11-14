@@ -4,6 +4,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -82,6 +83,27 @@ test('closing every client of a room removes the room', async () => {
   await sleep(250);
   const stats = await (await fetch(`${BASE}/stats`)).json();
   assert.equal(stats.rooms.gamma, undefined);
+});
+
+test('a named clip serves range requests, and a missing one gives 404', async () => {
+  await waitHealth();
+  const dir = path.join(here, '.runtime');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'range-test.webm');
+  fs.writeFileSync(file, Buffer.alloc(1024, 7));
+
+  const ranged = await fetch(`${BASE}/media/range-test.webm`, { headers: { range: 'bytes=0-99' } });
+  assert.equal(ranged.status, 206, 'a range request answers 206');
+  assert.equal(ranged.headers.get('content-range'), 'bytes 0-99/1024');
+  assert.equal((await ranged.arrayBuffer()).byteLength, 100);
+
+  const whole = await fetch(`${BASE}/media/range-test.webm`);
+  assert.equal(whole.status, 200, 'a plain request answers 200');
+  assert.equal(whole.headers.get('accept-ranges'), 'bytes');
+
+  const missing = await fetch(`${BASE}/media/absent.webm`);
+  assert.equal(missing.status, 404);
+  fs.rmSync(file, { force: true });
 });
 
 test('a relay on a busy port exits instead of serving', async () => {
