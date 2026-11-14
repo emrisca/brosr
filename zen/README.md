@@ -77,7 +77,11 @@ panel resizes it on drag. The height stays between 120 pixels and the window hei
 
 The sidebar box lives inside the tab box, and that box carries a `translate`. A fixed child then
 takes the tab box as its containing block, so the panel starts at the tab edge instead of the
-window edge. The dock moves the box under the document body and keeps the fixed edge at zero.
+window edge. The dock moves the box under the document body and puts the fixed edge back.
+
+The panel floats inside the column. It keeps 8 pixels clear on each side. A 1 pixel border and an
+8 pixel radius make it read as a surface beside the tabs. A drag bar fills the gap above it. The
+column pads by the panel height plus 16 pixels, so the last tab stays reachable.
 
 **Per-room height.** The panel writes its room id into its own URL. The dock reads that id from
 the sidebar browser, so each room keeps its own `brosr.panel.height.<room>` pref. A room without
@@ -90,9 +94,9 @@ saved sidebar id. The toolbar button and Ctrl+Alt+B open the panel too.
 **Headless dock proof.** `check.mjs` opens a second headless window with `--marionette`. The
 Marionette listener stops BiDi from reading tab content on this build, so the dock gets a window
 of its own. That window opens the bookmarks sidebar, which fills the same box as the room panel.
-The run reads the box rectangle there. It fails when the panel does not start at the window edge,
-is narrower than 300 pixels, or has no drag bar. That window also hides the sidebar and clicks
-the show chip, so the toggle runs in the same pass.
+The run reads the box rectangle there. It fails when the panel is not inset by its own margin. A
+panel under 300 pixels wide, a missing drag bar or a lost corner radius each fail the run. That
+window also hides the sidebar and clicks the show chip, so the toggle runs in the same pass.
 
 **Entry points.** A room page shows a small Room panel button at its bottom edge. A click opens
 the sidebar, and the bridge falls back to a tab when the sidebar is unavailable.

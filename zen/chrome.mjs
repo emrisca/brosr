@@ -54,6 +54,9 @@ const INJECT = `(() => {
   const box = doc.getElementById('sidebar-box');
   if (!box) return 'no-sidebar-box';
   const body = doc.body || root;
+  // The panel floats inside the column, so it keeps the same gap on each side
+  // as the surfaces Zen draws there.
+  const INSET = 8;
   const column =
     (doc.getElementById('sidebar-container') &&
       doc.getElementById('sidebar-container').getBoundingClientRect().width > 0 &&
@@ -70,21 +73,23 @@ const INJECT = `(() => {
     style.textContent = [
       '#sidebar-box.brosr-docked {',
       '  position: fixed !important;',
-      '  left: 0 !important;',
-      '  bottom: 0 !important;',
-      '  inset-inline-start: 0 !important;',
+      '  left: var(--brosr-panel-inset, 8px) !important;',
+      '  bottom: var(--brosr-panel-inset, 8px) !important;',
+      '  inset-inline-start: var(--brosr-panel-inset, 8px) !important;',
       '  translate: 0 !important;',
-      '  width: var(--brosr-panel-width, 480px) !important;',
+      '  width: var(--brosr-panel-width, 464px) !important;',
       '  height: var(--brosr-panel-height, 320px) !important;',
       '  min-width: 0 !important;',
       '  max-width: none !important;',
       '  z-index: 12 !important;',
-      '  border-top: 1px solid var(--zen-colors-border, rgba(128, 128, 128, 0.35)) !important;',
+      '  border: 1px solid var(--zen-colors-border, rgba(128, 128, 128, 0.35)) !important;',
+      '  border-radius: var(--brosr-panel-radius, 8px) !important;',
+      '  overflow: hidden !important;',
       '  background: var(--zen-main-browser-background, #1c1b22) !important;',
       '}',
       'html[data-brosr-docked] #sidebar-splitter { display: none !important; }',
       '#brosr-panel-bar {',
-      '  position: fixed; left: 0; height: 8px; z-index: 13;',
+      '  position: fixed; left: 8px; height: 8px; z-index: 13;',
       '  cursor: row-resize; background: transparent;',
       '}',
       '#brosr-panel-bar::after {',
@@ -96,7 +101,7 @@ const INJECT = `(() => {
       '  background: var(--zen-primary-color, #b98b6a);',
       '}',
       '#brosr-panel-toggle {',
-      '  position: fixed; left: 10px; bottom: 10px; z-index: 12;',
+      '  position: fixed; left: 8px; bottom: 8px; z-index: 12;',
       '  padding: 6px 10px; border-radius: 8px; cursor: pointer;',
       '  border: 1px solid var(--zen-colors-border, rgba(128, 128, 128, 0.4));',
       '  background: var(--zen-main-browser-background, #1c1b22);',
@@ -228,12 +233,15 @@ const INJECT = `(() => {
       toolbox.setAttribute('width', wanted);
       columnWidth = Math.round(column.getBoundingClientRect().width);
     }
-    const width = columnWidth > 200 ? columnWidth : wantColumn();
+    const columnNow = columnWidth > 200 ? columnWidth : wantColumn();
+    const width = Math.max(260, columnNow - INSET * 2);
     const height = readHeight();
     const room = roomId();
+    root.style.setProperty('--brosr-panel-inset', INSET + 'px');
+    root.style.setProperty('--brosr-panel-radius', '8px');
     root.style.setProperty('--brosr-panel-width', width + 'px');
     root.style.setProperty('--brosr-panel-height', height + 'px');
-    root.style.setProperty('--brosr-panel-space', open ? height + 8 + 'px' : '0px');
+    root.style.setProperty('--brosr-panel-space', open ? height + INSET * 2 + 'px' : '0px');
     if (open) {
       root.setAttribute('data-brosr-docked', '1');
       box.classList.add('brosr-docked');
@@ -250,16 +258,20 @@ const INJECT = `(() => {
       box.classList.remove('brosr-docked');
     }
     bar.hidden = !open;
-    bar.style.left = '0px';
+    bar.style.left = INSET + 'px';
     bar.style.width = width + 'px';
-    bar.style.bottom = height + 'px';
+    bar.style.bottom = height + INSET + 'px';
     toggle.hidden = open;
     const rect = box.getBoundingClientRect();
+    const style = window.getComputedStyle(box);
     return {
       docked: box.classList.contains('brosr-docked'),
       open,
       width,
+      column: columnNow,
       height,
+      inset: INSET,
+      radius: style.borderTopLeftRadius,
       room,
       sidebar: sidebarId(),
       x: Math.round(rect.left),
@@ -291,8 +303,8 @@ const INJECT = `(() => {
       const max = Math.max(160, window.innerHeight - 220);
       const height = Math.max(120, Math.min(max, drag.height + (drag.y - event.clientY)));
       root.style.setProperty('--brosr-panel-height', height + 'px');
-      root.style.setProperty('--brosr-panel-space', height + 8 + 'px');
-      bar.style.bottom = height + 'px';
+      root.style.setProperty('--brosr-panel-space', height + INSET * 2 + 'px');
+      bar.style.bottom = height + INSET + 'px';
     };
     const end = () => {
       if (!drag) return;

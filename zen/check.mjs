@@ -263,7 +263,9 @@ async function probeDock(zen) {
     if (!g || typeof g !== 'object') dock.error = 'the dock script returned no state';
     else if (!g.docked) dock.error = 'the panel is not docked';
     else if (!g.open) dock.error = 'the sidebar did not open';
-    else if (Math.abs(g.x) > 2) dock.error = `the panel starts at x=${g.x}`;
+    else if (!(g.inset > 0)) dock.error = 'the dock reports no inset';
+    else if (Math.abs(g.x - g.inset) > 2) dock.error = `the panel starts at x=${g.x}`;
+    else if (!String(g.radius || '').startsWith('8')) dock.error = `the panel corner is ${g.radius}`;
     else if (g.panelWidth < 300) dock.error = `the panel is ${g.panelWidth} wide`;
     else if (g.panelHeight < 120) dock.error = `the panel is ${g.panelHeight} tall`;
     else if (!g.bar) dock.error = 'the drag bar is missing';
