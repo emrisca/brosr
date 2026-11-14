@@ -1,12 +1,15 @@
 // Starts the relay and a headful Zen window on a persistent profile, installs
-// the bridge, opens a host room and leaves the panel in a visible tab. Nothing
-// is killed on the way out, so the window stays usable by hand.
-import { spawn } from 'node:child_process';
+// the bridge, opens a host room and opens the room panel. It sends the real
+// shortcut chord, so the sidebar opens expanded. If no sidebar report arrives,
+// it falls back to a panel tab. Nothing is killed on the way out, so the window
+// stays usable by hand.
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
 import { makeZip } from '../spike/zip.mjs';
+import { dockPanel } from './chrome.mjs';
 import { findZen, writeProfile } from './profile.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +26,7 @@ const PORT = Number(arg('port', 9335));
 const RELAY = Number(arg('relay', 8787));
 const ROOM = arg('room', 'live');
 const NAME = arg('name', 'Host');
+const MARIONETTE = Number(arg('marionette', 2828));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(...args);
 
@@ -107,6 +111,36 @@ async function evaluate(bidi, context, expression) {
   return res.result ? res.result.value : undefined;
 }
 
+function keypostPath() {
+  // The panel shortcut is a browser command, so only a real chord opens the
+  // sidebar. This helper posts that chord to the exact process id.
+  if (process.platform !== 'darwin') return null;
+  const source = path.join(here, 'keypost.swift');
+  const out = path.join(runtime, 'keypost');
+  if (fs.existsSync(out) && fs.statSync(out).mtimeMs >= fs.statSync(source).mtimeMs) return out;
+  fs.mkdirSync(runtime, { recursive: true });
+  const build = spawnSync('swiftc', ['-parse-as-library', '-O', source, '-o', out], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (build.status !== 0) {
+    log('[live] keypost build failed', String(build.stderr || '').trim().slice(0, 300));
+    return null;
+  }
+  return out;
+}
+
+function postChord(pid) {
+  const helper = keypostPath();
+  if (!helper) return { ok: false, out: '', err: 'no keypost helper' };
+  const res = spawnSync(helper, ['chord', String(pid)], { encoding: 'utf8', timeout: 20000 });
+  return {
+    ok: res.status === 0,
+    out: String(res.stdout || '').trim(),
+    err: String(res.stderr || '').trim(),
+  };
+}
+
 async function main() {
   const zen = findZen();
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary');
@@ -134,6 +168,7 @@ async function main() {
       '--new-instance',
       '--remote-debugging-port',
       String(PORT),
+      '--marionette',
       '--width',
       '1440',
       '--height',
@@ -150,13 +185,22 @@ async function main() {
 
   let result = {
     relay: { pid: relay ? relay.pid : null, reused: !relay, port: RELAY },
-    browser: { pid: browser.pid, port: PORT, profile: PROFILE },
+    browser: { pid: browser.pid, port: PORT, marionette: MARIONETTE, profile: PROFILE },
     room: null,
     panel: null,
     affordance: null,
+    dock: null,
   };
 
   try {
+    // The tab column and the panel are chrome elements, so the stacking and
+    // the drag bar go in through Marionette. Its session replaces the first
+    // window, so it runs before any browsing context is chosen. The injected
+    // script polls, so it docks the panel as soon as the sidebar opens.
+    const dock = await dockPanel({ port: MARIONETTE });
+    result.dock = dock;
+    log('[live] dock', JSON.stringify(dock));
+
     const bidi = await connect();
     await bidi
       .cmd('webExtension.install', { extensionData: { type: 'archivePath', path: xpi } })
@@ -178,49 +222,38 @@ async function main() {
     const base =
       `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${encodeURIComponent(ROOM)}` +
       `&peer=host&name=${encodeURIComponent(NAME)}`;
-    // panel=1 opens the panel in a tab. That tab is the clear, visible entry
-    // point on a browser that hides its toolbar.
+    // The room tab opens as a normal tab. The chord below opens the sidebar
+    // beside it, which is the surface this launcher is proving.
     await bidi.cmd('browsingContext.navigate', {
       context,
-      url: `${base}&panel=1`,
+      url: base,
       wait: 'complete',
     });
 
-    let roomData = null;
-    for (let i = 0; i < 100 && !roomData; i += 1) {
+    const readDataset = async () => {
       const raw = await evaluate(
         bidi,
         context,
         'document.documentElement.dataset.brosr || ""'
       ).catch(() => '');
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed.socket === 1) roomData = parsed;
-        } catch {
-          // Mid-write.
-        }
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
       }
+    };
+
+    let roomData = null;
+    for (let i = 0; i < 100 && !roomData; i += 1) {
+      const parsed = await readDataset();
+      if (parsed && parsed.socket === 1) roomData = parsed;
       if (!roomData) await sleep(300);
     }
     if (!roomData) throw new Error('the room tab did not connect');
     result.room = { context, url: base, peers: roomData.peerList || roomData.peers || null };
 
-    const findPanel = async (tries) => {
-      for (let i = 0; i < tries; i += 1) {
-        const now = await bidi.cmd('browsingContext.getTree', {});
-        const panel = now.contexts.find((item) =>
-          String(item.url || '').includes('/panel/room.html')
-        );
-        if (panel) return panel.context;
-        await sleep(300);
-      }
-      return null;
-    };
-    let panelContext = await findPanel(40);
-
-    // The page carries the button whether or not its click is driven here. The
-    // launcher leaves one panel tab, so a click would add a second.
+    // The page carries the button whether or not its click is driven here.
     const affordance = await evaluate(
       bidi,
       context,
@@ -232,38 +265,86 @@ async function main() {
     result.affordance = affordance ? JSON.parse(affordance) : { present: false };
     log('[live] affordance', JSON.stringify(result.affordance));
 
-    if (!panelContext) panelContext = await findPanel(40);
-    if (panelContext) {
-      // Leave the panel tab in front, so the window opens on the panel.
-      await bidi.cmd('browsingContext.activate', { context: panelContext }).catch(() => {});
-      await sleep(200);
-      const raw = await evaluate(
-        bidi,
-        panelContext,
-        `(async () => {
-          let open = null;
-          try {
-            open = await browser.sidebarAction.isOpen({});
-          } catch (error) {
-            open = 'error: ' + error.message;
-          }
-          return JSON.stringify({
-            open,
-            visible: document.visibilityState,
-            status: document.getElementById('status').textContent,
-            room: document.getElementById('room').textContent,
-            peers: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent),
-            latency: [...document.querySelectorAll('#peers .latency')].map((node) => node.textContent),
-            mode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-            width: innerWidth,
-            overflow: [...document.querySelectorAll('li')].filter((row) => row.scrollWidth > row.clientWidth + 1).length,
-          });
-        })()`
+    const chord = postChord(browser.pid);
+    result.chord = chord;
+    log('[live] chord', JSON.stringify(chord));
+
+    const findPanelTab = async () => {
+      const now = await bidi.cmd('browsingContext.getTree', {});
+      return (
+        now.contexts.find((item) => String(item.url || '').includes('/panel/room.html')) || null
       );
-      result.panel = { context: panelContext, ...JSON.parse(raw) };
+    };
+
+    // The panel reports its own width and visibility. A sidebar is at most 500
+    // pixels, so a wider report means the panel opened as a tab.
+    let panel = null;
+    let mode = null;
+    const end = Date.now() + 12000;
+    while (Date.now() < end) {
+      const state = (await readDataset())?.panelState;
+      if (state && state.visible === 'visible' && Number(state.width) > 100) {
+        panel = state;
+        mode = Number(state.width) > 700 ? 'tab' : 'sidebar';
+        if (state.state === 'live') break;
+      }
+      await sleep(300);
+    }
+
+    if (panel) {
+      result.panel = { mode, ...panel };
       log('[live] panel', JSON.stringify(result.panel));
+      // Leave the panel in front only when it is a tab. A sidebar stays open
+      // beside the room tab.
+      if (mode === 'tab') {
+        const tab = await findPanelTab();
+        if (tab) await bidi.cmd('browsingContext.activate', { context: tab.context }).catch(() => {});
+      }
     } else {
-      log('[live] panel context not found. Click the Room panel button in the page.');
+      log('[live] no sidebar report, opening the panel as a tab');
+      await bidi.cmd('browsingContext.navigate', {
+        context,
+        url: `${base}&panel=1`,
+        wait: 'complete',
+      });
+      let panelContext = null;
+      for (let i = 0; i < 40 && !panelContext; i += 1) {
+        const tab = await findPanelTab();
+        if (tab) panelContext = tab.context;
+        else await sleep(300);
+      }
+      if (panelContext) {
+        await bidi.cmd('browsingContext.activate', { context: panelContext }).catch(() => {});
+        await sleep(200);
+        const raw = await evaluate(
+          bidi,
+          panelContext,
+          `(async () => {
+            let open = null;
+            try {
+              open = await browser.sidebarAction.isOpen({});
+            } catch (error) {
+              open = 'error: ' + error.message;
+            }
+            return JSON.stringify({
+              open,
+              visible: document.visibilityState,
+              status: document.getElementById('status').textContent,
+              room: document.getElementById('room').textContent,
+              peers: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent),
+              latency: [...document.querySelectorAll('#peers .latency')].map((node) => node.textContent),
+              mode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+              width: innerWidth,
+              height: innerHeight,
+              overflow: [...document.querySelectorAll('li')].filter((row) => row.scrollWidth > row.clientWidth + 1).length,
+            });
+          })()`
+        );
+        result.panel = { context: panelContext, mode: 'tab', ...JSON.parse(raw) };
+        log('[live] panel', JSON.stringify(result.panel));
+      } else {
+        log('[live] panel context not found. Click the Room panel button in the page.');
+      }
     }
 
     fs.writeFileSync(
@@ -273,7 +354,11 @@ async function main() {
     log('[live] relay', result.relay.reused ? 'reused' : `pid ${result.relay.pid}`);
     log('[live] zen pid', browser.pid, 'port', PORT);
     log('[live] room', base);
-    log('[live] window left running. Click Room panel or press Ctrl+Alt+B.');
+    if (result.panel && result.panel.mode === 'sidebar') {
+      log('[live] the expanded sidebar is open. The window stays usable by hand.');
+    } else {
+      log('[live] window left running. Click Room panel or press Ctrl+Alt+B.');
+    }
     process.exit(0);
   } catch (error) {
     log('[live] failed:', error.message);

@@ -30,10 +30,11 @@ export function findZen() {
 const PREFS = [
   ['zen.tabs.vertical', true],
   ['zen.tabs.vertical.right-side', false],
-  ['zen.view.compact.hide-tabbar', true],
-  ['zen.view.compact.hide-toolbar', true],
+  ['zen.view.compact.hide-tabbar', false],
+  ['zen.view.compact.hide-toolbar', false],
   ['zen.view.compact.show-sidebar-and-toolbar-on-hover', true],
-  ['zen.view.sidebar-expanded', false],
+  ['zen.view.sidebar-expanded', true],
+  ['zen.view.sidebar-expanded.max-width', 500],
   ['zen.view.show-newtab-button-top', true],
   ['zen.workspaces.continue-where-left-off', false],
   ['zen.theme.hide-unified-extensions-button', false],
@@ -57,10 +58,31 @@ function userJs() {
   return lines.join('\n') + '\n';
 }
 
+// Zen restores the sidebar width from xulstore.json, and its own default on
+// macOS is 230 pixels. A wider stored value gives the expanded column the
+// width of the panel that fills it.
+const XULSTORE_DOC = 'chrome://browser/content/browser.xhtml';
+const SIDEBAR_WIDTH = '480px';
+
+function writeXulstore(profile) {
+  const file = path.join(profile, 'xulstore.json');
+  let store = {};
+  try {
+    store = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    // A new profile has no store yet.
+  }
+  const doc = store[XULSTORE_DOC] || {};
+  doc['navigator-toolbox'] = { ...(doc['navigator-toolbox'] || {}), width: SIDEBAR_WIDTH };
+  store[XULSTORE_DOC] = doc;
+  fs.writeFileSync(file, JSON.stringify(store));
+}
+
 export function writeProfile(dir) {
   const profile = path.resolve(dir);
   fs.mkdirSync(profile, { recursive: true });
   fs.writeFileSync(path.join(profile, 'user.js'), userJs());
+  writeXulstore(profile);
   return profile;
 }
 

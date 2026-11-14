@@ -1,6 +1,6 @@
-/* The sidebar is 280px wide, so every gap is 6, 8 or 10 and every colour is a
-   token. Zen supplies the four base tokens when it has them, and the panel
-   carries a light and a dark fallback so a plain tab renders too. */
+/* The sidebar can be 280 to 500px wide, so every gap is 6, 8 or 10 and every
+   colour is a token. Zen supplies the four base tokens when it has them, and
+   the panel carries a light and a dark fallback so a plain tab renders too. */
 
 :root {
   color-scheme: light dark;
@@ -44,7 +44,10 @@ body {
 }
 
 body {
+  display: flex;
+  flex-direction: column;
   min-width: 260px;
+  min-height: 100vh;
   padding: 10px;
   font: 12px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -60,8 +63,9 @@ header {
 
 h1 {
   flex: 1;
+  min-width: 0;
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -114,7 +118,7 @@ li {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-radius: var(--room-radius);
   background: var(--room-surface);
 }
@@ -182,7 +186,7 @@ footer {
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-  margin-top: 10px;
+  margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--room-border);
   color: var(--room-dim);

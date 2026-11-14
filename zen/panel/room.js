@@ -204,6 +204,15 @@ function renderSkeleton() {
 
 renderSkeleton();
 $('refresh').addEventListener('click', refresh);
+// Hide closes the panel. The room page button, the toolbar button and the
+// chord open it again, so the state has one restore path.
+$('hide').addEventListener('click', async () => {
+  try {
+    await browser.sidebarAction.close();
+  } catch {
+    notice('Use the sidebar close button in this window.', true);
+  }
+});
 refresh();
 setInterval(refresh, 2000);
 
@@ -215,6 +224,9 @@ setInterval(async () => {
       type: 'brosr:panel-report',
       state: {
         state: $('dot').dataset.state,
+        width: innerWidth,
+        height: innerHeight,
+        visible: document.visibilityState,
         room: $('room').textContent,
         control: !$('control').hidden,
         notice: $('notice').textContent,

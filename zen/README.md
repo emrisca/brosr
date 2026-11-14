@@ -29,9 +29,10 @@ needs no Zen patch.
 
 ## The experience
 
-1. **A room profile.** `profile.mjs` makes a Zen profile with vertical tabs, compact chrome and
-   telemetry off. Then it prints the command that starts Zen on that profile. The room gets the
-   window, not the toolbar.
+1. **A room profile.** `profile.mjs` makes a Zen profile with vertical tabs, an expanded sidebar
+   and telemetry off. It seeds `xulstore.json` with a 480 pixel sidebar width, because Zen
+   restores the width from there and its own macOS default is 230. Then it prints the command
+   that starts Zen on that profile. The room gets the window, not the toolbar.
 2. **A room panel.** The bridge gains a panel at `panel/room.html`. It shows the room id, each peer by name, who holds
    control, the socket state and the latency. It asks the active tab for the same numbers the
    harness reads from `dataset.brosr`, so one renderer serves both. On the host each peer row has a
@@ -55,8 +56,9 @@ sidebar and a plain tab share one renderer.
 `--zen-border-radius` from Zen. A missing token falls back to the panel's own light or dark
 value. `prefers-color-scheme` picks the mode.
 
-**Spacing.** Gaps and pads use 6, 8 or 10 pixels only. The sidebar is 280 pixels wide, so a
-peer row keeps its control on one line.
+**Spacing.** Gaps and pads use 6, 8 or 10 pixels only. The panel fills the expanded sidebar,
+which is 480 pixels wide by default and never more than 500. The footer sits at the bottom edge,
+and a peer row keeps its control on one line.
 
 **Skeleton.** Two placeholder rows hold the height of the peer list until the first reply
 lands. The rows are `aria-hidden`, so a reader hears the status line only.
@@ -69,6 +71,11 @@ without a sample shows no time, not a dash.
 
 **Focus.** Buttons carry an `aria-label` with the peer name and the action, plus a
 `:focus-visible` ring. The status line and notice use `role="status"` and `aria-live`.
+
+**Docked split.** The launcher docks the panel under the tab column. A horizontal bar above the
+panel resizes it on drag. The height stays between 120 pixels and the window height minus 220.
+The drag saves `brosr.panel.height` for the next run. Hide in the panel header closes the
+sidebar. The room page button, the toolbar button or Ctrl+Alt+B opens it again.
 
 **Entry points.** A room page shows a small Room panel button at its bottom edge. A click opens
 the sidebar, and the bridge falls back to a tab when the sidebar is unavailable.
@@ -94,8 +101,10 @@ browser consumes the chord. A spawned Mac window still does not take activation,
 no proof from a frontmost window.
 
 `live.mjs` does that hand setup in one step. It starts the relay and a headful Zen window on a
-persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. It leaves both
-processes running and writes `zen/.runtime/live.json`.
+persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. It then docks
+the panel through Marionette, which is why Zen starts with `--marionette`. The panel reports its
+own width, so the launcher records `mode` as `sidebar` or `tab`. It falls back to a panel tab
+when no report arrives. It leaves both processes running and writes `zen/.runtime/live.json`.
 
 To use the room by hand, start the relay, then run the command `profile.mjs` prints. Load the XPI
 from `about:debugging` when the profile is new.
