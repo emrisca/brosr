@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DriftController, decideDrift, NUDGE_MS, SEEK_MS, MAX_RATE_DELTA } from '../drift.mjs';
+import { DriftController, decideDrift, NUDGE_MS, SEEK_MS, MAX_RATE_DELTA, SEEK_COOLDOWN_MS } from '../drift.mjs';
 
 test('a small drift does nothing', () => {
   assert.deepEqual(decideDrift(0), { action: 'none', rate: 1 });
@@ -40,4 +40,29 @@ test('the controller counts a seek and restores the rate', () => {
   assert.equal(controller.tick(10).action, 'none');
   assert.equal(controller.rate, 1);
   assert.deepEqual(controller.stats(), { seeks: 1, nudges: 1, rate: 1, lastAction: 'none' });
+});
+
+test('the cooldown holds a second seek', () => {
+  let now = 0;
+  const controller = new DriftController({ cooldownMs: SEEK_COOLDOWN_MS, now: () => now });
+  assert.equal(controller.tick(1000).action, 'seek');
+  now = SEEK_COOLDOWN_MS - 1;
+  const held = controller.tick(1000);
+  assert.equal(held.action, 'none');
+  assert.equal(held.reason, 'cooldown');
+  assert.equal(controller.seeks, 1);
+  assert.equal(controller.rate, 1);
+});
+
+test('a nudge does not reset the cooldown, and the boundary releases it', () => {
+  let now = 0;
+  const controller = new DriftController({ cooldownMs: SEEK_COOLDOWN_MS, now: () => now });
+  controller.tick(1000);
+  now = 500;
+  assert.equal(controller.tick(100).action, 'nudge');
+  now = SEEK_COOLDOWN_MS - 1;
+  assert.equal(controller.tick(1000).action, 'none');
+  now = SEEK_COOLDOWN_MS;
+  assert.equal(controller.tick(1000).action, 'seek');
+  assert.equal(controller.seeks, 2);
 });

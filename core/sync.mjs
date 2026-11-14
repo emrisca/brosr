@@ -38,6 +38,9 @@ export function createRoomClient({
   send = () => {},
   document: doc = null,
   mediaRoot = null,
+  // A site with its own player hands its adapter in here. The room then calls
+  // the same four methods either way.
+  mediaAdapter = null,
   input = null,
   viewport = null,
   navigate = null,
@@ -50,8 +53,10 @@ export function createRoomClient({
   latencyLimit = 200,
 } = {}) {
   const clock = new ClockEstimator({ now });
-  const drift = new DriftController();
-  const media = new MediaAdapter({ root: mediaRoot });
+  // The controller holds a seek on the same clock and window as the settle
+  // check below, so the two never disagree about when a seek may land.
+  const drift = new DriftController({ now });
+  const media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
   const state = new Room({ role, peerId, now });
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
@@ -326,10 +331,9 @@ export function createRoomClient({
       return { ok: true, pending: 'seek' };
     }
 
-    const step = drift.tick(driftMs, {
-      buffering: Number(element.readyState) < 2,
-      adPlaying: false,
-    });
+    // The adapter owns the flags. A starved element and a site ad reach the
+    // policy through one call, so neither site can forget one of them.
+    const step = drift.tick(driftMs, media.flags(element));
 
     if (step.action === 'seek') {
       const max = Number.isFinite(element.duration) ? element.duration : expected;
