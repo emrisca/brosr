@@ -1741,6 +1741,9 @@ room `m2a` through `100.67.220.25:8787`, and both started at 03:03:59.139.
 The relay read four sockets from 03:07:39.257 to 03:27:59.335. All 62 probe rows in that window
 read 4. The counter rose by 116,763 frames across it.
 
+Windows opened the pages at 03:07:27 and stopped them at 03:28:01. The probe took its last row at
+03:28:06, so the four-socket span is 1239 s of the 2400 s the window allowed.
+
 Both Mac peers stopped by their own timer at 03:43:59.191, after 2400.052 s. Each journal holds
 2398 samples, 2191 of them with an RTT, and 0 reconnects.
 
