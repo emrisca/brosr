@@ -6,6 +6,10 @@
 import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 
+// The panel button stays off unrelated pages. A room page is a fixture whose
+// name starts with one of the room words, which is what the panel looks for.
+const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+
 export async function start() {
   if (window.__brosrStarted) return { started: false, reason: 'already-running' };
   window.__brosrStarted = true;
@@ -307,6 +311,53 @@ export async function start() {
         // The background page is restarting.
       }
     }, 500);
+  }
+
+  // A room page cannot reach the browser chrome, and Zen hides its toolbar in
+  // compact mode. One small button keeps the panel findable. The reply says
+  // whether the sidebar or a tab opened, so a harness can read the outcome.
+  if (source === 'content-script' && ROOM_PAGE.test(location.href)) {
+    const style = document.createElement('style');
+    style.textContent = `
+      #brosr-panel-button {
+        position: fixed;
+        right: 8px;
+        bottom: 8px;
+        z-index: 2147483647;
+        margin: 0;
+        padding: 6px 8px;
+        border: 1px solid ButtonBorder;
+        border-radius: 8px;
+        background: Canvas;
+        color: CanvasText;
+        font: 11px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        box-shadow: 0 2px 8px rgb(0 0 0 / 22%);
+        cursor: pointer;
+      }
+      #brosr-panel-button:hover {
+        background: color-mix(in srgb, CanvasText 8%, Canvas);
+      }
+      #brosr-panel-button:focus-visible {
+        outline: 2px solid #86b4ff;
+        outline-offset: 1px;
+      }
+    `;
+    const button = document.createElement('button');
+    button.id = 'brosr-panel-button';
+    button.type = 'button';
+    button.textContent = 'Room panel';
+    button.setAttribute('aria-label', 'Open the Brosr room panel');
+    button.addEventListener('click', async () => {
+      try {
+        const reply = await browser.runtime.sendMessage({ type: 'brosr:open-sidebar' });
+        document.documentElement.dataset.brosrPanel =
+          reply && reply.sidebar ? 'sidebar' : reply && reply.tabId ? 'tab' : 'failed';
+      } catch {
+        document.documentElement.dataset.brosrPanel = 'failed';
+      }
+    });
+    document.head.append(style);
+    document.body.append(button);
   }
 
   setInterval(() => {

@@ -1,7 +1,7 @@
 // Starts the relay and a headful Zen window on a persistent profile, installs
-// the bridge, opens a host room, and then exits. Nothing is killed on the way
-// out, so the panel stays usable by hand.
-import { spawn, spawnSync } from 'node:child_process';
+// the bridge, opens a host room and leaves the panel in a visible tab. Nothing
+// is killed on the way out, so the window stays usable by hand.
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,25 +59,6 @@ function buildXpi() {
       })),
     ])
   );
-  return out;
-}
-
-// The chord is the only way to open the real sidebar, because the panel tab
-// path in background.js is a fallback. The helper activates the pid and posts
-// a trusted chord to it.
-function keypostPath() {
-  if (process.platform !== 'darwin') return null;
-  const source = path.join(here, 'keypost.swift');
-  const out = path.join(runtime, 'keypost');
-  if (fs.existsSync(out) && fs.statSync(out).mtimeMs >= fs.statSync(source).mtimeMs) return out;
-  const build = spawnSync('swiftc', ['-parse-as-library', '-O', source, '-o', out], {
-    encoding: 'utf8',
-    timeout: 120000,
-  });
-  if (build.status !== 0) {
-    log('[live] keypost build failed', String(build.stderr || '').trim().slice(0, 300));
-    return null;
-  }
   return out;
 }
 
@@ -172,6 +153,7 @@ async function main() {
     browser: { pid: browser.pid, port: PORT, profile: PROFILE },
     room: null,
     panel: null,
+    affordance: null,
   };
 
   try {
@@ -193,10 +175,16 @@ async function main() {
     }
     log('[live] contexts', JSON.stringify(views));
     const context = (views.find((item) => item.visibility === 'visible') || views[0]).id;
-    const url =
+    const base =
       `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${encodeURIComponent(ROOM)}` +
       `&peer=host&name=${encodeURIComponent(NAME)}`;
-    await bidi.cmd('browsingContext.navigate', { context, url, wait: 'complete' });
+    // panel=1 opens the panel in a tab. That tab is the clear, visible entry
+    // point on a browser that hides its toolbar.
+    await bidi.cmd('browsingContext.navigate', {
+      context,
+      url: `${base}&panel=1`,
+      wait: 'complete',
+    });
 
     let roomData = null;
     for (let i = 0; i < 100 && !roomData; i += 1) {
@@ -216,18 +204,7 @@ async function main() {
       if (!roomData) await sleep(300);
     }
     if (!roomData) throw new Error('the room tab did not connect');
-    result.room = { context, url, peers: roomData.peerList || roomData.peers || null };
-
-    const helper = keypostPath();
-    if (helper) {
-      const sent = spawnSync(helper, ['chord', String(browser.pid)], {
-        encoding: 'utf8',
-        timeout: 20000,
-      });
-      log('[live] chord', sent.status, String(sent.stdout || '').trim(), String(sent.stderr || '').trim());
-      result.chord = { status: sent.status, out: String(sent.stdout || '').trim() };
-    }
-    await sleep(1500);
+    result.room = { context, url: base, peers: roomData.peerList || roomData.peers || null };
 
     const findPanel = async (tries) => {
       for (let i = 0; i < tries; i += 1) {
@@ -241,20 +218,25 @@ async function main() {
       return null;
     };
     let panelContext = await findPanel(40);
-    let openedTab = false;
-    if (!panelContext) {
-      // A sidebar can open without a listed context. The panel tab gives an
-      // extension page to ask from, and it is the visible fallback.
-      log('[live] no sidebar context. Opening the panel as a tab.');
-      await bidi.cmd('browsingContext.navigate', {
-        context,
-        url: `${url}&panel=1`,
-        wait: 'complete',
-      });
-      panelContext = await findPanel(40);
-      openedTab = Boolean(panelContext);
-    }
+
+    // The page carries the button whether or not its click is driven here. The
+    // launcher leaves one panel tab, so a click would add a second.
+    const affordance = await evaluate(
+      bidi,
+      context,
+      `(() => {
+        const button = document.getElementById('brosr-panel-button');
+        return JSON.stringify({ present: Boolean(button), label: button ? button.textContent : null });
+      })()`
+    ).catch(() => null);
+    result.affordance = affordance ? JSON.parse(affordance) : { present: false };
+    log('[live] affordance', JSON.stringify(result.affordance));
+
+    if (!panelContext) panelContext = await findPanel(40);
     if (panelContext) {
+      // Leave the panel tab in front, so the window opens on the panel.
+      await bidi.cmd('browsingContext.activate', { context: panelContext }).catch(() => {});
+      await sleep(200);
       const raw = await evaluate(
         bidi,
         panelContext,
@@ -278,17 +260,10 @@ async function main() {
           });
         })()`
       );
-      const state = JSON.parse(raw);
-      result.panel = { context: panelContext, ...state, openedTab };
+      result.panel = { context: panelContext, ...JSON.parse(raw) };
       log('[live] panel', JSON.stringify(result.panel));
-      if (state.open === true && openedTab) {
-        // The sidebar is the real surface, so drop the helper tab.
-        await bidi.cmd('browsingContext.close', { context: panelContext }).catch(() => {});
-      }
-      const front = state.open === true ? context : panelContext;
-      await bidi.cmd('browsingContext.activate', { context: front }).catch(() => {});
     } else {
-      log('[live] panel context not found. Press Ctrl+Alt+B to open it.');
+      log('[live] panel context not found. Click the Room panel button in the page.');
     }
 
     fs.writeFileSync(
@@ -297,8 +272,8 @@ async function main() {
     );
     log('[live] relay', result.relay.reused ? 'reused' : `pid ${result.relay.pid}`);
     log('[live] zen pid', browser.pid, 'port', PORT);
-    log('[live] room', url);
-    log('[live] window left running. Ctrl+Alt+B opens the panel.');
+    log('[live] room', base);
+    log('[live] window left running. Click Room panel or press Ctrl+Alt+B.');
     process.exit(0);
   } catch (error) {
     log('[live] failed:', error.message);

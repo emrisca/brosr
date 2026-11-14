@@ -70,6 +70,9 @@ without a sample shows no time, not a dash.
 **Focus.** Buttons carry an `aria-label` with the peer name and the action, plus a
 `:focus-visible` ring. The status line and notice use `role="status"` and `aria-live`.
 
+**Entry points.** A room page shows a small Room panel button at its bottom edge. A click opens
+the sidebar, and the bridge falls back to a tab when the sidebar is unavailable.
+
 ## Run it
 
 ```sh

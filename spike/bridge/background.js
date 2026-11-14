@@ -54,6 +54,9 @@ browser.runtime.onMessage.addListener((message, sender) => {
   if (message.type === 'brosr:panel-state') {
     return Promise.resolve({ ok: true, state: lastSelftest || lastPanel });
   }
+  if (message.type === 'brosr:open-sidebar') {
+    return openRoomPanel(Boolean(message.selftest));
+  }
   if (message.type === 'brosr:open-panel') {
     if (panelTabId !== null) {
       return browser.tabs
