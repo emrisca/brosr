@@ -90,6 +90,13 @@ function render(reply) {
     name.title = name.textContent;
     if (peer.self) name.textContent += ' (you)';
     row.append(swatch, name);
+    const presence = data.presenceByPeer ? data.presenceByPeer[peer.id] : null;
+    if (presence && Number.isFinite(presence.p95)) {
+      const time = document.createElement('span');
+      time.className = 'latency';
+      time.textContent = `${Math.round(presence.p95)} ms`;
+      row.append(time);
+    }
     if (peer.granted) {
       const badge = document.createElement('span');
       badge.className = 'grant';

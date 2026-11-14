@@ -45,6 +45,31 @@ needs no Zen patch.
    store safely, so the profile does not fake one. A room per space is the natural next step, and
    it belongs with the M5 sidebar work.
 
+## The panel
+
+`panel/room.html` is the `sidebar_action`. It asks the room tab for `brosr:status`, so the
+sidebar and a plain tab share one renderer.
+
+**Tokens.** The stylesheet reads `--zen-main-browser-background`, `--zen-colors-primary`,
+`--zen-colors-secondary`, `--zen-colors-border`, `--zen-primary-color` and
+`--zen-border-radius` from Zen. A missing token falls back to the panel's own light or dark
+value. `prefers-color-scheme` picks the mode.
+
+**Spacing.** Gaps and pads use 6, 8 or 10 pixels only. The sidebar is 280 pixels wide, so a
+peer row keeps its control on one line.
+
+**Skeleton.** Two placeholder rows hold the height of the peer list until the first reply
+lands. The rows are `aria-hidden`, so a reader hears the status line only.
+
+**Empty state.** A room with no peers shows a short hint and a Refresh button. The peer count
+stays visible above the list.
+
+**Latency.** A peer row shows its own p95 from `presenceByPeer` in tabular figures. A peer
+without a sample shows no time, not a dash.
+
+**Focus.** Buttons carry an `aria-label` with the peer name and the action, plus a
+`:focus-visible` ring. The status line and notice use `role="status"` and `aria-live`.
+
 ## Run it
 
 ```sh
@@ -64,6 +89,10 @@ chord to the Zen process with `keypost.swift`. The room page then recorded
 the room recorded `open-room-panel`. The page records no keydown in either case, because the
 browser consumes the chord. A spawned Mac window still does not take activation, so the Mac has
 no proof from a frontmost window.
+
+`live.mjs` does that hand setup in one step. It starts the relay and a headful Zen window on a
+persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. It leaves both
+processes running and writes `zen/.runtime/live.json`.
 
 To use the room by hand, start the relay, then run the command `profile.mjs` prints. Load the XPI
 from `about:debugging` when the profile is new.

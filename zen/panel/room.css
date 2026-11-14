@@ -135,6 +135,13 @@ li .name {
   white-space: nowrap;
 }
 
+li .latency {
+  flex: none;
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 li .grant {
   color: var(--room-live);
   font-size: 11px;
