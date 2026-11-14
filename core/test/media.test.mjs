@@ -95,3 +95,22 @@ test('the adapter reports a missing element instead of throwing', () => {
   assert.equal(adapter.state(null), null);
   assert.equal(adapter.pick(null), null);
 });
+
+test('a starved element sets the buffering flag', () => {
+  const adapter = new MediaAdapter();
+  const element = fakeVideo();
+  assert.deepEqual(adapter.flags(element), { buffering: false, adPlaying: false });
+  element.readyState = 1;
+  assert.deepEqual(adapter.flags(element), { buffering: true, adPlaying: false });
+  assert.equal(adapter.flags(null).buffering, true, 'no element is not ready to play');
+});
+
+test('a site probe turns the ad flag on, and no probe leaves it off', () => {
+  const element = fakeVideo();
+  const adapter = new MediaAdapter();
+  assert.equal(adapter.flags(element).adPlaying, false);
+  adapter.watchAds(() => true);
+  assert.equal(adapter.flags(element).adPlaying, true);
+  adapter.watchAds(null);
+  assert.equal(adapter.flags(element).adPlaying, false, 'a missing probe never claims an ad');
+});

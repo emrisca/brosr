@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomClient, SEEK_SETTLE_MS } from '../sync.mjs';
+import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
 const KEY = 'http://127.0.0.1:8787/media/clip.webm';
@@ -78,9 +79,12 @@ test('after the settle window the next correction is allowed again', () => {
 
   at(5000);
   client.receive(frame(2, 5000), 5000);
-  at(5000 + SEEK_SETTLE_MS + 1);
+  // The controller holds a second seek for its cooldown, which is longer than
+  // the settle window. So the next correction waits for the larger of the two.
+  const later = 5000 + Math.max(SEEK_SETTLE_MS, SEEK_COOLDOWN_MS) + 1;
+  at(later);
   video.currentTime = 1.9;
-  const settled = client.receive(frame(4, 5000 + SEEK_SETTLE_MS + 1), 5000 + SEEK_SETTLE_MS + 1);
+  const settled = client.receive(frame(4, later), later);
   assert.equal(settled.step.action, 'seek');
   assert.equal(client.stats.corrections, 2);
 });

@@ -4,6 +4,7 @@
 // numbers whether the core runs in the content script or in the page.
 
 import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
+import { YouTubeAdapter, playerKey } from './youtube.mjs';
 
 export async function start() {
   if (window.__brosrStarted) return { started: false, reason: 'already-running' };
@@ -94,6 +95,17 @@ export async function start() {
     window.scrollTo(0, Math.round(ratio * max));
   };
 
+  // The IFrame API player lives in page scope, so a bridge hands it in on the
+  // window. Without one, the entry keeps the HTML element adapter.
+  const youTubePlayer = globalThis.__brosrYouTubePlayer || null;
+  const mediaAdapter = youTubePlayer
+    ? new YouTubeAdapter({
+        player: youTubePlayer,
+        root: document.getElementById('movie_player'),
+        key: playerKey(location.href),
+      })
+    : null;
+
   const client = createRoomClient({
     role,
     room,
@@ -105,6 +117,7 @@ export async function start() {
     viewport,
     navigate,
     scrollTo,
+    mediaAdapter,
     onApp: (message) => {
       // The page owns its own protocol. This only forwards it, under the page's
       // own origin, so a room page needs no content-script change.
@@ -184,7 +197,9 @@ export async function start() {
     showLayoutNotice(next.layoutNotice);
   };
 
-  const video = client.media.pick(null);
+  // A player object has no paused field and no play method, so the HTML start
+  // path stays off when an adapter is in use.
+  const video = mediaAdapter ? null : client.media.pick(null);
   const beginPlayback = () => {
     if (!video) return;
     video.muted = true;

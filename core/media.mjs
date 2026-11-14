@@ -20,6 +20,23 @@ export class MediaAdapter {
   constructor({ root = null, selector = MEDIA_SELECTOR } = {}) {
     this.root = root;
     this.selector = selector;
+    this.adDetect = null;
+  }
+
+  // A site that shows ads inside its own player passes a probe here. The
+  // element itself has no field that says an ad is playing.
+  watchAds(probe) {
+    this.adDetect = typeof probe === 'function' ? probe : null;
+    return this;
+  }
+
+  // Two flags decide the policy. A starved element pauses the room, and an ad
+  // does the same, because the user cannot seek past a per-user ad.
+  flags(element) {
+    return {
+      buffering: Number(element?.readyState ?? 0) < 2,
+      adPlaying: this.adDetect ? Boolean(this.adDetect(element)) : false,
+    };
   }
 
   elements() {

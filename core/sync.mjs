@@ -324,7 +324,10 @@ export function createRoomClient({
     }
 
     // Wait for a seek to land before judging the next one.
-    if (element.seeking || local - lastSeekAt < SEEK_SETTLE_MS) {
+    // The controller holds a seek for its own cooldown, so the settle window
+    // never ends before the controller would allow another one.
+    const settleMs = Math.max(SEEK_SETTLE_MS, drift.cooldownMs || 0);
+    if (element.seeking || local - lastSeekAt < settleMs) {
       if (element.playbackRate !== 1) element.playbackRate = 1;
       stats.position = Math.round(actual * 1000) / 1000;
       stats.playing = !element.paused;
