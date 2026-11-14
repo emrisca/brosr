@@ -13,6 +13,23 @@ The Mac asked Windows for a LAN measurement. Two two-machine LAN windows and a L
 on 13 November 2026. This note records the results,
 the work that remains, and the next steps for both machines.
 
+## Where M1 stands
+
+M1 asks for four peers on one LAN, under 80 ms p95, for one hour. No window met all three at
+once.
+
+The `lan2` hour proved the sync layer holds for 3600 s. Four clients shared one room and no socket
+dropped. Each Mac peer wrote 3596 samples with 0 reconnects.
+
+That hour crossed the tailnet, not a switch. Both machines left one network, so the relay at
+`100.67.220.25` was their only path. It stays out of every LAN column.
+
+Two conditions still block M1. The machines need one shared subnet again. A LAN hour then needs
+four clients to hold 3600 s with p95 under 80 ms.
+
+The floor is a measurement. A loopback pair reads p50 1 ms. The tailnet pair reads p50 30 ms and
+29 ms. The network owns that gap, not the harness.
+
 ## The M1 hour, now run on Windows, 13 November 2026
 
 M1 needs four peers on one LAN under 80 ms p95 for one hour. The `diag2` window retired the
@@ -1643,6 +1660,27 @@ Each journal also counts presence per peer over its last 200 samples. `win2` hel
 and stays outside the Mac row.
 
 The two Mac peers measured each other at p50 44 ms and 48 ms over the same window.
+
+### The Windows side of the same hour
+
+The host and `win2` ran on the one Windows machine, so their two rows measure the local relay and not
+the path between two machines. They stay out of the LAN column for that reason.
+
+The host socket read p95 2 ms and a 3 ms worst over 200 samples, with 1 peer in the room at the end.
+`win2` read p95 0 ms and a 1 ms worst over 200 samples, with 2 peers in the room. Both sockets read 0
+reconnects, and each held 1 open socket at the end.
+
+The probe column opened the four-socket window at 01:44:59.029 UTC and closed it at 02:44:40.367. All
+240 rows in that window carry 4 sockets, and no gap between two rows is over 20 s.
+
+The relay forwarded 332010 frames inside that window. That count is the rise in the probe column from
+the first row to the last, and not a total from one socket.
+
+Both Windows pages ended at ratio 0.35, which is 652 of 1864 px. A peer that returns lands on the
+scroll the room holds.
+
+The relay restarted at 02:54:55 UTC with the new media route. That restart zeroed the counter, so no
+later row may be compared with the 332010 above.
 
 ## The loopback baseline beside `lan2`
 
