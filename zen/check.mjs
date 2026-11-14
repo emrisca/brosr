@@ -46,6 +46,7 @@ const CORE = [
   'input.mjs',
   'sync.mjs',
   'browser-entry.mjs',
+  'youtube.mjs',
 ];
 
 function buildXpi() {

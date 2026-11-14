@@ -1,11 +1,35 @@
+/* The sidebar is 280px wide, so every gap is 6, 8 or 10 and every colour is a
+   token. Zen supplies the four base tokens when it has them, and the panel
+   carries a light and a dark fallback so a plain tab renders too. */
+
 :root {
   color-scheme: light dark;
-  --room-bg: var(--zen-main-browser-background, #1c1b22);
-  --room-text: var(--zen-colors-primary, #fbfbfe);
-  --room-dim: var(--zen-colors-secondary, #9a99a2);
+  --room-bg: var(--zen-main-browser-background, #f7f7f8);
+  --room-text: var(--zen-colors-primary, #1b1b1f);
+  --room-dim: var(--zen-colors-secondary, #5b5b64);
+  --room-border: var(--zen-colors-border, rgb(0 0 0 / 14%));
+  --room-surface: rgb(0 0 0 / 4%);
+  --room-surface-hover: rgb(0 0 0 / 8%);
+  --room-accent: var(--zen-primary-color, #b14a2c);
+  --room-focus: #1c5fd0;
+  --room-live: #1f7a4d;
+  --room-down: #b0361f;
   --room-radius: var(--zen-border-radius, 8px);
-  --room-live: #3fbf7f;
-  --room-down: #e2603f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --room-bg: var(--zen-main-browser-background, #1c1b22);
+    --room-text: var(--zen-colors-primary, #fbfbfe);
+    --room-dim: var(--zen-colors-secondary, #a8a7b0);
+    --room-border: var(--zen-colors-border, rgb(255 255 255 / 14%));
+    --room-surface: rgb(255 255 255 / 6%);
+    --room-surface-hover: rgb(255 255 255 / 10%);
+    --room-accent: var(--zen-primary-color, #e2603f);
+    --room-focus: #86b4ff;
+    --room-live: #4cc98d;
+    --room-down: #f07a5c;
+  }
 }
 
 * {
@@ -21,7 +45,7 @@ body {
 
 body {
   min-width: 260px;
-  padding: 12px;
+  padding: 10px;
   font: 12px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
@@ -29,7 +53,9 @@ header {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding-bottom: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--room-border);
+  margin-bottom: 10px;
 }
 
 h1 {
@@ -37,6 +63,7 @@ h1 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -47,6 +74,7 @@ h1 {
   height: 8px;
   border-radius: 50%;
   background: var(--room-dim);
+  flex: none;
 }
 
 .dot[data-state="live"] {
@@ -67,6 +95,7 @@ h1 {
 .status {
   margin: 0 0 8px;
   color: var(--room-dim);
+  font-size: 11px;
 }
 
 .status[data-state="error"] {
@@ -74,6 +103,8 @@ h1 {
 }
 
 ul {
+  display: grid;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -85,19 +116,20 @@ li {
   align-items: center;
   padding: 6px 8px;
   border-radius: var(--room-radius);
-  background: var(--zen-toolbar-element-bg, rgb(255 255 255 / 6%));
-  margin-bottom: 4px;
+  background: var(--room-surface);
 }
 
 li .swatch {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--zen-primary-color, #3f86e2);
+  background: var(--room-accent);
+  flex: none;
 }
 
 li .name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -105,52 +137,87 @@ li .name {
 
 li .grant {
   color: var(--room-live);
-  font-size: 10px;
-  text-transform: uppercase;
-}
-
-li .peer-control {
-  padding: 2px 8px;
   font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 .empty {
+  justify-content: space-between;
   color: var(--room-dim);
-  padding: 4px 2px;
+}
+
+.empty span {
+  min-width: 0;
+}
+
+.skeleton {
+  display: grid;
+  gap: 6px;
+}
+
+.skeleton span {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--room-border);
+}
+
+.skeleton .w-long {
+  width: 60%;
+}
+
+.skeleton .w-short {
+  width: 35%;
 }
 
 footer {
   display: flex;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--room-border);
   color: var(--room-dim);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 button {
-  border: 1px solid var(--zen-colors-border, rgb(255 255 255 / 14%));
+  flex: none;
+  border: 1px solid var(--room-border);
   border-radius: var(--room-radius);
   background: transparent;
   color: inherit;
   font: inherit;
-  padding: 4px 10px;
+  font-size: 11px;
+  padding: 6px 8px;
   cursor: pointer;
 }
 
 button:hover {
-  background: var(--zen-toolbar-element-bg-hover, rgb(255 255 255 / 10%));
+  background: var(--room-surface-hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--room-focus);
+  outline-offset: 1px;
+}
+
+.peer-control {
+  min-width: 0;
 }
 
 .control {
-  margin: 10px 0 0;
+  margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--zen-colors-border, rgb(255 255 255 / 12%));
+  border-top: 1px solid var(--room-border);
 }
 
 .control .control-label {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   color: var(--room-dim);
+  font-size: 11px;
 }
 
 .control .history {
@@ -158,16 +225,17 @@ button:hover {
 }
 
 .control .history li {
-  padding: 2px 0;
+  padding: 6px 0;
   background: none;
   color: var(--room-dim);
   font-size: 11px;
 }
 
 .control .notice {
-  min-height: 14px;
+  min-height: 1.45em;
   margin: 6px 0 0;
   color: var(--room-dim);
+  font-size: 11px;
 }
 
 .control .notice[data-bad="1"] {

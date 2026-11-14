@@ -67,8 +67,14 @@ function render(reply) {
   if (!peers.length) {
     const empty = document.createElement('li');
     empty.className = 'empty';
+    const line = document.createElement('span');
     const label = count === 1 ? 'peer' : 'peers';
-    empty.textContent = count ? `${count} ${label} in this room.` : 'No peers in this room yet.';
+    line.textContent = count ? `${count} ${label} in this room.` : 'No peers in this room yet.';
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.textContent = 'Refresh';
+    again.addEventListener('click', () => refresh());
+    empty.append(line, again);
     list.append(empty);
   }
   for (const peer of peers) {
@@ -81,6 +87,7 @@ function render(reply) {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = peer.name || peer.id || 'peer';
+    name.title = name.textContent;
     if (peer.self) name.textContent += ' (you)';
     row.append(swatch, name);
     if (peer.granted) {
@@ -95,6 +102,12 @@ function render(reply) {
       action.className = 'peer-control';
       action.dataset.peer = peer.id;
       action.textContent = peer.granted ? 'Revoke' : 'Grant';
+      action.setAttribute(
+        'aria-label',
+        peer.granted
+          ? `Revoke control from ${peer.name || peer.id}`
+          : `Grant control to ${peer.name || peer.id}`
+      );
       action.addEventListener('click', () => control(!peer.granted, peer.id));
       row.append(action);
     }
@@ -164,6 +177,25 @@ async function control(allowed, peer) {
   }
 }
 
+// Two placeholder rows hold the space the peer list takes, so the first reply
+// does not move the panel. They carry no name, so a reader sees only the wait.
+function renderSkeleton() {
+  const list = $('peers');
+  list.replaceChildren();
+  for (let i = 0; i < 2; i += 1) {
+    const row = document.createElement('li');
+    row.className = 'skeleton';
+    row.setAttribute('aria-hidden', 'true');
+    const long = document.createElement('span');
+    long.className = 'w-long';
+    const short = document.createElement('span');
+    short.className = 'w-short';
+    row.append(long, short);
+    list.append(row);
+  }
+}
+
+renderSkeleton();
 $('refresh').addEventListener('click', refresh);
 refresh();
 setInterval(refresh, 2000);
