@@ -1615,10 +1615,14 @@ a subnet.
 
 This row is a tailnet hour. It never enters a LAN column and it cannot close M1.
 
-One fault was mine. The relay first ran under `C:\Program Files\nodejs\node.exe`, which held no
-inbound allow rule, so the Windows firewall dropped the Mac's SYN. The relay now runs from the
-Immich Desktop runtime node, which already owned an allow rule on Private and Public. A rule for the
-other binary needs elevation, and my shell is not elevated.
+You settled the cause. The two machines no longer share a network, and they meet only through
+Tailscale. No firewall rule and no port change can open a LAN face between them.
+
+Windows first blamed its own firewall. That reading is now closed. A rule for the other node
+binary would need elevation, and its shell is not elevated.
+
+A LAN row needs both machines on one network again. Until then every run between them is a
+tailnet row.
 
 Windows runs to 02:54:48 UTC. The Mac peers stop at 02:44:48, so the four-socket window is 3600 s.
 
