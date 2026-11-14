@@ -27,6 +27,20 @@ export const SEEK_SETTLE_MS = 1000;
 // A seek that never lands would hold the peer behind for the whole run, so the
 // pending state expires and a later message decides afresh.
 export const SEEK_TIMEOUT_MS = 8000;
+// A seek that lands outside the buffered data makes the element fetch in the
+// middle of the seek, which is where it wedges here. The peer waits this long
+// for data, then seeks anyway so a big gap is never held forever.
+export const SEEK_BUFFER_WAIT_MS = 2500;
+export const SEEK_BUFFER_MARGIN_S = 0.5;
+
+export function bufferedAround(element, seconds, margin = SEEK_BUFFER_MARGIN_S) {
+  const ranges = element && element.buffered;
+  if (!ranges || typeof ranges.length !== 'number') return true;
+  for (let i = 0; i < ranges.length; i += 1) {
+    if (seconds >= ranges.start(i) && seconds <= ranges.end(i) - margin) return true;
+  }
+  return false;
+}
 export const VIEW_TICK_MS = 50;
 export const SCROLL_EPSILON = 0.002;
 export const LATENCY_LIMIT = 5000;
@@ -102,6 +116,7 @@ export function createRoomClient({
   let firstAt = 0;
   let lastHostTick = -Infinity;
   let lastSeekAt = -Infinity;
+  let waitingSince = null;
   let lastSeekTarget = null;
   let lastViewTick = -Infinity;
   let lastUrl = null;
@@ -361,6 +376,14 @@ export function createRoomClient({
     if (step.action === 'seek') {
       const max = Number.isFinite(element.duration) ? element.duration : expected;
       const target = Math.max(0, Math.min(expected, max));
+      if (!bufferedAround(element, target)) {
+        if (waitingSince === null) waitingSince = local;
+        if (local - waitingSince < SEEK_BUFFER_WAIT_MS) {
+          element.playbackRate = 1;
+          return { ok: true, pending: 'buffer' };
+        }
+      }
+      waitingSince = null;
       element.currentTime = target;
       lastSeekAt = local;
       lastSeekTarget = Math.round(target * 1000) / 1000;

@@ -3,7 +3,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoomClient, SEEK_SETTLE_MS, SEEK_TIMEOUT_MS } from '../sync.mjs';
+import {
+  bufferedAround,
+  createRoomClient,
+  SEEK_BUFFER_WAIT_MS,
+  SEEK_SETTLE_MS,
+  SEEK_TIMEOUT_MS,
+} from '../sync.mjs';
 import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -120,6 +126,35 @@ test('a seek that never lands expires, so a peer is not stranded', () => {
   const after = client.receive(frame(6, afterAt), afterAt);
   assert.equal(after.step.action, 'seek', 'the next decision is not blocked');
   assert.equal(client.stats.corrections, 2);
+});
+
+test('a range check names the buffered window, and a missing list never blocks', () => {
+  const ranges = {
+    length: 2,
+    start: (i) => [0, 100][i],
+    end: (i) => [50, 140][i],
+  };
+  assert.equal(bufferedAround({ buffered: ranges }, 20), true);
+  assert.equal(bufferedAround({ buffered: ranges }, 60), false, 'a gap is not buffered');
+  assert.equal(bufferedAround({ buffered: ranges }, 139.8), false, 'the margin keeps it off the edge');
+  assert.equal(bufferedAround({ buffered: ranges }, 120), true);
+  assert.equal(bufferedAround({}, 900), true, 'an element without ranges never blocks a seek');
+});
+
+test('a seek into unbuffered data waits, then lands anyway', () => {
+  const video = fakeVideo();
+  video.buffered = { length: 1, start: () => 0, end: () => 120 };
+  const { client, at, frame } = makeClient(video);
+
+  at(5000);
+  const first = client.receive(frame(300, 5000), 5000);
+  assert.equal(first.pending, 'buffer');
+  assert.equal(video.currentTime, 0, 'nothing is written while the wait holds');
+
+  at(5000 + SEEK_BUFFER_WAIT_MS + 1);
+  const late = client.receive(frame(300, 5000 + SEEK_BUFFER_WAIT_MS + 1), 5000 + SEEK_BUFFER_WAIT_MS + 1);
+  assert.equal(late.step.action, 'seek');
+  assert.equal(video.currentTime, 120, 'a seek past the clip clamps to its duration');
 });
 
 test('a small drift nudges the rate instead of seeking', () => {

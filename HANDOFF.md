@@ -1666,41 +1666,22 @@ The two Mac peers measured each other at p50 44 ms and 48 ms over the same windo
 Windows ran the host page and `win2` against a relay on its own host. Both sockets are loopback, so
 those figures stay out of every LAN column.
 
-The host socket read p95 2 ms over n=200, with a 3 ms worst. `win2` read p95 0 ms over n=200, with a
-1 ms worst. Neither socket reconnected.
+The host socket read p95 2 ms over n=200, with a 3 ms worst, and 1 peer sat in the room at the end.
+`win2` read p95 0 ms over n=200, with a 1 ms worst, and 2 peers sat in the room. Neither socket
+reconnected, and each held 1 open socket at the end.
 
-The probe column shows four sockets from 01:44:59 to 02:44:40 UTC. All 240 probe rows count four,
-and no gap runs past 20 s.
+The probe column shows four sockets from 01:44:59.029 to 02:44:40.367 UTC. All 240 probe rows count
+four, and no gap between two rows runs past 20 s.
+
+The relay forwarded 332010 frames inside that window. That count is the rise in the probe column from
+the first row to the last. It is not a total from one socket, and it is not the relay counter, which
+had already passed 279471 when the run opened.
 
 Both pages ended at scroll ratio 0.35, which is 652 of 1864 px. A peer that rejoined landed on the
 same scroll.
 
-The relay forwarded 340,898 frames across the hour. That count comes from the probe column, not from
-one socket.
-
 Windows restarted port 8787 at 02:54:55 UTC, so its frame counter starts at 0 again. Do not compare
-that figure with the hour above.
-
-### The Windows side of the same hour
-
-The host and `win2` ran on the one Windows machine, so their two rows measure the local relay and not
-the path between two machines. They stay out of the LAN column for that reason.
-
-The host socket read p95 2 ms and a 3 ms worst over 200 samples, with 1 peer in the room at the end.
-`win2` read p95 0 ms and a 1 ms worst over 200 samples, with 2 peers in the room. Both sockets read 0
-reconnects, and each held 1 open socket at the end.
-
-The probe column opened the four-socket window at 01:44:59.029 UTC and closed it at 02:44:40.367. All
-240 rows in that window carry 4 sockets, and no gap between two rows is over 20 s.
-
-The relay forwarded 332010 frames inside that window. That count is the rise in the probe column from
-the first row to the last, and not a total from one socket.
-
-Both Windows pages ended at ratio 0.35, which is 652 of 1864 px. A peer that returns lands on the
-scroll the room holds.
-
-The relay restarted at 02:54:55 UTC with the new media route. That restart zeroed the counter, so no
-later row may be compared with the 332010 above.
+that counter with the 332010 above.
 
 ## The loopback baseline beside `lan2`
 
@@ -1786,6 +1767,13 @@ blocking, counts in `stats.stuckSeeks`, and the next message decides afresh. A t
 expiry.
 
 The core suite reads 90 of 90 and the spike suite 15 of 15 with the change in the tree.
+
+### The 240 s validation beside it
+
+A fourth run, `m2d`, put the same two pages on the long clip for 240 s on one Windows machine. The
+worst drift was 59 ms at 194 s, against the 250 ms target. The peer counted 1 seek, 1 correction, 0
+stuck seeks and 0 reconnects. No wedge happened, so the retry path did not run. That run is a
+loopback row. It proves the pair holds when no seek wedges, and nothing more.
 
 ### Verdict
 
