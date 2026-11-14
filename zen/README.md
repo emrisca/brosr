@@ -83,6 +83,10 @@ The panel floats inside the column. It keeps 8 pixels clear on each side. A 1 pi
 8 pixel radius make it read as a surface beside the tabs. A drag bar fills the gap above it. The
 column pads by the panel height plus 16 pixels, so the last tab stays reachable.
 
+**Card surface.** The panel page paints its own background, mixed 6 percent toward the text
+colour, so it lifts off the column like the media bar. The dock leaves the sidebar box
+transparent, so the page fills the rounded corner and the border draws on top.
+
 **Per-room height.** The panel writes its room id into its own URL. The dock reads that id from
 the sidebar browser, so each room keeps its own `brosr.panel.height.<room>` pref. A room without
 a stored height falls back to `brosr.panel.height`. A drag writes both keys.

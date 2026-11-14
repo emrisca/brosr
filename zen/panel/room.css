@@ -4,7 +4,9 @@
 
 :root {
   color-scheme: light dark;
-  --room-bg: var(--zen-main-browser-background, #f7f7f8);
+  /* A card lifts off the column, so the base mixes 6 percent toward the text
+     colour. Canvas and CanvasText follow the theme, so one recipe covers both. */
+  --room-bg: color-mix(in srgb, CanvasText 6%, var(--zen-main-browser-background, Canvas));
   --room-text: var(--zen-colors-primary, #1b1b1f);
   --room-dim: var(--zen-colors-secondary, #5b5b64);
   --room-border: var(--zen-colors-border, rgb(0 0 0 / 14%));
@@ -19,7 +21,6 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --room-bg: var(--zen-main-browser-background, #1c1b22);
     --room-text: var(--zen-colors-primary, #fbfbfe);
     --room-dim: var(--zen-colors-secondary, #a8a7b0);
     --room-border: var(--zen-colors-border, rgb(255 255 255 / 14%));
