@@ -1,4 +1,4 @@
-// The bus moves files between two machines, so the test runs the real CLI
+// The bus moves files between two machines. Each test runs the real CLI
 // against a temporary root. No Syncthing and no network take part.
 
 import test from 'node:test';
@@ -183,6 +183,23 @@ test('a message cannot name the same side twice', () => {
     assert.equal(error.status, 1);
     assert.match(String(error.stderr), /different side/);
     assert.equal(run(root, 'list', '--side=mac').count, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a truncated message does not stop the claim', () => {
+  const root = tempRoot();
+  try {
+    const broken = path.join(root, 'inbox', 'win', '20260101-000000-mac-9999.json');
+    fs.mkdirSync(path.dirname(broken), { recursive: true });
+    fs.writeFileSync(broken, '{"id":"20260101-000000-mac-9999","from":"mac","to":"wi');
+    const sent = run(root, 'send', '--from=mac', '--to=win', '--payload={"n":1}');
+
+    const claimed = run(root, 'claim', '--side=win');
+    assert.equal(claimed.id, sent.id, 'the readable message is claimed');
+    assert.ok(fs.existsSync(broken), 'the truncated file goes back to the inbox');
+    assert.deepEqual(fs.readdirSync(path.join(root, 'processing', 'win')), [`${sent.id}.json`]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

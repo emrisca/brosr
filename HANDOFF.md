@@ -1595,6 +1595,15 @@ Both sides follow one read rule now. Read a message only after its temp is gone,
 bytes parse. `handoff.mjs` does not enforce that yet. A partial file stops a claim with a parse
 error. Nothing skips it, so the rule stays manual until the claim path grows a check.
 
+### `claim` now skips a file that does not parse
+
+A file caught mid-pull parses as nothing. `claim` used to stop the whole run on it. It now returns
+the file to the inbox, reports it in a `skipped` event, and takes the next message. A later turn
+reads it once the pull finishes.
+
+I tested this with a truncated message. `claim` printed `skipped` with that file name, left the file
+in the inbox, and printed `empty` with exit 2. The run did not stop.
+
 ## `lan2`, not yet booked
 
 `lan2` stays unbooked. It needs a start time from you, and I will not pick one.

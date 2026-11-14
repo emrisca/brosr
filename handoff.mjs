@@ -145,6 +145,7 @@ function claimOne(side) {
   const inbox = dir.inbox(side)
   const claimed = dir.processing(side)
   fs.mkdirSync(claimed, { recursive: true })
+  const skipped = []
   for (const name of messagesIn(inbox)) {
     const from = path.join(inbox, name)
     const to = path.join(claimed, name)
@@ -157,11 +158,21 @@ function claimOne(side) {
     let body
     try {
       body = JSON.parse(fs.readFileSync(to, 'utf8'))
-    } catch (error) {
-      fail(`message ${name} is not valid JSON: ${error.message}`)
+    } catch {
+      // A pull mid-flight leaves bytes that parse as nothing. Put the file back, so a
+      // later turn reads it, and take the next message instead of stopping the run.
+      try {
+        fs.renameSync(to, from)
+      } catch {
+        // The file moved again. The next turn finds it wherever it sits.
+      }
+      skipped.push(name)
+      continue
     }
+    if (skipped.length) emit({ event: 'skipped', side, files: skipped })
     return { ...body, path: to }
   }
+  if (skipped.length) emit({ event: 'skipped', side, files: skipped })
   return null
 }
 
