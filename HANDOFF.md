@@ -1746,7 +1746,7 @@ Both Mac peers stopped by their own timer at 03:43:59.191, after 2400.052 s. Eac
 
 ### The window numbers
 
-Over the 1232 s overlap, `mac1` read p50 30 ms, p95 34 ms and a 351 ms worst over 1233 RTT
+Over the 1220 s probe window, `mac1` read p50 30 ms, p95 34 ms and a 351 ms worst over 1233 RTT
 samples. `mac2` reads within 1 ms of that.
 
 Presence on the Mac side read p50 44 ms for `mac2`, 23 ms for `win2` and 23 ms for the host. The
@@ -1768,6 +1768,13 @@ for the rest of the run.
 
 Three runs agree. `m2a` froze at 321.169 s. `m2b` ended 40 s behind. `m2c` logged `seeking` true
 from 149 s to 293 s, with the time stuck at 151.069 s.
+
+### Windows cleared four causes
+
+Windows tested four suspects and cleared each one. Range requests answer 206 with a correct
+`Content-Range` at 0, 500000 and 12000000. The clip decodes clean, with continuous packets around
+150 s. A bare page seeks to 200, 400 and 600 without a stall, with and without a rate change. Two
+such pages seeking at once also stay clean.
 
 ### The seek timeout
 
