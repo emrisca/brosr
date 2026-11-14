@@ -74,8 +74,25 @@ without a sample shows no time, not a dash.
 
 **Docked split.** The launcher docks the panel under the tab column. A horizontal bar above the
 panel resizes it on drag. The height stays between 120 pixels and the window height minus 220.
-The drag saves `brosr.panel.height` for the next run. Hide in the panel header closes the
-sidebar. The room page button, the toolbar button or Ctrl+Alt+B opens it again.
+
+The sidebar box lives inside the tab box, and that box carries a `translate`. A fixed child then
+takes the tab box as its containing block, so the panel starts at the tab edge instead of the
+window edge. The dock moves the box under the document body and keeps the fixed edge at zero.
+
+**Per-room height.** The panel writes its room id into its own URL. The dock reads that id from
+the sidebar browser, so each room keeps its own `brosr.panel.height.<room>` pref. A room without
+a stored height falls back to `brosr.panel.height`. A drag writes both keys.
+
+**Show chip.** Hide in the panel header closes the sidebar. A closed panel shows a Room panel chip
+at the bottom left of the window. A click calls `SidebarController.show` for the
+saved sidebar id. The toolbar button and Ctrl+Alt+B open the panel too.
+
+**Headless dock proof.** `check.mjs` opens a second headless window with `--marionette`. The
+Marionette listener stops BiDi from reading tab content on this build, so the dock gets a window
+of its own. That window opens the bookmarks sidebar, which fills the same box as the room panel.
+The run reads the box rectangle there. It fails when the panel does not start at the window edge,
+is narrower than 300 pixels, or has no drag bar. That window also hides the sidebar and clicks
+the show chip, so the toggle runs in the same pass.
 
 **Entry points.** A room page shows a small Room panel button at its bottom edge. A click opens
 the sidebar, and the bridge falls back to a tab when the sidebar is unavailable.
@@ -90,8 +107,9 @@ node apps/brosr/zen/check.mjs
 `profile.mjs` writes the room profile and prints the command line. `check.mjs` starts the spike
 relay and builds the XPI with the panel inside. It starts Zen headless on port 9334 with
 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1`, installs the bridge through WebDriver BiDi, and opens a
-host room and a second peer tab. It drives the panel's Grant and Revoke buttons, then reads
-both tab datasets and the panel's own DOM. It writes `zen/.runtime/results.json`, then it
+host room and a second peer tab. It drives the panel's Grant and Revoke buttons, then reads both
+tab datasets and the panel's own DOM. A second headless window on Marionette port 2834 proves the
+dock, because the listener stops BiDi from reading tab content on this build. It writes `zen/.runtime/results.json`, then it
 kills the browser processes. The check deletes the default profile first, because a restored
 panel also drives control. `shortcut.mjs` is a separate headful proof of the Ctrl+Alt+B chord. On the Mac it posted the
 chord to the Zen process with `keypost.swift`. The room page then recorded
@@ -114,8 +132,9 @@ from `about:debugging` when the profile is new.
 - The bridge has no signature. Zen, like release Firefox, needs a signed XPI for a permanent
   install. The BiDi path in `check.mjs` installs a temporary add-on, and that is enough for a run.
 - The check opens the panel in a tab inside Zen and drives its Grant and Revoke buttons against
-  a second peer tab. It cannot draw Zen's sidebar or the toolbar button. Zen may host the
-  sidebar panel differently from Firefox, and the tab path is the one the check covers.
+  a second peer tab. It cannot draw Zen's sidebar or the toolbar button. A separate headless
+  window measures the dock with the bookmarks sidebar, so the room panel's own geometry is
+  untested there. Zen may host the sidebar panel differently from Firefox.
 - The check reads the panel page through BiDi, which needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` when
   Zen starts. Without it BiDi refuses the extension context. The run uses one host and one
   peer on this machine, so a real LAN run is still open.

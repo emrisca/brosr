@@ -27,6 +27,20 @@ function latencyLabel(data) {
 
 let lastReply = null;
 
+// The docked panel reads its own URL to key the height by room, so the room id
+// goes into the query string once the first reply names it.
+function rememberRoom(id) {
+  if (!id) return;
+  try {
+    const url = new URL(location.href);
+    if (url.searchParams.get('room') === id) return;
+    url.searchParams.set('room', id);
+    history.replaceState(null, '', url.pathname + url.search);
+  } catch {
+    // A refused URL change leaves the height on the shared pref.
+  }
+}
+
 function renderHistory(data) {
   const list = $('history');
   list.replaceChildren();
@@ -50,6 +64,7 @@ function renderHistory(data) {
 function render(reply) {
   lastReply = reply;
   const data = reply.data || {};
+  rememberRoom(reply.room);
   $('room').textContent = reply.room || 'room';
   $('role').textContent = reply.role || '';
   $('dot').dataset.state = data.socket === 1 ? 'live' : 'down';

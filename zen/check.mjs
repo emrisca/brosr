@@ -8,12 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
 import { makeZip } from '../spike/zip.mjs';
 import { findZen, writeProfile } from './profile.mjs';
+import { dockPanel } from './chrome.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const spike = path.join(here, '..', 'spike');
 const core = path.join(here, '..', 'core');
 const runtime = path.join(here, '.runtime');
 const PORT = Number(process.env.BROSR_ZEN_BIDI || 9334);
+const MARIONETTE = Number(process.env.BROSR_ZEN_MARIONETTE || 2834);
 const RELAY = 8787;
 const PEER = 'p2';
 const PEER_NAME = 'Peer Two';
@@ -194,6 +196,94 @@ async function waitPanelNotice(bidi, panelContext, phrase, timeoutMs = 20000) {
   return null;
 }
 
+// The dock runs in chrome scope. This build stops BiDi from reading tab
+// content while the Marionette listener runs, so the dock gets a window of its
+// own. The stock bookmarks sidebar fills the same box as the room panel, and
+// the BiDi run above proves the panel content.
+async function probeDock(zen) {
+  const dir = path.join(runtime, 'dock-profile');
+  fs.rmSync(dir, { recursive: true, force: true });
+  const profile = writeProfile(dir);
+  fs.appendFileSync(
+    path.join(profile, 'user.js'),
+    `user_pref("marionette.port", ${MARIONETTE});\n`
+  );
+  const browser = spawn(
+    zen,
+    [
+      '--profile',
+      profile,
+      '--no-remote',
+      '--new-instance',
+      '--headless',
+      '--marionette',
+      '--width',
+      '1280',
+      '--height',
+      '900',
+      'about:blank',
+    ],
+    {
+      stdio: 'ignore',
+      env: { ...process.env, MOZ_HEADLESS: '1', MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
+    }
+  );
+  const dock = {
+    injected: false,
+    geometry: null,
+    sidebar: 'viewBookmarksSidebar',
+    hidden: null,
+    restored: null,
+    error: null,
+  };
+  try {
+    const probe = await dockPanel({
+      port: MARIONETTE,
+      open: true,
+      sidebarId: 'viewBookmarksSidebar',
+      // The chip shows only while the panel is shut, so the probe shuts the
+      // sidebar and clicks the chip in the same session.
+      after: [
+        { script: 'return (window.__brosrHidePanel ? window.__brosrHidePanel() : "")', wait: 0 },
+        { script: 'return (window.__brosrDock ? window.__brosrDock() : null)', wait: 800 },
+        {
+          script: 'return (window.__brosrClickToggle ? window.__brosrClickToggle() : false)',
+          wait: 0,
+        },
+        { script: 'return (window.__brosrDock ? window.__brosrDock() : null)', wait: 1200 },
+      ],
+    });
+    if (!probe.ok) {
+      dock.error = probe.error || 'the dock script did not run';
+      return dock;
+    }
+    dock.injected = true;
+    dock.geometry = probe.result || null;
+    const g = dock.geometry;
+    if (!g || typeof g !== 'object') dock.error = 'the dock script returned no state';
+    else if (!g.docked) dock.error = 'the panel is not docked';
+    else if (!g.open) dock.error = 'the sidebar did not open';
+    else if (Math.abs(g.x) > 2) dock.error = `the panel starts at x=${g.x}`;
+    else if (g.panelWidth < 300) dock.error = `the panel is ${g.panelWidth} wide`;
+    else if (g.panelHeight < 120) dock.error = `the panel is ${g.panelHeight} tall`;
+    else if (!g.bar) dock.error = 'the drag bar is missing';
+    const steps = Array.isArray(probe.steps) ? probe.steps : [];
+    dock.hidden = steps[1] || null;
+    dock.restored = steps[3] || null;
+    if (!dock.error && dock.hidden) {
+      if (dock.hidden.open) dock.error = 'the sidebar did not hide';
+      else if (!dock.hidden.toggle) dock.error = 'the show chip stayed hidden';
+    }
+    if (!dock.error && !dock.restored) dock.error = 'the show chip did not answer';
+    else if (!dock.error && !dock.restored.open) {
+      dock.error = 'the show chip did not open the sidebar';
+    }
+    return dock;
+  } finally {
+    killTree(browser);
+  }
+}
+
 async function main() {
   const zen = findZen() || arg('zen', '');
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary. Pass --zen=<path>.');
@@ -274,6 +364,7 @@ async function main() {
 
     // A real second peer joins the room, so the grant has a receiver.
     const peerContext = (await bidi.cmd('browsingContext.create', { type: 'tab' })).context;
+    log('[zen] tabs', JSON.stringify({ host: context, peer: peerContext }));
     const peerUrl = `http://127.0.0.1:${RELAY}/room-b.html?role=peer&room=${room}&peer=${PEER}&name=${encodeURIComponent(PEER_NAME)}`;
     await bidi.cmd('browsingContext.navigate', {
       context: peerContext,
@@ -290,7 +381,11 @@ async function main() {
       30000
     );
     if (!joined || !Array.isArray(joined.peerList)) {
-      throw new Error('the host never saw the second peer');
+      const peerState = await readDataset(bidi, peerContext).catch(() => null);
+      throw new Error(
+        'the host never saw the second peer. peer=' +
+          JSON.stringify(peerState && { socket: peerState.socket, error: peerState.error })
+      );
     }
 
     const panelContext = await waitPanelReady(bidi);
@@ -377,6 +472,7 @@ async function main() {
         controls: peerRevoked.controls,
       },
       shortcut,
+      dock: null,
       panel: {
         state: grantedPanel.state,
         room: grantedPanel.room,
@@ -396,6 +492,15 @@ async function main() {
     killTree(browser);
     killTree(relay);
     await sleep(300);
+  }
+
+  if (result.check.ok) {
+    result.dock = await probeDock(zen);
+    if (result.dock.error) {
+      result.check.ok = false;
+      result.check.error = 'dock: ' + result.dock.error;
+    }
+    log('[zen] dock', JSON.stringify(result.dock));
   }
 
   fs.mkdirSync(runtime, { recursive: true });
