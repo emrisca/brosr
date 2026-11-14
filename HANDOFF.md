@@ -1604,6 +1604,24 @@ reads it once the pull finishes.
 I tested this with a truncated message. `claim` printed `skipped` with that file name, left the file
 in the inbox, and printed `empty` with exit 2. The run did not stop.
 
+## `lan2` runs on the tailnet, not the LAN
+
+Windows opened room `lan2` at 01:44:48.429 UTC with the host page and `win2`. The Mac joined with
+`mac1` and `mac2` over the tailnet at `100.67.220.25:8787`, and the relay reads 4 sockets.
+
+The LAN address failed. A ping from the Mac to 192.168.8.161 lost 100 percent of its packets. The Mac
+sits on 192.168.12.0/24 and routes outward through 192.168.12.1, so the two machines do not share
+a subnet.
+
+This row is a tailnet hour. It never enters a LAN column and it cannot close M1.
+
+One fault was mine. The relay first ran under `C:\Program Files\nodejs\node.exe`, which held no
+inbound allow rule, so the Windows firewall dropped the Mac's SYN. The relay now runs from the
+Immich Desktop runtime node, which already owned an allow rule on Private and Public. A rule for the
+other binary needs elevation, and my shell is not elevated.
+
+Windows runs to 02:54:48 UTC. The Mac peers stop at 02:44:48, so the four-socket window is 3600 s.
+
 ## `lan2`, not yet booked
 
 `lan2` stays unbooked. It needs a start time from you, and I will not pick one.
