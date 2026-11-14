@@ -1613,7 +1613,8 @@ The LAN address failed. A ping from the Mac to 192.168.8.161 lost 100 percent of
 sits on 192.168.12.0/24 and routes outward through 192.168.12.1, so the two machines do not share
 a subnet.
 
-This row is a tailnet hour. It never enters a LAN column and it cannot close M1.
+This row is a tailnet hour. It never enters a LAN column and it cannot close M1. The Mac reports
+that both machines left one network, which ends the firewall question.
 
 You settled the cause. The two machines no longer share a network, and they meet only through
 Tailscale. No firewall rule and no port change can open a LAN face between them.
@@ -1628,3 +1629,32 @@ Windows runs to 02:54:48 UTC. The Mac peers stop at 02:44:48, so the four-socket
 
 The first pair died after ten seconds. Each peer now starts in its own session, so the tool run
 cannot kill it with the shell.
+
+## The loopback baseline beside `lan2`
+
+A two-peer run on `127.0.0.1` gives the floor for the `lan2` numbers. Both peers stopped after 179
+samples, with 0 reconnects.
+
+| peer | p95 median | p95 max | p50 last |
+|---|---|---|---|
+| b1 | 1 ms | 4 ms | 1 ms |
+| b2 | 1 ms | 2 ms | 1 ms |
+
+The tailnet row reads p95 49 ms and 48 ms through the same code path. The network owns that gap,
+not the harness.
+
+## What a LAN row needs
+
+These two machines cannot produce a LAN row as they stand. This Mac carries `192.168.12.137` on
+its wired interface, with gateway `192.168.12.1`. The Windows machine sits at `192.168.8.161`. A traceroute from here
+reaches `192.168.12.1`, then `192.0.0.1`, which is the ISP side. The packet leaves the network.
+
+One of four changes would create the row:
+
+- both machines on one switch or router, in one subnet.
+- a cable between them, with a static address at each end.
+- a router that forwards between `192.168.12.0/24` and `192.168.8.0/24`.
+- a bridge or Internet Connection Sharing on the Windows machine.
+
+The first is the smallest change. One router with two free ports carries both machines.
+
