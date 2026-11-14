@@ -1526,7 +1526,8 @@ forced a rebuild, and one checkout wrote CRLF. Nothing needs stopping.
 
 Windows ran one hour of four pages on a single host, with every face on loopback. It closed at
 22:37:49 UTC after 3600 s. All four pages held, with 0 reconnects and worst p95 2 ms. The worst
-single sample was 236 ms, from win4 to win2.
+single sample was 236 ms, from win4 to win2. The host page listed three peers and the other pages
+listed four, because a page counts its own entry.
 
 This row is a control, not a LAN measurement. One host and a loopback path say nothing about two
 machines on a shared network. M1 stays partial, and this row never enters the Mac or Windows
@@ -1537,46 +1538,23 @@ without a reconnect or a stall.
 
 ## Syncthing over the tailnet
 
-Both devices carried `dynamic` only, so sync depended on discovery. The Windows side now lists
-`dynamic` and `tcp://100.85.253.36:22000` for the device `MacOS`. The Mac must add
-`tcp://100.67.220.25:22000` to the device `emrys`.
+Both devices carried `dynamic` only, so sync depended on discovery. Each side now pins the other by
+tailnet address, tcp and quic, and keeps `dynamic` as a fallback.
 
 Tailnet names are `emrys-3` at 100.67.220.25 and `4831` at 100.85.253.36. A tailnet ping from
 Windows to the Mac returned in 5 ms over a direct path.
-
-The Mac pinned both addresses and reports one connection at `[fd7a:115c:a1e0::e035:dc19]:22000`.
-All four folders are idle with `needFiles` 0, so the bytes move over the tailnet. Its temp file
-count is 0.
 
 The GUI stays on `127.0.0.1:8384`. Tailscale Serve publishes it at
 `https://emrys-3.tailde46b4.ts.net/` for the tailnet only. One attempt set the GUI to `0.0.0.0`,
 which opened it on every interface, and I reverted it. The proxy hostname failed the Syncthing host
 check with 403, so the GUI config carries `insecureSkipHostcheck`. The listener is still loopback.
 
-## The `m1` control window
-
-Room `m1` ran four pages in one headless Zen on the Windows host for 3600 s, from 21:37:48.611.
-Every page read 0 reconnects. Every face read p95 2 ms or less. The worst single sample read 236 ms,
-from `win4` to `win2`.
-
-The host page listed three peers and the other pages listed four. That difference comes from the
-page counting its own entry.
-
-Four pages on one host exchange over loopback. This row is the control beside `lan1`, and it cannot
-close M1 on its own.
-
-### The `win-0096` reply reached the Mac empty
-
-The Mac reported that `win-0096` arrived with no payload and no `in_reply_to`. `reply()` sets both
-fields and writes a temp file before the rename, so the body left here complete. My `inbox/mac`
-held a Syncthing temp for that id, so the pull on the Mac was mid-flight at 22:37:55. I sent the
-body again.
-
 ### Mac pin applied
 
 The Mac now lists three addresses for the device `emrys`: `tcp://100.67.220.25:22000`,
 `quic://100.67.220.25:22000` and `dynamic`. The write returned HTTP 200. The connection stayed up at
-`[fd7a:115c:a1e0::e035:dc19]:22000` with `isLocal false`.
+`[fd7a:115c:a1e0::e035:dc19]:22000` with `isLocal false`. All four folders are idle with `needFiles`
+0, so the bytes move over the tailnet. Its temp file count is 0.
 
 Windows finished the reverse. Its `MacOS` device lists `dynamic`, `tcp://100.85.253.36:22000` and
 `quic://100.85.253.36:22000`. Its connections list reads the Mac at
@@ -1603,7 +1581,8 @@ relay's own count. A four second smoke test against a local relay produced 4 pro
 
 ### An empty message can land
 
-`win-0096` arrived with an empty payload and no `in_reply_to`, though Windows wrote a full body. The
+`win-0096` arrived with an empty payload and no `in_reply_to`, though Windows wrote a full body.
+`reply()` sets both fields and renames a temp file into place, so the body left Windows complete. The
 Windows mirror of `inbox/mac` held `~syncthing~20261113-223755-win-0096.json.tmp`, so a pull
 overlapped the write. My bulk temp deletes likely contributed, because I ran them while sync could
 pull.
@@ -1611,6 +1590,10 @@ pull.
 Two rules follow. Treat an empty payload as a suspect file and ask for a resend by id. Never delete
 Syncthing temps in bulk while the folder may be pulling. Better still, write the temp outside the
 synced folder. That needs a change to `handoff.mjs`.
+
+Both sides follow one read rule now. Read a message only after its temp is gone, and only when its
+bytes parse. `handoff.mjs` does not enforce that yet. A partial file stops a claim with a parse
+error. Nothing skips it, so the rule stays manual until the claim path grows a check.
 
 ## `lan2`, not yet booked
 
