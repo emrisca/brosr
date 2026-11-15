@@ -21,6 +21,10 @@ export const RELAY_DRIFT_SECONDS = 1;
 export const RELAY_NUDGE_SECONDS = 0.25;
 // A seek takes a moment to land. Another one before it lands fights the first.
 export const RELAY_SEEK_SETTLE_MS = 700;
+// A paused or unbuffered element can hold a seek open. The drift then stays
+// large, so the seek branch would win every tick and the film would sit at the
+// old point for the whole room. A fresh seek is what frees it.
+export const RELAY_SEEK_TIMEOUT_MS = 8000;
 export const RELAY_NUDGE_RATE = 1.05;
 
 const YT_HOST = /(^|\.)(youtube\.com|youtu\.be)$/i;
@@ -303,7 +307,9 @@ export class RemoteMediaSync {
     this.hostname = hostname;
     this.now = now;
     this.lastSeekAt = -Infinity;
-    this.stats = { applied: 0, seeks: 0, skips: 0, last: null };
+    this.seekIssuedAt = -Infinity;
+    this.lastSeekTarget = null;
+    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, last: null };
   }
 
   video() {
@@ -383,9 +389,32 @@ export class RemoteMediaSync {
     // for the moment the room resumes.
     const paused = !frame.playing;
     const seekLimit = paused ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
-    if (Math.abs(drift) > seekLimit && now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS) {
+    // A seek that never lands keeps the drift large, and this branch would win
+    // every tick, so the film would never catch up. The retry is the one write
+    // that frees the element, and the count says it happened.
+    if (
+      video.seeking &&
+      this.lastSeekTarget !== null &&
+      now - this.seekIssuedAt > RELAY_SEEK_TIMEOUT_MS
+    ) {
       video.currentTime = expected;
       this.lastSeekAt = now;
+      this.seekIssuedAt = now;
+      this.lastSeekTarget = expected;
+      this.stats.stuckSeeks += 1;
+      this.stats.applied += 1;
+      this.stats.last = 'seek-retry';
+      return { ok: true, action: 'seek', retry: true, drift: Math.round(drift * 1000) / 1000 };
+    }
+    if (
+      Math.abs(drift) > seekLimit &&
+      !video.seeking &&
+      now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS
+    ) {
+      video.currentTime = expected;
+      this.lastSeekAt = now;
+      this.seekIssuedAt = now;
+      this.lastSeekTarget = expected;
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';

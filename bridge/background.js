@@ -42,6 +42,7 @@ const memory = {
   lastSelftest: null,
   lastRoomStatus: null,
   remoteKeyTabs: null,
+  mediaTabKeys: null,
 };
 
 async function state() {
@@ -105,6 +106,7 @@ api.tabs.onRemoved.addListener((id) => {
   announced.delete(id);
   remoteTabs.delete(id);
   mediaTabs.delete(id);
+  save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
   for (const [key, tabId] of [...remoteKeys]) {
     if (tabId !== id) continue;
@@ -180,6 +182,31 @@ state()
 // Tabs with a player, keyed by the film each one shows. The room tab drives
 // playback through this map, because the film is usually in another tab.
 const mediaTabs = new Map();
+// A worker restart empties that map, and a film tab only announces a new key
+// when the film changes. The book keeps the last entry per tab, so a paused tab
+// is still reachable after the worker comes back. A write happens only when a
+// key changes, not on every four-a-second report.
+const mediaBook = () =>
+  Object.fromEntries(
+    [...mediaTabs].map(([id, entry]) => [String(id), { key: entry.key, at: entry.at }])
+  );
+async function rememberMediaTab(id, key) {
+  const next = { key: String(key || ''), at: Date.now() };
+  const prev = mediaTabs.get(id);
+  mediaTabs.set(id, next);
+  if (!prev || prev.key !== next.key) await save({ mediaTabKeys: mediaBook() });
+}
+state()
+  .then((saved) => {
+    const book = saved && saved.mediaTabKeys;
+    if (!book || typeof book !== 'object') return;
+    for (const [raw, entry] of Object.entries(book)) {
+      const id = Number(raw);
+      if (!validId(id) || !entry || !entry.key) continue;
+      mediaTabs.set(id, { key: String(entry.key), at: Number(entry.at) || Date.now() });
+    }
+  })
+  .catch(() => {});
 // A host tab can reach the open path from several frames at once. One slot per
 // host tab keeps that burst to a single local tab.
 const opening = new Set();
@@ -494,9 +521,10 @@ async function handle(message, sender) {
     const id = await roomTab();
     if (id === from) {
       mediaTabs.delete(from);
+      save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'room-tab' };
     }
-    mediaTabs.set(from, { key: String(message.key || ''), at: Date.now() });
+    await rememberMediaTab(from, message.key);
     return { ok: true, tabs: mediaTabs.size };
   }
   if (message.type === 'brosr:media-out') {
@@ -504,7 +532,7 @@ async function handle(message, sender) {
     if (!validId(from)) return { ok: false, reason: 'no-tab' };
     const media = message.state;
     if (!media || typeof media !== 'object' || !media.key) return { ok: false, reason: 'state' };
-    mediaTabs.set(from, { key: String(media.key), at: Date.now() });
+    await rememberMediaTab(from, media.key);
     await loadPrefs();
     if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     // A tab that is not playing must not take the room away from the film the
@@ -576,6 +604,7 @@ async function handle(message, sender) {
           .then(() => true)
           .catch(() => {
             mediaTabs.delete(id);
+            save({ mediaTabKeys: mediaBook() });
             return false;
           })
       )

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RELAY_SEEK_TIMEOUT_MS,
   RELAY_TICK_MS,
   RelayMediaAdapter,
   RemoteMediaSync,
@@ -28,6 +29,7 @@ function fakeVideo({
     currentTime,
     paused,
     ended: false,
+    seeking: false,
     readyState,
     playbackRate,
     volume,
@@ -81,6 +83,33 @@ test('a playing room starts a paused film even when the seek cannot land', () =>
   assert.equal(result.action, 'seek');
   assert.equal(video.paused, false);
   assert.equal(video.plays, 1);
+});
+
+test('a seek that never lands is retried, not stacked, and not left holding the film', () => {
+  const video = fakeVideo({ currentTime: 0, paused: false });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+  const first = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(first.action, 'seek');
+  // The element takes the seek and never finishes it. A second write inside
+  // the timeout would fight the first, so the tick leaves it alone.
+  video.seeking = true;
+  now += 500;
+  const held = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(held.action, 'tick');
+  assert.equal(sync.stats.seeks, 1);
+  // Past the timeout the seek is stuck, and one fresh seek frees it.
+  now += RELAY_SEEK_TIMEOUT_MS;
+  const retry = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(retry.action, 'seek');
+  assert.equal(retry.retry, true);
+  assert.equal(sync.stats.stuckSeeks, 1);
+  assert.equal(video.currentTime, 100);
 });
 
 test('a YouTube tab reads its own player and names the film', () => {
