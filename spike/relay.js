@@ -16,8 +16,11 @@ const ROOT = path.join(__dirname, 'fixtures');
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
+  '.svg': 'image/svg+xml',
 };
 
 // One table per room. A frame never crosses from one room to another.
@@ -89,8 +92,25 @@ const server = http.createServer((req, res) => {
     serve(path.join(__dirname, '..', 'assets', path.basename(url.pathname)), res);
     return;
   }
-  const rel = url.pathname === '/' ? '/sync.html' : url.pathname;
-  const file = path.join(ROOT, rel);
+  // The landing page is the room front door, with one tile per Brosr app. It
+  // sits beside the fixtures so a room and its apps ship together.
+  if (url.pathname === '/' || url.pathname === '/index.html') {
+    serve(path.join(__dirname, '..', 'landing', 'index.html'), res);
+    return;
+  }
+  if (url.pathname === '/landing.css') {
+    serve(path.join(__dirname, '..', 'landing', 'landing.css'), res);
+    return;
+  }
+  if (url.pathname === '/canvas' || url.pathname.startsWith('/canvas/')) {
+    const name =
+      url.pathname === '/canvas' || url.pathname === '/canvas/'
+        ? 'index.html'
+        : path.basename(url.pathname);
+    serve(path.join(__dirname, '..', 'landing', 'canvas', name), res);
+    return;
+  }
+  const file = path.join(ROOT, url.pathname);
   if (!file.startsWith(ROOT)) {
     res.writeHead(403);
     res.end('forbidden');

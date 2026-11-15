@@ -765,6 +765,11 @@ actuator is not in v1, and the first run says both.
 
 Newest first. Each line names what changed, not what was planned.
 
+- **15 November 2026.** The landing page replaces Room page B. The relay serves a tile grid
+  at `/`, with Canvas live and seven placeholders for the apps that come next. Canvas is a
+  custom drawing surface with five brushes, a stabilizer, symmetry, two layers, undo and a
+  PNG export. No page loads a font or a script from the network.
+
 - **15 November 2026.** Other-site media. A blob, an HLS manifest or a cross-origin player now
   names a film by its page, and the bridge runs in every frame so an embedded player reaches the
   room. A host command copies one site's login into the guest browser over the local debug port,
@@ -781,3 +786,69 @@ Newest first. Each line names what changed, not what was planned.
 - **13 November 2026.** M0 spike. Two profiles, a temporary XPI, uBlock Origin, a trusted BiDi
   key, and one synced `HTMLMediaElement`.
 - **12 November 2026.** Zen profile, bridge install in Zen, room panel, and grant plus revoke.
+
+## 19. The landing page and the Brosr apps
+
+The room tab used to open a second fixture page. It now opens the Brosr landing page: one
+grid of apps built for a shared browser, with the room already running behind it.
+
+### 19.1 What the page is
+
+A static page served by the relay at `/`. It loads no font and no script from the network,
+so it opens on a loopback room with no internet. It is a grid of tiles, one per app. Each
+tile names the app, says what it does in one line, and shows a state: Live, Soon or Slot.
+
+A tile is a link when the app exists and a plain card when it does not, so the page never
+offers a door that goes nowhere. The page follows the app tokens: the same warm clay accent,
+the same corner radius and the same muted foreground. It carries both colour modes from
+prefers-color-scheme, a visible focus ring, a skip link and one column below 640 pixels.
+
+### 19.2 Tiles at launch
+
+| Tile | State | What it is |
+| --- | --- | --- |
+| Canvas | Live | A shared drawing surface, the first app built for Brosr |
+| Watch | Soon | One playhead, with pause and seek shared |
+| Listen | Soon | A shared queue on one track |
+| Play | Soon | Turn based and canvas games |
+| Read | Soon | Long articles at the same scroll |
+| Notes | Soon | A page that edits as everyone types |
+| Browse | Soon | One tab set and one address bar |
+| Next app | Slot | A reserved card, so the grid never looks finished |
+
+The grid fills 248 pixel columns and wraps, so a wide window shows four tiles and a laptop
+shows three. A Soon card sits flat on the page and a Slot card carries a dashed border, so
+"not built" and "reserved" differ without reading the label.
+
+### 19.3 The Canvas app
+
+Canvas is the first tile with a working page. It is a custom drawing surface written for
+Brosr, with no embed and no dependency.
+
+- Brushes. Pencil, ink, marker, airbrush and eraser. Ink tapers at both ends, the marker
+  lays down translucent colour, and the airbrush builds a soft edge from dabs.
+- Stabilizer. A slider smooths incoming points, so a trackpad line still reads as a line.
+- Symmetry. Off, mirror left and right, mirror top and bottom, or all four. One stroke draws
+  every copy, so one undo removes them together.
+- Shapes. Line, box and oval, drawn with the current width and colour.
+- Layers. Sketch and Ink, each with a visibility toggle. A new stroke lands on the selected
+  layer.
+- Colour. Seven swatches and a custom picker.
+- History. Undo and redo for a stroke and for a clear. The buttons disable when a stack is
+  empty.
+- Export. PNG at twice the sheet size.
+- Navigation. Space drags the sheet, the wheel zooms at the pointer, and Fit frames the page.
+
+Keys: B, I, M, A, E, L, R and O pick a tool. Bracket keys change the width. Cmd Z undoes and
+Cmd Shift Z redoes.
+
+The app is one HTML file, one stylesheet and one script. The relay serves it as bytes, so a
+room opens it with no build step.
+
+### 19.4 What comes next on the page
+
+1. A room line with the live peer count from /status, instead of the static state.
+2. A tile that turns any URL into a room page, so the grid covers a site we did not build.
+3. A shared cursor on the landing page, so a person can point at the tile to open.
+4. Canvas strokes on the wire. The drawing model is a list of strokes with a tool and a
+   layer, which is the shape the input layer already relays.

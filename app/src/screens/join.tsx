@@ -98,7 +98,7 @@ export function JoinDialog({ open, onOpenChange }: Props) {
                 id="invite-link"
                 value={link}
                 onChange={(event) => setLink(event.target.value)}
-                placeholder="http://100.64.0.7:8787/room-b.html?room=..."
+                placeholder="http://100.64.0.7:8787/?room=..."
                 autoComplete="off"
                 spellCheck={false}
                 className="font-mono text-xs"
