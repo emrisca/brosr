@@ -114,13 +114,14 @@
 
     <main class="stage">
       <div id="viewport" class="viewport">
-        <canvas id="sheet" aria-label="Drawing surface"></canvas>
+        <canvas id="ground" aria-hidden="true"></canvas>
+        <canvas id="sheet" aria-label="Endless drawing surface"></canvas>
       </div>
       <div class="zoom" role="group" aria-label="Zoom">
         <button id="zoom-out" type="button" title="Zoom out">-</button>
         <output id="zoom-out-value">100%</output>
         <button id="zoom-in" type="button" title="Zoom in">+</button>
-        <button id="fit" type="button">Fit</button>
+        <button id="fit" type="button" title="Frame the ink">Fit</button>
       </div>
     </main>
   </div>
@@ -129,7 +130,7 @@
     <span id="tool-state">Pencil</span>
     <span id="coords">0, 0</span>
     <span id="room-state">Solo</span>
-    <span class="hint">Space drags the sheet. Wheel zooms. Cmd Z undoes.</span>
+    <span class="hint">Space drags the canvas. Wheel zooms. Cmd Z undoes.</span>
   </footer>
 
   <script src="./canvas.js"></script>

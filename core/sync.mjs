@@ -134,8 +134,8 @@ export function createRoomClient({
   let remoteGrant = false;
   let batcher = null;
   let lastInputFlush = -Infinity;
-  // The last trusted pointer position in viewport coordinates. Presence reuses
-  // it so a peer sees the mouse, not a placeholder at the origin.
+  // The last trusted pointer position as a share of the viewport. Presence
+  // reuses it so a peer sees the mouse, not a placeholder at the origin.
   let lastPointer = null;
   // The page that point belongs to. A cursor shows only on that page.
   let lastPointerUrl = null;
@@ -356,6 +356,33 @@ export function createRoomClient({
     );
   }
 
+  // Presence travels as a share of the viewport, so two window sizes put a
+  // cursor on the same part of the page. The overlay eases and jumps in pixels,
+  // so the share becomes pixels once, here, and the overlay never reads the
+  // wire form. One unit at the edge keeps the rest of the file honest.
+  function viewSize() {
+    const view = doc && doc.defaultView;
+    return {
+      width: Math.max(1, Number(view && view.innerWidth) || 1),
+      height: Math.max(1, Number(view && view.innerHeight) || 1),
+    };
+  }
+
+  function sharePoint(point) {
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
+    return {
+      x: Math.round(Math.max(0, Math.min(1, x)) * 10000) / 10000,
+      y: Math.round(Math.max(0, Math.min(1, y)) * 10000) / 10000,
+    };
+  }
+
+  function pointPixels(point) {
+    const size = viewSize();
+    return { x: point.x * size.width, y: point.y * size.height };
+  }
+
   function applyPeers() {
     if (!cursor) return;
     // Presence is what places a cursor, because it carries the page and the
@@ -377,11 +404,13 @@ export function createRoomClient({
       }
     }
     state.join({ id: message.peerId, name: message.name, colour: message.colour });
+    const point = sharePoint(message.point);
     const position = {
       id: message.peerId,
       name: message.name,
       colour: message.colour,
-      point: message.point,
+      // The share, because a tab that hands the cursor on needs the wire form.
+      point,
       url: message.url,
     };
     // Only the room tab holds a socket, so it is the one that shares a cursor
@@ -400,7 +429,7 @@ export function createRoomClient({
     if (!message.url || !here || message.url !== here) {
       cursor.removePeer(message.peerId);
     } else {
-      cursor.setPeer(position);
+      cursor.setPeer({ ...position, point: pointPixels(point) });
     }
     stats.cursors = cursor.stats().peers;
   }
@@ -762,7 +791,11 @@ export function createRoomClient({
         const x = Number(event.clientX);
         const y = Number(event.clientY);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        lastPointer = { x: Math.round(x), y: Math.round(y) };
+        const size = viewSize();
+        lastPointer = {
+          x: Math.round((x / size.width) * 10000) / 10000,
+          y: Math.round((y / size.height) * 10000) / 10000,
+        };
         lastPointerUrl = pageUrl ? pageUrl() : null;
       },
       { passive: true, capture: true }
@@ -776,7 +809,7 @@ export function createRoomClient({
     const x = Number(point.x);
     const y = Number(point.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    lastPointer = { x: Math.round(x), y: Math.round(y) };
+    lastPointer = sharePoint({ x, y });
     if (url) lastPointerUrl = String(url);
     return true;
   }

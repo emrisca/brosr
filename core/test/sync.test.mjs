@@ -591,26 +591,27 @@ test('a remote cursor reaches the browser, and a relayed pointer drives presence
       peerId: 'p2',
       name: 'P',
       colour: '#fff',
-      point: { x: 5, y: 6 },
+      point: { x: 0.35, y: 0.42 },
       url: 'https://example.com/',
       roomTime: 0,
     }),
     0
   );
   // The room tab hands this to its browser so every other tab can draw it.
+  // The point stays a viewport share, because that is the wire form.
   assert.deepEqual(shared.at(-1), {
     id: 'p2',
     name: 'P',
     colour: '#fff',
-    point: { x: 5, y: 6 },
+    point: { x: 0.35, y: 0.42 },
     url: 'https://example.com/',
   });
 
-  // A pointer that lives on another tab arrives as a point, not an event.
+  // A pointer that lives on another tab arrives as a share, not an event.
   assert.equal(client.setPointer({ point: 'no' }), false);
-  assert.equal(client.setPointer({ x: 40.4, y: 12.6 }, 'https://example.com/'), true);
+  assert.equal(client.setPointer({ x: 0.404, y: 0.126 }, 'https://example.com/'), true);
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 40, y: 13 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.404, y: 0.126 });
   assert.equal(sent.at(-1).url, 'https://example.com/');
 });
 
@@ -666,20 +667,54 @@ test('a cursor draws only on the page it belongs to', () => {
 
   // A peer on another page draws nothing here, so the pointer never lands on
   // an unrelated tab.
-  client.receive(presence('https://www.youtube.com/watch?v=1', 9), 0);
+  client.receive(presence('https://www.youtube.com/watch?v=1', 0.1), 0);
   assert.equal(client.publish().cursors, 0);
 
-  client.receive(presence('https://example.com/', 10), 0);
+  client.receive(presence('https://example.com/', 0.2), 0);
   assert.equal(client.publish().cursors, 1);
 
   // The peer moves to another page, so the cursor leaves this one.
-  client.receive(presence('https://www.youtube.com/watch?v=2', 11), 0);
+  client.receive(presence('https://www.youtube.com/watch?v=2', 0.3), 0);
   assert.equal(client.publish().cursors, 0);
+});
+
+test('a presence share lands the cursor at the same place in any window', () => {
+  const document = cursorDocument();
+  document.defaultView = { innerWidth: 1000, innerHeight: 500 };
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document,
+    pageUrl: () => 'https://example.com/',
+    send: () => {},
+  });
+
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      // 40% across and 35% down, the same share the landing page sends.
+      point: { x: 0.4, y: 0.35 },
+      url: 'https://example.com/',
+      roomTime: 0,
+    }),
+    0
+  );
+
+  // A 1000 by 500 window puts the arrow at 400 by 175 pixels, not at 0.4.
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(400px, 175px, 0)'
+  );
 });
 
 test('presence carries the last trusted pointer position', () => {
   const listeners = new Map();
   const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500 },
     addEventListener(type, fn) {
       const list = listeners.get(type) || [];
       list.push(fn);
@@ -699,14 +734,15 @@ test('presence carries the last trusted pointer position', () => {
     send: (frame) => sent.push(decode(frame)),
   });
 
+  // The wire carries a share of this window, never a raw pixel.
   doc.dispatch('pointermove', { isTrusted: true, clientX: 321.4, clientY: 222.6 });
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
 
   // Replayed remote input is synthetic, so it is not this page's pointer.
   doc.dispatch('pointermove', { isTrusted: false, clientX: 10, clientY: 10 });
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
 });
 
 test('the peer path reads and writes only through the adapter', () => {
