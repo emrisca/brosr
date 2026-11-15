@@ -57,3 +57,4 @@ coverage/
 Thumbs.db
 desktop.ini
 .localized
+app/src-tauri/resources/

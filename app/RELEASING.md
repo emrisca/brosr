@@ -29,6 +29,22 @@ and again every six hours, then offers the new version.
    https://github.com/<owner>/<repo>/releases/latest/download/latest.json
    ```
 
+## What ships inside
+
+`npm run build` stages the host into `src-tauri/resources` before the bundler
+runs. The app runs `host/cli.mjs` from that copy, and room state goes to the
+user data folder, never into the sealed bundle. The build generates the staged
+folder, and `.gitignore` keeps it out of the repository.
+
+Check a published bundle with the call the setup screen makes first:
+
+```sh
+node /Applications/Brosr.app/Contents/Resources/resources/host/cli.mjs detect
+```
+
+A browser list means the bundle carries everything setup needs. A missing file
+fails the build, not the first launch.
+
 ## The cycle
 
 ```sh

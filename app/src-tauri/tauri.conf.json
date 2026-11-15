@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Brosr",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "app.brosr.rooms",
   "mainBinaryName": "Brosr",
   "build": {
@@ -34,6 +34,14 @@
     "macOS": {
       "signingIdentity": "-"
     },
+    "resources": [
+      "resources/host",
+      "resources/core",
+      "resources/zen",
+      "resources/spike",
+      "resources/bridge",
+      "resources/assets"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

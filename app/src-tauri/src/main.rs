@@ -3,12 +3,13 @@
 // browser and the app always agree on one source of truth.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 // A window opened from Finder inherits a short PATH, so the usual install
 // prefixes are checked before the inherited one.
@@ -38,32 +39,41 @@ fn node_binary() -> Result<PathBuf, String> {
     Err("Node.js was not found. Install Node 20 or later, or set BROSR_NODE.".to_string())
 }
 
-// The repository root holds host/cli.mjs. A bundle points at its resources, and
-// a dev run falls back to the folder that compiled this file.
+// host/cli.mjs lives in the bundle resources, and in the repository during a
+// dev run. Each candidate is tried in the order a release needs it, so a bundle
+// never reaches for the folder path of the machine that built it. The last
+// resort names the bundle, because that path is the one a user can report.
 fn project_root() -> PathBuf {
     if let Ok(given) = std::env::var("BROSR_ROOT") {
         if !given.is_empty() {
             return PathBuf::from(given);
         }
     }
+
+    let resources = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("..").join("Resources")));
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(resources) = &resources {
+        // The bundler keeps the path relative to src-tauri, so a staged tree
+        // lands under resources/. A mapping that strips the prefix is also
+        // accepted, and both are checked.
+        candidates.push(resources.join("resources"));
+        candidates.push(resources.clone());
+    }
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if let Some(root) = here.parent().and_then(|app| app.parent()) {
-        if root.join("host").join("cli.mjs").exists() {
-            return root.to_path_buf();
+        candidates.push(root.to_path_buf());
+    }
+
+    for candidate in &candidates {
+        if candidate.join("host").join("cli.mjs").exists() {
+            return candidate.clone();
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let resources = dir.join("..").join("Resources");
-            if resources.join("host").join("cli.mjs").exists() {
-                return resources;
-            }
-        }
-    }
-    here.parent()
-        .and_then(|app| app.parent())
-        .map(|root| root.to_path_buf())
-        .unwrap_or(here)
+
+    resources.unwrap_or(here)
 }
 
 fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
@@ -71,9 +81,24 @@ fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
     if !cli.exists() {
         return Err(format!("The host CLI is missing at {}.", cli.display()));
     }
+
+    // Room state lives outside the bundle. The bundle is sealed, so a write
+    // inside it would break the signature on the next launch.
+    let state = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("There is no app data folder: {error}"))?;
+    let runtime = state.join("runtime");
+    for dir in [&state, &runtime] {
+        fs::create_dir_all(dir)
+            .map_err(|error| format!("Could not make {}: {error}", dir.display()))?;
+    }
+
     let mut child = Command::new(node_binary()?)
         .arg(&cli)
         .args(&args)
+        .env("BROSR_STATE", &state)
+        .env("BROSR_ZEN_RUNTIME", &runtime)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

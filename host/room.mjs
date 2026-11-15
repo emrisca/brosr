@@ -14,14 +14,22 @@ import { find, launchArgs, rememberStart } from './browsers.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(here, '..');
-const RUN_DIR = path.join(here, '.run');
+
+// ROOT holds the sources. The app bundle seals them, so nothing may write
+// there. The state folder comes from the app, which points it at the user data
+// directory. A dev run keeps the old layout under host/.run.
+const STATE = process.env.BROSR_STATE ? path.resolve(process.env.BROSR_STATE) : path.join(here, '.run');
+const RUNTIME = process.env.BROSR_ZEN_RUNTIME
+  ? path.resolve(process.env.BROSR_ZEN_RUNTIME)
+  : path.join(ROOT, 'zen', '.runtime');
+const RUN_DIR = STATE;
 const RUN_FILE = path.join(RUN_DIR, 'room.json');
 const PROFILE = path.join(RUN_DIR, 'profile');
 // A Chromium room keeps its own data directory, because the add-on format and
 // the profile layout are not the ones Gecko reads.
 const PROFILE_CHROME = path.join(RUN_DIR, 'profile-chrome');
-const CHROME_BRIDGE = path.join(ROOT, 'zen', '.runtime', 'bridge-chrome');
-const BRIDGE = path.join(ROOT, 'zen', '.runtime', 'bridge.xpi');
+const CHROME_BRIDGE = path.join(RUNTIME, 'bridge-chrome');
+const BRIDGE = path.join(RUNTIME, 'bridge.xpi');
 const RELAY = path.join(ROOT, 'spike', 'relay.js');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -52,7 +60,10 @@ export function ensureBridge() {
     const builtAt = fs.statSync(BRIDGE).mtimeMs;
     built = SOURCE_DIRS.some((dir) => newestMtime(dir) > builtAt);
   }
-  if (built) buildXpi(BRIDGE);
+  if (built) {
+    ensureDir(RUNTIME);
+    buildXpi(BRIDGE);
+  }
   return { file: BRIDGE, built };
 }
 
@@ -195,6 +206,7 @@ export function roomUrl({ port, room, key, name, role = 'host', peer = 'host', p
 // A Chromium room loads the bridge as an unpacked folder, so the build is a
 // directory and not an XPI.
 function ensureChromeBridge() {
+  ensureDir(RUNTIME);
   return { dir: buildChrome(CHROME_BRIDGE).dir, built: true };
 }
 
