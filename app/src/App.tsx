@@ -1,11 +1,14 @@
 import { useEffect, useState, type MouseEvent } from 'react';
+import { Users } from 'lucide-react';
 import { Brand } from '@/components/brand';
+import { Button } from '@/components/ui/button';
 import { StepRail } from '@/components/step-rail';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UpdateDialog } from '@/components/update-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Browsers } from '@/screens/browsers';
 import { Prepare } from '@/screens/prepare';
+import { FriendsDialog } from '@/screens/friends';
 import { Room } from '@/screens/room';
 import { Welcome } from '@/screens/welcome';
 import { useTheme } from '@/lib/theme';
@@ -39,6 +42,7 @@ export default function App() {
   const [run, setRun] = useState<Run | null>(null);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [friendsOpen, setFriendsOpen] = useState(false);
 
   // A room can outlive the window. On launch, adopt the run that is already
   // going instead of asking a second time.
@@ -120,6 +124,14 @@ export default function App() {
           <span className="text-sm font-medium tracking-tight">Brosr</span>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Friends"
+            onClick={() => setFriendsOpen(true)}
+          >
+            <Users />
+          </Button>
           <StepRail current={INDEX[step]} />
           <ThemeToggle theme={theme} onToggle={toggle} />
         </div>
@@ -190,6 +202,12 @@ export default function App() {
         <p className="font-mono text-xs text-muted-foreground">127.0.0.1</p>
       </footer>
 
+      <FriendsDialog
+        open={friendsOpen}
+        onOpenChange={setFriendsOpen}
+        run={run}
+        browserId={browser?.id}
+      />
       <UpdateDialog update={update} open={updateOpen} onLater={later} />
     </div>
   );

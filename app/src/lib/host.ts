@@ -97,3 +97,77 @@ export const start = (browser: string, name: string) =>
 export const status = () => host<Status | { ok: true; running: false }>(['status']);
 
 export const stop = () => host<{ ok: true; stopped: boolean }>(['stop']);
+
+// A friend is one lobby address on loopback, the local network or the tailnet.
+// The host refuses a public address, so the list cannot hold one.
+export type Friend = {
+  address: string;
+  host: string;
+  port: number;
+  name: string;
+  addedAt: number;
+};
+
+// One pending invitation. The link carries the room key, so it stays on this
+// machine and the lobby serves it over loopback only.
+export type Invite = {
+  id: string;
+  from: string;
+  name: string;
+  room: string;
+  url: string;
+  createdAt: number;
+};
+
+export type Lobby = {
+  running: boolean;
+  started: boolean;
+  pid: number;
+  port: number;
+  addresses: string[];
+};
+
+export type FriendsState = {
+  ok: true;
+  friends: Friend[];
+  invites: Invite[];
+  me: string;
+  lobby: Lobby;
+};
+
+export type Joined = {
+  joined: true;
+  room: string;
+  host: string;
+  port: number;
+  url: string;
+  name: string;
+  browser: { id: string; name: string; path: string; family?: 'gecko' | 'chromium' };
+  profile: string;
+  browserPid: number;
+};
+
+export type AnswerResult = FriendsState & {
+  accepted: boolean;
+  invite: Invite;
+  joined?: Joined;
+};
+
+export const friends = () => host<FriendsState>(['friends']);
+
+export const addFriend = (address: string, name: string) =>
+  host<FriendsState>(['friend-add', `--address=${address}`, `--name=${name}`]);
+
+export const removeFriend = (address: string) =>
+  host<FriendsState>(['friend-remove', `--address=${address}`]);
+
+export const sendInvite = (address: string) =>
+  host<FriendsState>(['invite-send', `--to=${address}`]);
+
+export const answerInvite = (id: string, accept: boolean, browser?: string) =>
+  host<AnswerResult>([
+    'invite-answer',
+    `--id=${id}`,
+    accept ? '--accept' : '--decline',
+    ...(browser ? [`--browser=${browser}`] : []),
+  ]);
