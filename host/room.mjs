@@ -10,8 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { newRoomKey } from '../core/seal.mjs';
 import { prepareProfile } from '../zen/profile.mjs';
 import { buildChrome, buildXpi } from '../zen/package.mjs';
-import { find, launchArgs, pinChromeExtension, rememberStart } from './browsers.mjs';
+import { detect, find, launchArgs, pinChromeExtension, rememberStart } from './browsers.mjs';
 import { blockerCopy, stageBlocker } from './blockers.mjs';
+import { bindHost } from './friends.mjs';
+import { formatAddress, parseInviteLink } from '../core/friends.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(here, '..');
@@ -25,10 +27,15 @@ const RUNTIME = process.env.BROSR_ZEN_RUNTIME
   : path.join(ROOT, 'zen', '.runtime');
 const RUN_DIR = STATE;
 const RUN_FILE = path.join(RUN_DIR, 'room.json');
+const JOIN_FILE = path.join(RUN_DIR, 'join.json');
 const PROFILE = path.join(RUN_DIR, 'profile');
 // A Chromium room keeps its own data directory, because the add-on format and
 // the profile layout are not the ones Gecko reads.
 const PROFILE_CHROME = path.join(RUN_DIR, 'profile-chrome');
+// A person can host and join. A second window on one profile is refused by the
+// browser, so a join keeps its own folder.
+const PROFILE_GUEST = path.join(RUN_DIR, 'profile-guest');
+const PROFILE_GUEST_CHROME = path.join(RUN_DIR, 'profile-guest-chrome');
 const CHROME_BRIDGE = path.join(RUNTIME, 'bridge-chrome');
 const BRIDGE = path.join(RUNTIME, 'bridge.xpi');
 const RELAY = path.join(ROOT, 'spike', 'relay.js');
@@ -68,26 +75,26 @@ export function ensureBridge() {
   return { file: BRIDGE, built };
 }
 
-function portOpen(port) {
+function portOpen(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once('error', () => resolve(false));
     server.once('listening', () => server.close(() => resolve(true)));
-    server.listen(port, '127.0.0.1');
+    server.listen(port, host);
   });
 }
 
-export async function freePort(start = 8787) {
+export async function freePort(start = 8787, host = '127.0.0.1') {
   for (let port = start; port < start + 40; port += 1) {
-    if (await portOpen(port)) return port;
+    if (await portOpen(port, host)) return port;
   }
   throw new Error(`no free port between ${start} and ${start + 39}`);
 }
 
-function relayReady(port) {
+function relayReady(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const request = http.get(
-      { host: '127.0.0.1', port, path: '/room-b.html', timeout: 800 },
+      { host, port, path: '/room-b.html', timeout: 800 },
       (response) => {
         response.resume();
         resolve(response.statusCode === 200);
@@ -100,11 +107,11 @@ function relayReady(port) {
 
 // The room count the app shows comes from the relay itself, so a peer that
 // left is gone on the next poll. A relay that cannot answer reads as zero.
-function relayStatus(port, room) {
+function relayStatus(port, room, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const request = http.get(
       {
-        host: '127.0.0.1',
+        host,
         port,
         path: `/status?room=${encodeURIComponent(room)}`,
         timeout: 800,
@@ -129,10 +136,10 @@ function relayStatus(port, room) {
   });
 }
 
-async function waitForRelay(port, ms = 12000) {
+async function waitForRelay(port, host = '127.0.0.1', ms = 12000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
-    if (await relayReady(port)) return true;
+    if (await relayReady(port, host)) return true;
     await delay(120);
   }
   return false;
@@ -190,8 +197,17 @@ export function roomId() {
 }
 
 // The room page reads the key from the fragment, so the relay never sees it.
-export function roomUrl({ port, room, key, name, role = 'host', peer = 'host', panel = true }) {
-  const url = new URL(`http://127.0.0.1:${port}/room-b.html`);
+export function roomUrl({
+  host = '127.0.0.1',
+  port,
+  room,
+  key,
+  name,
+  role = 'host',
+  peer = 'host',
+  panel = true,
+}) {
+  const url = new URL(`http://${formatAddress(host, port)}/room-b.html`);
   url.searchParams.set('role', role);
   url.searchParams.set('room', room);
   url.searchParams.set('peer', peer);
@@ -213,8 +229,8 @@ export function guestId() {
   return `guest-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-export function guestInvite({ port, room, key, name = 'Guest' }) {
-  return roomUrl({ port, room, key, name, role: 'peer', peer: guestId(), panel: false });
+export function guestInvite({ host = '127.0.0.1', port, room, key, name = 'Guest' }) {
+  return roomUrl({ host, port, room, key, name, role: 'peer', peer: guestId(), panel: false });
 }
 
 // A Chromium room loads the bridge as an unpacked folder, so the build is a
@@ -240,7 +256,7 @@ async function ensureChromeBlocker() {
 
 // A prepared profile is the slow step. The app shows the result line by line,
 // so this returns a report instead of only a path.
-export async function prepare({ browser: browserId, bridge = true, onProgress } = {}) {
+export async function prepare({ browser: browserId, bridge = true, onProgress, guest = false } = {}) {
   const browser = find(browserId);
   // A build that refuses the add-on cannot host a room. The reason is the same
   // one the setup screen shows, so nothing is hidden behind a silent launch.
@@ -248,7 +264,8 @@ export async function prepare({ browser: browserId, bridge = true, onProgress } 
     throw new Error(browser.reason || `${browser.name} cannot host a room`);
   }
   if (browser.family === 'chromium') {
-    const existed = fs.existsSync(PROFILE_CHROME);
+    const profileDir = guest ? PROFILE_GUEST_CHROME : PROFILE_CHROME;
+    const existed = fs.existsSync(profileDir);
     if (typeof onProgress === 'function') {
       onProgress({ step: 1, total: 2, label: 'Building the bridge' });
     }
@@ -260,11 +277,11 @@ export async function prepare({ browser: browserId, bridge = true, onProgress } 
     // The bridge goes first, because the room panel lives in it. The blocker
     // follows when its folder is there.
     const dirs = [bridge.dir, blocker.dir].filter(Boolean);
-    ensureDir(PROFILE_CHROME);
-    const pins = pinChromeExtension(PROFILE_CHROME, dirs);
+    ensureDir(profileDir);
+    const pins = pinChromeExtension(profileDir, dirs);
     return {
       browser,
-      profile: PROFILE_CHROME,
+      profile: profileDir,
       bridge: { file: bridge.dir, built: bridge.built, version: bridgeVersion() },
       extension: bridge.dir,
       extensionDirs: dirs,
@@ -277,7 +294,8 @@ export async function prepare({ browser: browserId, bridge = true, onProgress } 
     };
   }
   const bridgeInfo = bridge ? ensureBridge() : { file: BRIDGE, built: false };
-  const report = await prepareProfile(PROFILE, {
+  const profileDir = guest ? PROFILE_GUEST : PROFILE;
+  const report = await prepareProfile(profileDir, {
     bridge: bridgeInfo.file,
     native: browser.native,
     configure: false,
@@ -320,8 +338,9 @@ export async function start(options = {}) {
   // Each leg is timed, because the whole wait is the sum of three steps and the
   // report says which one cost the time.
   const began = Date.now();
+  const host = bindHost();
   const browser = find(options.browser);
-  const port = Number(options.port) || (await freePort());
+  const port = Number(options.port) || (await freePort(8787, host));
   const room = options.room || roomId();
   const name = options.name || 'Host';
   const key = newRoomKey();
@@ -330,7 +349,7 @@ export async function start(options = {}) {
   // written. A cold first run then costs the larger of the two legs, not both.
   const relay = spawn(process.execPath, [RELAY], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' },
+    env: { ...process.env, PORT: String(port), HOST: host },
     detached: true,
     stdio: 'ignore',
   });
@@ -345,14 +364,14 @@ export async function start(options = {}) {
   }
   const preparedAt = Date.now();
 
-  const ready = await waitForRelay(port);
+  const ready = await waitForRelay(port, host);
   if (!ready) {
     killTree(relay.pid);
     throw new Error(`the relay did not answer on port ${port}`);
   }
   const relayAt = Date.now();
 
-  const url = roomUrl({ port, room, key, name });
+  const url = roomUrl({ host, port, room, key, name });
   const args = launchArgs(browser, {
     profile: prepared.profile,
     url,
@@ -369,9 +388,10 @@ export async function start(options = {}) {
     browser: { id: browser.id, name: browser.name, path: browser.path, family: browser.family },
     room,
     name,
+    host,
     port,
     url,
-    invite: guestInvite({ port, room, key }),
+    invite: guestInvite({ host, port, room, key }),
     profile: prepared.profile,
     relayPid: relay.pid,
     browserPid: child.pid,
@@ -390,15 +410,84 @@ export async function start(options = {}) {
 
 export function stop() {
   const run = readRun();
-  if (!run) return { ok: true, stopped: false, reason: 'no room is running' };
-  const relay = killTree(run.relayPid);
-  const browser = killTree(run.browserPid);
-  try {
-    fs.rmSync(RUN_FILE);
-  } catch {
-    // A second stop has nothing to remove.
+  const joined = readJoin();
+  const relay = run ? killTree(run.relayPid) : false;
+  const browser = run ? killTree(run.browserPid) : false;
+  const guest = joined ? killTree(joined.browserPid) : false;
+  for (const file of [RUN_FILE, JOIN_FILE]) {
+    try {
+      fs.rmSync(file);
+    } catch {
+      // A second stop has nothing to remove.
+    }
   }
-  return { ok: true, stopped: relay || browser, relay, browser, room: run.room };
+  if (!run && !joined) return { ok: true, stopped: false, reason: 'no room is running' };
+  return {
+    ok: true,
+    stopped: relay || browser || guest,
+    relay,
+    browser,
+    guest,
+    room: run ? run.room : joined.room,
+  };
+}
+
+export function readJoin() {
+  try {
+    return JSON.parse(fs.readFileSync(JOIN_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeJoin(run) {
+  ensureDir(RUN_DIR);
+  fs.writeFileSync(JOIN_FILE, JSON.stringify(run, null, 2));
+  return run;
+}
+
+// Join a room someone invited this machine to. The link decides the relay, so
+// this launches one browser on the guest profile and keeps no local relay.
+// Every address in the link was checked against the loopback and tailnet rules
+// before the first byte is written to disk.
+export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
+  const link = parseInviteLink(url);
+  const previous = readJoin();
+  if (previous && alive(previous.browserPid)) killTree(previous.browserPid);
+
+  const available = detect();
+  const chosen = browserId || (available[0] && available[0].id);
+  if (!chosen) throw new Error('No browser can join a room. Run detect to see the builds.');
+  const browser = find(chosen);
+  if (!browser.supported) {
+    throw new Error(browser.reason || `${browser.name} cannot join a room`);
+  }
+
+  const prepared = await prepare({ browser: browser.id, guest: true });
+  const args = launchArgs(browser, {
+    profile: prepared.profile,
+    url: link.url,
+    extension: prepared.extensionDirs || prepared.extension || null,
+  });
+  const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
+  child.unref();
+
+  return writeJoin({
+    ok: true,
+    joined: true,
+    started: new Date().toISOString(),
+    browser: { id: browser.id, name: browser.name, path: browser.path, family: browser.family },
+    room: link.room,
+    host: link.host,
+    port: link.relayPort,
+    url: link.url,
+    name: name || link.name || 'Guest',
+    peer: link.peer,
+    profile: prepared.profile,
+    browserPid: child.pid,
+    bridge: prepared.bridge,
+    extensions: prepared.extensions,
+  });
 }
 
 export async function status() {
@@ -406,8 +495,9 @@ export async function status() {
   if (!run) return { ok: true, running: false };
   const relay = alive(run.relayPid);
   const browser = alive(run.browserPid);
-  const ready = relay ? await relayReady(run.port) : false;
-  const link = ready ? await relayStatus(run.port, run.room) : null;
+  const host = run.host || '127.0.0.1';
+  const ready = relay ? await relayReady(run.port, host) : false;
+  const link = ready ? await relayStatus(run.port, run.room, host) : null;
   const peers = link ? link.peers : 0;
   // The first peer proves the page loaded and the bridge ran. That wait is the
   // start time a person feels, so it is recorded once and kept for the order.
