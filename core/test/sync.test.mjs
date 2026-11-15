@@ -10,6 +10,7 @@ import {
   SEEK_SETTLE_MS,
   SEEK_TIMEOUT_MS,
 } from '../sync.mjs';
+import { RemoteMediaSync } from '../media-relay.mjs';
 import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -60,6 +61,92 @@ function makeClient(video) {
     },
   };
 }
+
+test('a paused room seeks a small gap instead of leaving a slow rate behind', () => {
+  const video = fakeVideo();
+  video.currentTime = 0.9;
+  video.paused = true;
+  const doc = {
+    querySelector: () => video,
+    location: { href: KEY, hostname: '127.0.0.1' },
+  };
+  const relay = new RemoteMediaSync({
+    document: doc,
+    href: KEY,
+    hostname: '127.0.0.1',
+    now: () => 1000,
+  });
+
+  const result = relay.handle({ key: KEY, position: 0, playing: false, rate: 1, at: 1000 });
+  assert.equal(result.action, 'seek');
+  assert.equal(video.currentTime, 0);
+  assert.equal(video.playbackRate, 1);
+});
+
+test('a granted peer drives the host film, and a revoked peer cannot', () => {
+  let local = 1000;
+  const relayed = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+  });
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'brave',
+    hostId: 'host',
+    now: () => local,
+    send: (text) => host.receive(text, local),
+    overlay: false,
+  });
+
+  // The host sees the same film, so only the sender can tell the two apart.
+  host.setGrant('brave', true);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    local
+  );
+  assert.equal(peer.isGranted(), true);
+  assert.equal(peer.sendMedia({ key: KEY, position: 12, playing: true, rate: 1 }), true);
+  assert.equal(relayed.length, 1);
+  assert.equal(relayed[0].key, KEY);
+  assert.equal(relayed[0].playing, true);
+  assert.equal(relayed[0].expected, 12);
+
+  // A host frame for its own film is an echo and never reaches the handler.
+  const echo = host.receive(
+    encode({ type: 'media', peerId: 'host', key: KEY, action: 'tick', position: 12, playing: true, roomTime: local }),
+    local
+  );
+  assert.equal(echo.ignored, 'self');
+  assert.equal(host.stats.mediaEcho, 1);
+  assert.equal(relayed.length, 1);
+
+  // A revoked peer keeps its own playhead.
+  host.setGrant('brave', false);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: false, roomTime: local }),
+    local
+  );
+  assert.equal(peer.isGranted(), false);
+  assert.equal(peer.sendMedia({ key: KEY, position: 40, playing: false }), false);
+  assert.equal(relayed.length, 1);
+
+  // A late frame from that peer is ignored even if it reaches the host.
+  const stale = host.receive(
+    encode({ type: 'media', peerId: 'brave', key: KEY, action: 'tick', position: 40, playing: false, roomTime: local }),
+    local
+  );
+  assert.equal(stale.ignored, 'no-grant');
+  assert.equal(relayed.length, 1);
+});
 
 test('one large drift causes one seek, and the next message does not stack another', () => {
   const video = fakeVideo();

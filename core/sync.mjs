@@ -98,6 +98,8 @@ export function createRoomClient({
     corrections: 0,
     stuckSeeks: 0,
     relayed: 0,
+    mediaEcho: 0,
+    mediaSent: 0,
     firstDrift: null,
     convergedAt: null,
     scroll: 0,
@@ -211,6 +213,31 @@ export function createRoomClient({
       roomTime: Math.round(roomTimeOf()),
     });
     if (stats.sentControls.length > 8) stats.sentControls.shift();
+    return true;
+  }
+
+  // A peer that holds control drives the room's playhead. Its room tab has no
+  // player, so the state arrives from the tab that does. The background has
+  // already dropped that report when playback sync is off. The frame carries
+  // this peer's id, and the host checks that id against its grants before it
+  // moves its own film.
+  function sendMedia(state) {
+    if (isHost() || !remoteGrant) return false;
+    if (!state || typeof state !== 'object' || !state.key) return false;
+    sendMessage({
+      type: 'media',
+      peerId,
+      key: state.key,
+      action: 'tick',
+      position: Number(state.position || 0),
+      playing: Boolean(state.playing),
+      rate: Number(state.rate || 1),
+      volume: Number(state.volume ?? 1),
+      buffering: Boolean(state.buffering),
+      ad: Boolean(state.ad),
+      roomTime: roomTimeOf(),
+    });
+    stats.mediaSent += 1;
     return true;
   }
 
@@ -376,6 +403,19 @@ export function createRoomClient({
   }
 
   function applyMedia(message, local) {
+    // The relay fans out to every socket, so a frame also comes back to the tab
+    // that sent it. A tab that applied its own anchor would chase itself, and a
+    // page player answers that chase with an error overlay.
+    if (message.peerId && message.peerId === peerId) {
+      stats.mediaEcho += 1;
+      return { ok: true, ignored: 'self' };
+    }
+    // A host follows only a peer it granted control to. Without this check a
+    // viewer could pull the host's film around, and a grant would change
+    // nothing about playback.
+    if (isHost() && !grants.active().some((grant) => grant.peerId === message.peerId)) {
+      return { ok: true, ignored: 'no-grant' };
+    }
     // The adapter owns every read and write. A player object and a media
     // element meet one interface, so the peer path never touches a field.
     const picked = media.pick(message.key);
@@ -385,10 +425,22 @@ export function createRoomClient({
       stats.position = Math.round(read.position * 1000) / 1000;
       stats.playing = read.playing;
     }
-    if (isHost()) return { ok: true };
-
     const expected =
       message.position + (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+    // The host's room tab holds no player. A granted peer drives the film
+    // through the tab that does, and the host keeps sending its own anchor.
+    if (isHost()) {
+      if (!onMedia) return { ok: false, reason: 'no-media' };
+      try {
+        if (onMedia({ ...message, expected, at: local }) === false) {
+          return { ok: false, reason: 'no-media' };
+        }
+        stats.relayed += 1;
+        return { ok: true, relayed: true };
+      } catch (error) {
+        return { ok: false, reason: 'handler', error: error.message };
+      }
+    }
     // A room tab with no player of its own hands the frame to the tab that
     // shows the film. The expected position is anchored on this tab's clock,
     // so the tab needs no clock estimate of its own.
@@ -732,6 +784,7 @@ export function createRoomClient({
         stats.playing = nowState.playing;
         sendMessage({
           type: 'media',
+          peerId,
           key: nowState.key,
           action: 'tick',
           position: nowState.position,
@@ -778,6 +831,7 @@ export function createRoomClient({
       corrections: stats.corrections,
       stuckSeeks: stats.stuckSeeks,
       relayed: stats.relayed,
+      mediaEcho: stats.mediaEcho,
       firstDrift: stats.firstDrift,
       convergedAt: stats.convergedAt,
       sampleCount: samples.length,
@@ -839,6 +893,8 @@ export function createRoomClient({
     sendApp,
     grants,
     setGrant,
+    sendMedia,
+    isGranted: () => remoteGrant,
     tick,
     presence,
     setPointer,

@@ -683,19 +683,21 @@ function renderTabs() {
   const note = $('tabs-note');
   if (!list || !auto || !note) return;
   const state = tabState;
-  const host = Boolean(state && state.role === 'host');
-  const guest = Boolean(state && state.role === 'peer');
-  auto.disabled = !host;
+  // Control is what allows a tab to go out. A granted peer holds it just as
+  // the host does, so a ticked tab works for either one.
+  const canShare = Boolean(state && state.canShare);
+  const guest = Boolean(state && !state.canShare);
+  auto.disabled = !canShare;
   auto.checked = Boolean(state && state.auto);
-  auto.title = host ? 'Send every new tab to the room.' : 'Only the host shares tabs.';
+  auto.title = canShare ? 'Send every new tab to the room.' : 'Ask the host for control first.';
   note.hidden = !guest;
-  note.textContent = guest
-    ? 'The host shares tabs. Tabs they share open here in the background.'
-    : '';
+  note.textContent = guest ? 'Ask the host for control, then tick a tab.' : '';
+  renderSync();
   list.replaceChildren();
-  // A guest never shares, so its own tabs are not a choice and the list stays
-  // empty. Showing them would suggest a control the guest does not have.
-  if (guest) return;
+  // A browser without control never shares, so its own tabs are not a choice
+  // and the list stays empty. Showing them would suggest a control it does not
+  // hold.
+  if (!canShare) return;
   const tabs = (state && Array.isArray(state.tabs) ? state.tabs : []).filter((tab) => !tab.room);
   if (!tabs.length) {
     const empty = document.createElement('li');
@@ -711,7 +713,7 @@ function renderTabs() {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = Boolean(tab.shared);
-    box.disabled = !host;
+    box.disabled = !canShare;
     box.setAttribute('aria-label', `Share ${tab.title || 'this tab'}`);
     const text = document.createElement('span');
     text.className = 'tab-text';
@@ -746,7 +748,9 @@ async function loadTabs() {
     if (reply && reply.ok) {
       tabState = {
         role: reply.role || '',
+        canShare: Boolean(reply.canShare || reply.role === 'host'),
         auto: Boolean(reply.auto),
+        sync: reply.sync !== false,
         tabs: Array.isArray(reply.tabs) ? reply.tabs : [],
       };
       renderTabs();
@@ -778,12 +782,50 @@ async function setShared(tab, box) {
       return;
     }
     box.checked = !wanted;
-    notice('Only the host shares tabs.', true);
+    notice('Ask the host for control first.', true);
   } catch {
     box.checked = !wanted;
     notice('The background page did not answer.', true);
   }
   box.disabled = false;
+}
+
+// Playback sync is a switch, not a property of a room. The panel says which
+// way it points and the background drops the frames either way.
+function renderSync() {
+  const box = $('sync-media');
+  const note = $('playback-note');
+  if (!box) return;
+  box.checked = !tabState || tabState.sync !== false;
+  box.disabled = !tabState;
+  if (note) {
+    note.textContent = box.checked
+      ? 'This browser follows the room playhead.'
+      : 'This browser plays on its own.';
+  }
+}
+
+const syncBox = $('sync-media');
+if (syncBox) {
+  syncBox.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    const wanted = box.checked;
+    box.disabled = true;
+    try {
+      const reply = await tabMessage({ type: 'brosr:sync-toggle', on: wanted });
+      if (reply && reply.ok) {
+        notice(wanted ? 'Playback follows the room.' : 'Playback stays on this browser.');
+        await loadTabs();
+        return;
+      }
+      box.checked = !wanted;
+      notice('The browser did not answer.', true);
+    } catch {
+      box.checked = !wanted;
+      notice('The background page did not answer.', true);
+    }
+    box.disabled = false;
+  });
 }
 
 $('tabs-auto').addEventListener('change', async (event) => {
@@ -798,7 +840,7 @@ $('tabs-auto').addEventListener('change', async (event) => {
       return;
     }
     box.checked = !wanted;
-    notice('Only the host shares tabs.', true);
+    notice('Ask the host for control first.', true);
   } catch {
     box.checked = !wanted;
     notice('The background page did not answer.', true);

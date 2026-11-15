@@ -31,6 +31,44 @@ export function isYouTubeHost(hostname = '') {
   return YT_HOST.test(String(hostname));
 }
 
+// A site player often hides its film behind a blob URL, a media source or an
+// HLS manifest. Both viewers load the same page, so the page names the film.
+export const PAGE_KEY_PREFIX = 'page:';
+
+const PAGE_BOUND_SOURCE = /^(blob:|data:|mediasource:)/i;
+const MANIFEST_SOURCE = /\.(m3u8|mpd)(?:[?#]|$)/i;
+
+// A source that cannot name a film on its own still needs a stable key.
+export function isPageBoundSource(raw) {
+  const text = String(raw || '');
+  return !text || PAGE_BOUND_SOURCE.test(text) || MANIFEST_SOURCE.test(text);
+}
+
+// The key names the page and drops the query and the fragment, so a time stamp
+// or a token in the address does not split one film into two keys.
+export function pageKey(href) {
+  const text = String(href || '');
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    return PAGE_KEY_PREFIX + url.origin + url.pathname;
+  } catch {
+    return '';
+  }
+}
+
+// A plain file URL names its own film, so two pages that share a clip stay on
+// that clip. Everything else falls back to the page that holds the player.
+export function mediaKeyFor(element, { pageUrl = '' } = {}) {
+  const raw = element ? element.currentSrc || element.src || '' : '';
+  if (isPageBoundSource(raw)) {
+    const named = pageKey(pageUrl);
+    if (named) return named;
+  }
+  return mediaKey(element) || pageKey(pageUrl);
+}
+
 // A tab reads the element the site already plays. YouTube marks an ad on the
 // player container, and the element itself carries no field for one.
 export function mediaStateFromDocument(
@@ -42,7 +80,7 @@ export function mediaStateFromDocument(
   const video = doc.querySelector(VIDEO_SELECTOR);
   if (!video) return null;
   const yt = isYouTubeHost(hostname || href);
-  const key = yt ? playerKey(href) : mediaKey(video);
+  const key = yt ? playerKey(href) : mediaKeyFor(video, { pageUrl: href });
   if (!key) return null;
   return {
     key,
@@ -87,6 +125,15 @@ function clamp(value, max) {
 export function filmUrl(key) {
   const text = String(key || '');
   if (!text) return '';
+  if (text.startsWith(PAGE_KEY_PREFIX)) {
+    const rest = text.slice(PAGE_KEY_PREFIX.length);
+    try {
+      const url = new URL(rest);
+      return url.protocol === 'http:' || url.protocol === 'https:' ? rest : '';
+    } catch {
+      return '';
+    }
+  }
   if (text.startsWith('youtube:')) {
     const id = text.slice('youtube:'.length);
     return id ? `https://www.youtube.com/watch?v=${encodeURIComponent(id)}` : '';
@@ -282,7 +329,7 @@ export class RemoteMediaSync {
     const video = this.video();
     if (!video || !frame || !frame.key) return { ok: false, reason: 'no-video' };
     const yt = isYouTubeHost(this.pageHostname());
-    const ownKey = yt ? playerKey(this.pageHref()) : mediaKey(video);
+    const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
     const ad = yt ? adPlayingFrom(this.doc.querySelector(AD_ROOT)) : false;
     if (ad || Number(video.readyState ?? 0) < 2) {
@@ -301,7 +348,12 @@ export class RemoteMediaSync {
     const actual = Number(video.currentTime || 0);
     const drift = actual - expected;
 
-    if (Math.abs(drift) > RELAY_DRIFT_SECONDS && now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS) {
+    // A paused room has no clock to nudge against. A small gap there is a seek,
+    // because a rate change on a paused video only leaves a slow rate behind
+    // for the moment the room resumes.
+    const paused = !frame.playing;
+    const seekLimit = paused ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
+    if (Math.abs(drift) > seekLimit && now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS) {
       video.currentTime = expected;
       this.lastSeekAt = now;
       this.stats.seeks += 1;
@@ -311,7 +363,7 @@ export class RemoteMediaSync {
     }
 
     const rate = Number(frame.rate || 1);
-    if (Math.abs(drift) > RELAY_NUDGE_SECONDS) {
+    if (!paused && Math.abs(drift) > RELAY_NUDGE_SECONDS) {
       const nudge = drift < 0 ? rate * RELAY_NUDGE_RATE : rate / RELAY_NUDGE_RATE;
       if (Math.abs(Number(video.playbackRate || 1) - nudge) > 0.001) video.playbackRate = nudge;
     } else if (Math.abs(Number(video.playbackRate || 1) - rate) > 0.001) {
