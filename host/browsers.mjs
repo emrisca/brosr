@@ -7,7 +7,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const HISTORY = path.join(here, '.run', 'starts.json');
+// The app seals this folder, so a measured start may not be written beside the
+// source. The app points BROSR_STATE at the user data folder, and a dev run
+// keeps the old layout.
+const STATE = process.env.BROSR_STATE ? path.resolve(process.env.BROSR_STATE) : path.join(here, '.run');
+const HISTORY = path.join(STATE, 'starts.json');
 
 const PLATFORM = process.platform;
 const HOME = os.homedir();
