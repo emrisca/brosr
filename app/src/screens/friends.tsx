@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Check, Send, Trash2, UserPlus } from 'lucide-react';
+import { Check, Copy, Send, Trash2, UserPlus } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,10 +37,10 @@ function message(cause: unknown) {
 export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
   const [state, setState] = useState<FriendsState | null>(null);
   const [address, setAddress] = useState('');
-  const [label, setLabel] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -79,15 +79,25 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
     setError('');
     setNotice('');
     try {
-      const next = await addFriend(value, label.trim());
+      const next = await addFriend(value, '');
       setState(next);
       setAddress('');
-      setLabel('');
       setNotice('Friend added.');
     } catch (cause) {
       setError(message(cause));
     } finally {
       setBusy('');
+    }
+  }
+
+  async function copyMe() {
+    if (!state?.me) return;
+    try {
+      await navigator.clipboard.writeText(state.me);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setError('Select the address and press Command C to copy it.');
     }
   }
 
@@ -156,13 +166,35 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center justify-between gap-2">
-          <span className="truncate font-mono text-xs text-muted-foreground">
-            {state?.me ?? 'Starting the lobby'}
-          </span>
-          <Badge variant={listening ? 'default' : 'secondary'} className="shrink-0">
-            {listening ? 'Listening' : 'Off'}
-          </Badge>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">Your lobby address</span>
+            <Badge variant={listening ? 'default' : 'secondary'} className="shrink-0">
+              {listening ? 'Listening' : 'Off'}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={state?.me ?? 'Starting the lobby'}
+              aria-label="Your lobby address"
+              className="font-mono text-xs"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={copyMe}
+              disabled={!state?.me}
+              className="shrink-0"
+            >
+              {copied ? <Check /> : <Copy />}
+              {copied ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Send this to a friend. It is the address they add to reach your invites.
+          </p>
         </div>
 
         {localOnly ? (
@@ -175,20 +207,17 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
         <Separator />
 
         <form onSubmit={add} className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium">Add a friend</span>
+          <label htmlFor="friend-address" className="text-xs font-medium">
+            Add a friend
+          </label>
           <div className="flex items-center gap-1.5">
             <Input
-              value={label}
-              onChange={(event) => setLabel(event.target.value)}
-              placeholder="Name"
-              aria-label="Friend name"
-              className="w-28 shrink-0"
-            />
-            <Input
+              id="friend-address"
               value={address}
               onChange={(event) => setAddress(event.target.value)}
               placeholder="100.64.0.7:8790"
-              aria-label="Friend address"
+              autoComplete="off"
+              spellCheck={false}
               className="font-mono text-xs"
             />
             <Button
@@ -202,6 +231,9 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
               {busy === 'add' ? 'Adding' : 'Add'}
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Paste the address your friend copied. Leave the port off to use 8790.
+          </p>
         </form>
 
         <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">

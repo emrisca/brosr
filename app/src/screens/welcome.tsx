@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -6,9 +6,11 @@ type Props = {
   name: string;
   onName: (value: string) => void;
   onNext: () => void;
+  onJoin: () => void;
+  onFriends: () => void;
 };
 
-export function Welcome({ name, onName, onNext }: Props) {
+export function Welcome({ name, onName, onNext, onJoin, onFriends }: Props) {
   return (
     <div className="flex flex-col gap-2.5">
       <h1 className="text-xl font-medium tracking-tight">A room is a page you share.</h1>
@@ -27,12 +29,22 @@ export function Welcome({ name, onName, onNext }: Props) {
         />
       </div>
 
-      <div className="flex items-center justify-end gap-2">
+      {/* Two ways in, the same size. Hosting opens the browser steps and
+          joining takes the invite link. */}
+      <div className="grid grid-cols-2 gap-2">
         <Button onClick={onNext} disabled={!name.trim()}>
-          Find my browsers
+          Host a room
           <ArrowRight />
         </Button>
+        <Button variant="secondary" onClick={onJoin}>
+          Join a room
+        </Button>
       </div>
+
+      <Button variant="ghost" size="sm" onClick={onFriends} className="self-start">
+        <UserPlus />
+        Add a friend
+      </Button>
     </div>
   );
 }

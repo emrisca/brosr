@@ -331,6 +331,14 @@ export class RemoteMediaSync {
     const yt = isYouTubeHost(this.pageHostname());
     const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
+    // The host sits in an ad, so its frame names the ad clock and not the film.
+    // Applying it would drag this tab off the film and back again on every
+    // tick. The ad lasts seconds, so the tab waits it out and the room resumes.
+    if (frame.ad) {
+      this.stats.skips += 1;
+      this.stats.last = 'host-ad';
+      return { ok: true, skipped: 'host-ad' };
+    }
     const ad = yt ? adPlayingFrom(this.doc.querySelector(AD_ROOT)) : false;
     if (ad || Number(video.readyState ?? 0) < 2) {
       this.stats.skips += 1;

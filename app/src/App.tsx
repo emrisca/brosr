@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Users } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
@@ -9,11 +9,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Browsers } from '@/screens/browsers';
 import { Prepare } from '@/screens/prepare';
 import { FriendsDialog } from '@/screens/friends';
+import { JoinDialog } from '@/screens/join';
 import { Room } from '@/screens/room';
 import { Welcome } from '@/screens/welcome';
+import { InviteBanner } from '@/components/invite-banner';
 import { useTheme } from '@/lib/theme';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { status, type Browser, type Run } from '@/lib/host';
+import { friends as listFriends, status, type Browser, type Invite, type Run } from '@/lib/host';
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
 
 type Step = 'welcome' | 'browsers' | 'prepare' | 'room';
@@ -43,6 +45,9 @@ export default function App() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [invite, setInvite] = useState<Invite | null>(null);
+  const seenInvites = useRef<Set<string>>(new Set());
 
   // A room can outlive the window. On launch, adopt the run that is already
   // going instead of asking a second time.
@@ -72,6 +77,35 @@ export default function App() {
       // A refused store costs the next launch only.
     }
   }, [name]);
+
+  // The lobby has to listen while the app is open, not only while the friends
+  // dialog is. This poll starts it and turns a fresh invite into one banner.
+  // An invite that is answered or withdrawn elsewhere drops off the list here.
+  useEffect(() => {
+    let live = true;
+    const tick = async () => {
+      try {
+        const next = await listFriends();
+        if (!live) return;
+        setInvite((current) =>
+          current && !next.invites.some((entry) => entry.id === current.id) ? null : current
+        );
+        const fresh = next.invites.find((entry) => !seenInvites.current.has(entry.id));
+        if (fresh) {
+          seenInvites.current.add(fresh.id);
+          setInvite(fresh);
+        }
+      } catch {
+        // A failed poll leaves the last banner alone.
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 4000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // One release asks once. Later hides that version until the next release,
   // and the check repeats every six hours for a window left open.
@@ -161,6 +195,8 @@ export default function App() {
                 name={name}
                 onName={setName}
                 onNext={() => setStep('browsers')}
+                onJoin={() => setJoinOpen(true)}
+                onFriends={() => setFriendsOpen(true)}
               />
             ) : null}
 
@@ -198,10 +234,15 @@ export default function App() {
         )}
       </main>
 
-      <footer className="relative flex items-center justify-end gap-2 p-2.5">
-        <p className="font-mono text-xs text-muted-foreground">127.0.0.1</p>
-      </footer>
+      {invite ? (
+        <InviteBanner
+          invite={invite}
+          browserId={browser?.id}
+          onClose={() => setInvite(null)}
+        />
+      ) : null}
 
+      <JoinDialog open={joinOpen} onOpenChange={setJoinOpen} />
       <FriendsDialog
         open={friendsOpen}
         onOpenChange={setFriendsOpen}

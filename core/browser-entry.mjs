@@ -376,6 +376,9 @@ export async function start() {
           playing: Boolean(message.playing),
           rate: Number(message.rate || 1),
           volume: Number(message.volume ?? 1),
+          // The ad belongs to the host's film. A viewer tab has to know, so it
+          // can wait instead of seeking to the ad's own clock.
+          ad: Boolean(message.ad),
           at: Date.now(),
         })
         .catch(() => {});

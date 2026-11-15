@@ -208,6 +208,21 @@ test('a tab on another film, an ad or a starved element ignores the frame', () =
   assert.equal(sync.stats.seeks, 0);
 });
 
+test('a host ad frame waits instead of moving the film', () => {
+  const video = fakeVideo({ currentTime: 50 });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+  const result = sync.handle({ key: ytKey, position: 0, playing: true, ad: true, at: 10000 });
+  assert.equal(result.skipped, 'host-ad');
+  assert.equal(video.currentTime, 50);
+  assert.equal(sync.stats.seeks, 0);
+  assert.equal(sync.stats.last, 'host-ad');
+});
+
 test('a non-YouTube page names its film by source and skips the ad probe', () => {
   const video = fakeVideo({
     src: 'http://127.0.0.1:8787/media/clip.webm',

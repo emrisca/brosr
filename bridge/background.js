@@ -558,6 +558,7 @@ async function handle(message, sender) {
             playing: Boolean(message.playing),
             rate: message.rate,
             volume: message.volume,
+            ad: Boolean(message.ad),
             at: message.at,
           })
           .then(() => true)

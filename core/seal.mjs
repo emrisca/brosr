@@ -2,9 +2,10 @@
 // XChaCha20-Poly1305 over the frame bytes. Section 10, rule 4 of ../plan.md.
 //
 // The cipher is plain JavaScript, not `node:crypto`, so the same module runs in
-// a content script and in a Node test. The only platform call is WebCrypto,
-// used for HKDF alone. Every other step is integer math with the draft's test
-// vectors in test/seal.test.mjs.
+// a content script and in a Node test. HKDF is plain JavaScript too, because a
+// page served from a LAN or tailnet address is not a secure context and has no
+// `crypto.subtle`. Every step has the draft's test vectors in
+// test/seal.test.mjs.
 //
 // The relay sees a room id, a peer id and a frame size. It never sees a URL, a
 // name or a cursor, because those bytes are ciphertext by the time they leave
@@ -181,6 +182,119 @@ function join(parts) {
   return out;
 }
 
+// HKDF needs a hash, and the room key is derived on a page that may have no
+// WebCrypto. SHA-256 is the one hash here, written with the same integer math
+// as the cipher. The block below is FIPS 180-4.
+const K256 = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function rotr(value, bits) {
+  return ((value >>> bits) | (value << (32 - bits))) >>> 0;
+}
+
+export function sha256(bytes) {
+  const length = bytes.length;
+  const padded = new Uint8Array(Math.ceil((length + 9) / 64) * 64);
+  padded.set(bytes);
+  padded[length] = 0x80;
+  const view = new DataView(padded.buffer);
+  const bits = length * 8;
+  view.setUint32(padded.length - 8, Math.floor(bits / 0x100000000));
+  view.setUint32(padded.length - 4, bits >>> 0);
+  const state = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+  const schedule = new Uint32Array(64);
+  for (let offset = 0; offset < padded.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      schedule[index] = view.getUint32(offset + index * 4);
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const low = schedule[index - 15];
+      const high = schedule[index - 2];
+      const s0 = (rotr(low, 7) ^ rotr(low, 18) ^ (low >>> 3)) >>> 0;
+      const s1 = (rotr(high, 17) ^ rotr(high, 19) ^ (high >>> 10)) >>> 0;
+      schedule[index] =
+        (schedule[index - 16] + s0 + schedule[index - 7] + s1) >>> 0;
+    }
+    let a = state[0];
+    let b = state[1];
+    let c = state[2];
+    let d = state[3];
+    let e = state[4];
+    let f = state[5];
+    let g = state[6];
+    let h = state[7];
+    for (let index = 0; index < 64; index += 1) {
+      const s1 = (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) >>> 0;
+      const choice = ((e & f) ^ (~e & g)) >>> 0;
+      const t1 = (h + s1 + choice + K256[index] + schedule[index]) >>> 0;
+      const s0 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) >>> 0;
+      const majority = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+      const t2 = (s0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + t1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) >>> 0;
+    }
+    state[0] = (state[0] + a) >>> 0;
+    state[1] = (state[1] + b) >>> 0;
+    state[2] = (state[2] + c) >>> 0;
+    state[3] = (state[3] + d) >>> 0;
+    state[4] = (state[4] + e) >>> 0;
+    state[5] = (state[5] + f) >>> 0;
+    state[6] = (state[6] + g) >>> 0;
+    state[7] = (state[7] + h) >>> 0;
+  }
+  const out = new Uint8Array(32);
+  const write = new DataView(out.buffer);
+  for (let index = 0; index < 8; index += 1) write.setUint32(index * 4, state[index]);
+  return out;
+}
+
+function hmacSha256(key, message) {
+  const base = key.length > 64 ? sha256(key) : key;
+  const pad = new Uint8Array(64);
+  pad.set(base);
+  const inner = new Uint8Array(64 + message.length);
+  const outer = new Uint8Array(64 + 32);
+  for (let index = 0; index < 64; index += 1) {
+    inner[index] = pad[index] ^ 0x36;
+    outer[index] = pad[index] ^ 0x5c;
+  }
+  inner.set(message, 64);
+  outer.set(sha256(inner), 64);
+  return sha256(outer);
+}
+
+// The extract and expand steps of RFC 5869, with SHA-256 as the hash.
+export function hkdfSha256(ikm, salt, info, length = SUBKEY_BYTES) {
+  const prk = hmacSha256(salt, ikm);
+  const out = new Uint8Array(length);
+  let previous = EMPTY;
+  let offset = 0;
+  for (let counter = 1; offset < length; counter += 1) {
+    const blockOut = hmacSha256(prk, join([previous, info, new Uint8Array([counter])]));
+    const take = Math.min(blockOut.length, length - offset);
+    out.set(blockOut.subarray(0, take), offset);
+    offset += take;
+    previous = blockOut;
+  }
+  return out;
+}
+
 function checkKey(key, who) {
   if (!(key instanceof Uint8Array) || key.length !== SUBKEY_BYTES) {
     fail(`${who} needs a 32 byte room key`);
@@ -274,27 +388,7 @@ export function newRoomKey() {
 export async function roomKey(inviteKey) {
   const base = decodeKey(inviteKey);
   if (base.length !== KEY_BYTES) fail(`a room key is ${KEY_BYTES} bytes, not ${base.length}`);
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) fail('HKDF needs WebCrypto, which this context does not expose');
-  const material = await subtle.importKey('raw', base, 'HKDF', false, ['deriveBits']);
-  const bits = await subtle.deriveBits(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new TextEncoder().encode(VERSION),
-      info: new TextEncoder().encode('room frame key'),
-    },
-    material,
-    SUBKEY_BYTES * 8
-  );
-  // Copy through a buffer this module allocates. A browser can resolve
-  // deriveBits with an ArrayBuffer from another realm, and the view made
-  // straight from it keeps that realm's prototype, so the cipher's own
-  // instanceof check would reject a key that is otherwise the right bytes.
-  const view = new Uint8Array(bits);
-  const key = new Uint8Array(SUBKEY_BYTES);
-  key.set(view);
-  return key;
+  return hkdfSha256(base, new TextEncoder().encode(VERSION), new TextEncoder().encode('room frame key'));
 }
 
 // base64url without padding. btoa and atob exist in Node and in Firefox, so an

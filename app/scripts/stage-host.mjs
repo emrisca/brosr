@@ -40,6 +40,9 @@ const FILES = [
   'bridge/manifest.chrome.json',
   'bridge/background.js',
   'bridge/content.js',
+  // content.js injects this page-scope script, and the profile builder packs
+  // it into both extension builds. Without it, prepare stops on a missing file.
+  'bridge/bridge-youtube.js',
   'bridge/panel/room.html',
   'bridge/panel/room.css',
   'bridge/panel/room.js',
