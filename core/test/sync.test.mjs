@@ -481,6 +481,39 @@ test('the published layout notice clears once the layouts agree again', () => {
   assert.equal(client.publish().layoutNotice.at, 1400);
 });
 
+test('a host resize is not a layout mismatch, so a granted click still lands', () => {
+  let fingerprint = { innerWidth: 1000, innerHeight: 700, scrollWidth: 1000 };
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 1000,
+    send: () => {},
+    document: { location: { href: 'http://x/a.html', origin: 'http://x' } },
+    overlay: false,
+    viewport: () => ({ url: 'http://x/a.html', scroll: 0, fingerprint }),
+  });
+  client.setGrant('p2', true);
+
+  // The host widens its own window. It is the reference, so this is not a peer
+  // that laid the page out differently.
+  fingerprint = { innerWidth: 1600, innerHeight: 700, scrollWidth: 1600 };
+  client.tick(2000);
+  assert.equal(client.publish().layoutMismatch, false);
+
+  const click = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 1,
+      records: [{ kind: 'click', path: '#go' }],
+      roomTime: 2000,
+    }),
+    2000
+  );
+  assert.equal(click.reasons.layout, undefined, 'the click was not dropped for the layout');
+});
+
 test('two peers in a room report their ids, so a count is never a guess', () => {
   const client = createRoomClient({
     role: 'host',

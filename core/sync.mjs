@@ -801,7 +801,10 @@ export function createRoomClient({
     }
     if (typeof view.scroll !== 'number') return;
     if (Math.abs(view.scroll - state.scroll) <= SCROLL_EPSILON) return;
-    state.applyView({ scroll: view.scroll, fingerprint: view.fingerprint });
+    // This tab is the reference the peer follows. Its own resize is not a
+    // mismatch with a peer, and treating it as one would drop every click the
+    // peer sends from then on.
+    state.applyView({ scroll: view.scroll });
     stats.scroll = state.scroll;
     sendMessage({
       type: 'view',
