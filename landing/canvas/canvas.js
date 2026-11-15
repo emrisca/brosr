@@ -46,14 +46,20 @@ const ROOM = new URLSearchParams(location.search).get('room') || 'default';
 const PEER = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 8);
 const PART_POINTS = 300;
 const MAX_POINTS = 20000;
+// A live frame goes out at most every 60 ms, and a stroke nobody finished is
+// dropped from the sheet after 15 s.
+const LIVE_MS = 60;
+const LIVE_TTL = 15000;
 const room = {
   socket: null,
   peers: 0,
   retry: null,
   received: new Map(),
   seen: new Set(),
+  inflight: new Map(),
 };
 let strokeCount = 0;
+let live = { id: null, sent: 0, at: 0 };
 
 function nextStrokeId() {
   strokeCount += 1;
@@ -207,7 +213,11 @@ function paintScene(g, withLive) {
     const layer = state.layers[index];
     if (!layer.visible) continue;
     for (const stroke of layer.strokes) paintStroke(g, stroke);
-    if (withLive && drawing && drawing.stroke.layer === index) paintStroke(g, drawing.stroke);
+    if (!withLive) continue;
+    if (drawing && drawing.stroke.layer === index) paintStroke(g, drawing.stroke);
+    for (const stroke of room.inflight.values()) {
+      if (stroke.layer === index) paintStroke(g, stroke);
+    }
   }
 }
 
@@ -383,6 +393,40 @@ function sendRemove(stroke) {
   send({ op: 'remove', id: stroke.id });
 }
 
+// A peer should see the line while it is drawn, not only after the pointer
+// lifts. A live frame carries the points added since the last one. A shape
+// sends its two ends again, because the second end moves instead of growing.
+function sendLive(stroke, force) {
+  if (live.id !== stroke.id) {
+    live = { id: stroke.id, sent: 0, at: 0 };
+  }
+  const now = Date.now();
+  if (!force && now - live.at < LIVE_MS) return;
+  const shape = SHAPES.has(stroke.tool);
+  const fresh = shape ? stroke.points : stroke.points.slice(live.sent);
+  if (!fresh.length) return;
+  live.at = now;
+  live.sent = stroke.points.length;
+  send({
+    op: 'live',
+    id: stroke.id,
+    layer: stroke.layer,
+    tool: stroke.tool,
+    colour: stroke.colour,
+    size: stroke.size,
+    opacity: stroke.opacity,
+    symmetry: stroke.symmetry,
+    shape,
+    points: fresh.map(wirePoint),
+  });
+}
+
+// The finished stroke still travels once, so a page that joins later replays
+// the sheet from the record rather than from these frames.
+function sendLiveEnd(stroke) {
+  send({ op: 'live-end', id: stroke.id });
+}
+
 // A frame from the wire is untrusted. Anything that is not a stroke this app
 // can paint is dropped, not repaired.
 function cleanStroke(data) {
@@ -420,6 +464,7 @@ function handle(data) {
 
     if (data.part === 0) {
       if (!Array.isArray(data.points)) return;
+      room.inflight.delete(stroke.id);
       room.received.set(stroke.id, stroke);
     }
     const held = room.received.get(stroke.id);
@@ -441,7 +486,34 @@ function handle(data) {
     return;
   }
 
+  if (data.op === 'live') {
+    const stroke = cleanStroke(data);
+    if (!stroke || !Array.isArray(data.points)) return;
+    if (room.seen.has(stroke.id)) return;
+    const points = [];
+    for (const point of data.points) {
+      if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+      points.push({ x: point.x, y: point.y });
+    }
+    let held = room.inflight.get(stroke.id);
+    if (!held) {
+      held = stroke;
+      room.inflight.set(stroke.id, held);
+    }
+    if (data.shape === true) held.points = points;
+    else if (held.points.length + points.length <= MAX_POINTS) held.points.push(...points);
+    held.at = Date.now();
+    redraw();
+    return;
+  }
+
+  if (data.op === 'live-end' && typeof data.id === 'string') {
+    if (room.inflight.delete(data.id)) redraw();
+    return;
+  }
+
   if (data.op === 'remove' && typeof data.id === 'string') {
+    room.inflight.delete(data.id);
     if (removeById(data.id)) redraw();
     return;
   }
@@ -500,6 +572,17 @@ function readPeers() {
 
 setInterval(() => {
   if (room.socket) readPeers();
+  // A peer that closed its tab in the middle of a line leaves a half stroke
+  // behind. Its stamp stops moving, so it is dropped here.
+  const cutoff = Date.now() - LIVE_TTL;
+  let stale = false;
+  for (const [id, stroke] of room.inflight) {
+    if (stroke.at < cutoff) {
+      room.inflight.delete(id);
+      stale = true;
+    }
+  }
+  if (stale) redraw();
 }, 5000);
 
 // ---------------------------------------------------------------------------
@@ -536,6 +619,7 @@ function addPoint(point) {
   };
   stroke.points.push(next);
   drawing.last = next;
+  sendLive(stroke, false);
   redraw();
 }
 
@@ -555,6 +639,7 @@ viewport.addEventListener('pointerdown', (event) => {
   if (SHAPES.has(state.preset)) {
     drawing.stroke.points.push(point);
   }
+  sendLive(drawing.stroke, true);
   redraw();
 });
 
@@ -594,6 +679,7 @@ function endStroke(event) {
     viewport.releasePointerCapture(event.pointerId);
   }
   if (stroke.points.length > 1) commit(stroke);
+  sendLiveEnd(stroke);
   redraw();
 }
 

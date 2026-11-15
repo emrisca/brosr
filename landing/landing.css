@@ -295,6 +295,80 @@ body {
   justify-content: center;
 }
 
+/* The address tile holds a form, so it takes focus as a card instead of a
+   link, and the shared gradient stays off the field. */
+.tile-url {
+  border-color: color-mix(in oklch, var(--brand) 38%, var(--line));
+}
+
+.tile-url:focus-within {
+  border-color: color-mix(in oklch, var(--brand) 62%, var(--line));
+  box-shadow: var(--shadow-lift);
+}
+
+.tile-link {
+  gap: 10px;
+}
+
+.tile-link-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.tile-link-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.tile-link-input::placeholder {
+  color: var(--muted);
+}
+
+.tile-link-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.tile-link-button {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--brand);
+  color: oklch(0.18 0.02 60);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tile-link-button:hover {
+  filter: brightness(1.06);
+}
+
+.tile-link-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.tile-link-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: oklch(0.58 0.17 26);
+}
+
+.tile-link-error:empty {
+  display: none;
+}
+
 .foot {
   max-width: 1180px;
   width: 100%;

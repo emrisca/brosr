@@ -805,7 +805,8 @@ The room line reads `/status` every five seconds and names how many pages are op
 header shows a live room rather than a claim about one.
 
 A tile is a link when the app exists and a plain card when it does not, so the page never
-offers a door that goes nowhere. The page follows the app tokens: the same warm clay accent,
+offers a door that goes nowhere. The address tile is the one card with a field: it takes a
+link and opens it, and the page itself stays a static file. The page follows the app tokens: the same warm clay accent,
 the same corner radius and the same muted foreground. It carries both colour modes from
 prefers-color-scheme, a visible focus ring, a skip link and one column below 640 pixels.
 
@@ -820,6 +821,7 @@ prefers-color-scheme, a visible focus ring, a skip link and one column below 640
 | Read | Soon | Long articles at the same scroll |
 | Notes | Soon | A page that edits as everyone types |
 | Browse | Soon | One tab set and one address bar |
+| Open a link | Live | Any address, opened in a new tab and shared with the room |
 | Next app | Slot | A reserved card, so the grid never looks finished |
 
 The grid fills 248 pixel columns and wraps, so a wide window shows four tiles and a laptop
@@ -844,9 +846,11 @@ Brosr, with no embed and no dependency.
   empty.
 - Export. PNG at twice the sheet size.
 - Navigation. Space drags the sheet, the wheel zooms at the pointer, and Fit frames the page.
-- Room. Strokes reach every page over one WebSocket. Undo, redo and clear travel as stroke ids,
-  so every copy ends in the same state. A page that joins late asks for the sheet and receives
-  the strokes it missed.
+- Room. Strokes reach every page over one WebSocket. A stroke also travels while it is drawn,
+  so a peer sees the line grow before the pointer lifts. A live frame carries only the points
+  added since the last one, at most every 60 ms, and a stroke nobody finishes leaves the sheet
+  after 15 seconds. Undo, redo and clear travel as stroke ids, so every copy ends in the same
+  state. A page that joins late asks for the sheet and receives the strokes it missed.
 
 Keys: B, I, M, A, E, L, R and O pick a tool. Bracket keys change the width. Cmd Z undoes and
 Cmd Shift Z redoes.
@@ -856,5 +860,8 @@ room opens it with no build step.
 
 ### 19.4 What comes next on the page
 
-1. A tile that turns any URL into a room page, so the grid covers a site we did not build.
-2. A shared cursor on the landing page, so a person can point at the tile to open.
+1. A shared cursor on the landing page, so a person can point at the tile to open.
+
+The URL tile opens the address in a tab and the bridge shares that tab, so the site keeps its
+own page and its own scripts. Cursor and input sync stay on the room tab, not on the shared
+site.

@@ -149,6 +149,28 @@
       </li>
 
       <li>
+        <div class="tile tile-url">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="12" cy="12" r="8"></circle>
+              <path d="M4 12h16"></path>
+              <path d="M12 4c2.3 2.2 3.5 4.9 3.5 8S14.3 17.8 12 20c-2.3-2.2-3.5-4.9-3.5-8S9.7 6.2 12 4z"></path>
+            </svg>
+          </span>
+          <form class="tile-body tile-link" id="url-form" novalidate>
+            <label class="tile-name" for="url-field">Open a link</label>
+            <span class="tile-note">Any address opens in a new tab. That tab is shared with the room.</span>
+            <span class="tile-link-row">
+              <input class="tile-link-input" id="url-field" name="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="example.com" aria-describedby="url-error">
+              <button class="tile-link-button" type="submit">Open</button>
+            </span>
+            <p class="tile-link-error" id="url-error" role="status"></p>
+          </form>
+          <span class="tile-state is-live">Live</span>
+        </div>
+      </li>
+
+      <li>
         <div class="tile is-soon tile-slot">
           <span class="tile-body">
             <span class="tile-name">Next app</span>
@@ -201,6 +223,47 @@
 
       read();
       setInterval(read, 5000);
+
+      // The address tile opens a tab, and the bridge shares that tab with the
+      // room. This page does not rewrite the address, so the site keeps its
+      // own page.
+      var form = document.getElementById('url-form');
+      var field = document.getElementById('url-field');
+      var error = document.getElementById('url-error');
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        var raw = field.value.trim();
+        if (!raw) {
+          error.textContent = 'Type an address first.';
+          field.focus();
+          return;
+        }
+        var address = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw;
+        var target;
+        try {
+          target = new URL(address);
+        } catch (err) {
+          error.textContent = 'That is not an address this browser can open.';
+          field.focus();
+          return;
+        }
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+          error.textContent = 'Only http and https addresses open here.';
+          field.focus();
+          return;
+        }
+        error.textContent = '';
+        // A noopener window returns no handle, so the tab looks blocked on
+        // every browser. Open plainly and cut the opener link here.
+        var opened = window.open(target.href, '_blank');
+        if (!opened) {
+          error.textContent = 'The browser blocked the new tab. Allow pop-ups for this page.';
+          return;
+        }
+        opened.opener = null;
+        field.value = '';
+      });
     })();
   </script>
 </body>
