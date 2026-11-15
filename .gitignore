@@ -5,6 +5,9 @@
 # Zen check runtime: the room profile, the built XPI and its results.
 /zen/.runtime
 
+# Runtime state at the repository root, written by the app and the check lanes.
+/.runtime/
+
 # The refresh record from the scheduled task. Syncthing still copies it.
 /zen/refresh-status.json
 

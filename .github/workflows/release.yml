@@ -1,6 +1,7 @@
-name: release
+# A tag cuts a release. Each platform builds, signs its updater bundle and
+# attaches latest.json, so an installed app can offer the next version.
+name: Release
 
-# A tag is the only trigger, so a release always matches a commit.
 on:
   push:
     tags:
@@ -10,8 +11,18 @@ permissions:
   contents: write
 
 jobs:
-  macos:
-    runs-on: macos-14
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,28 +33,28 @@ jobs:
           cache-dependency-path: app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
         with:
-          workspaces: "app/src-tauri -> target"
+          targets: ${{ matrix.target }}
 
-      - name: Install the app dependencies
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install the frontend
         working-directory: app
         run: npm ci
 
-      # The action builds the bundle, signs the updater files with the key in
-      # TAURI_SIGNING_PRIVATE_KEY and attaches latest.json to the release. The
-      # running app reads that file from releases/latest/download.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
-          tagName: ${{ github.ref_name }}
-          releaseName: "Brosr ${{ github.ref_name }}"
-          releaseBody: "Mac build for ${{ github.ref_name }}. The updater files sit beside the app."
+          args: --target ${{ matrix.target }}
+          tagName: v__VERSION__
+          releaseName: Brosr v__VERSION__
+          releaseBody: Download the installer for your platform. The app updates itself from the signed manifest attached to this release.
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
