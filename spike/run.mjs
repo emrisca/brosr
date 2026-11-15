@@ -182,6 +182,19 @@ function buildBridge() {
         name: `panel/${name}`,
         data: fs.readFileSync(path.join(here, '..', 'zen', 'panel', name)),
       })),
+      ...[
+        'icon-16.png',
+        'icon-32.png',
+        'icon-48.png',
+        'icon-96.png',
+        'icon-128.png',
+        'action-16.png',
+        'action-32.png',
+        'action-48.png',
+      ].map((name) => ({
+        name: `assets/${name}`,
+        data: fs.readFileSync(path.join(here, '..', 'assets', name)),
+      })),
       ...coreModules(),
     ])
   );

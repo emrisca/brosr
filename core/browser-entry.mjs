@@ -5,6 +5,10 @@
 
 import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
+import { openFrame, sealFrame, roomKey } from './seal.mjs';
+
+// Gecko exposes browser, Chrome exposes chrome. The core runs in both.
+const api = globalThis.browser || globalThis.chrome || null;
 
 // The panel button stays off unrelated pages. A room page is a fixture whose
 // name starts with one of the room words, which is what the panel looks for.
@@ -15,6 +19,17 @@ export async function start() {
   window.__brosrStarted = true;
 
   const params = new URLSearchParams(location.search);
+  // A summon is a tab whose only job is to ask the bridge for the room window.
+  // No client starts here, so the room gains no extra peer from it.
+  if (params.get('summon') === '1') {
+    if (api && api.runtime && api.runtime.sendMessage) {
+      api.runtime.sendMessage({ type: 'brosr:open-panel', summon: true }).catch(() => {});
+    }
+    return { started: false, reason: 'summon' };
+  }
+  // The invite key rides in the fragment, so the search params alone would
+  // drop it on the first navigation and turn a sealed room back into text.
+  const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
   // Identity survives a navigation. A room tab follows the host's URL, and the
   // new page has no room params, so the tab remembers which room and peer it is.
   const stored = (() => {
@@ -36,6 +51,9 @@ export async function start() {
         relayPort: params.get('relay') || '8787',
         capture: params.get('capture') === '1',
         grant: params.get('grant') || null,
+        // The key travels in the fragment. sessionStorage keeps it across the
+        // navigation a peer follows, so the next page stays sealed.
+        key: params.get('k') || hashParams.get('k') || null,
         openPanel: params.get('panel') === '1',
         selftest: params.get('selftest') === '1',
       }
@@ -55,11 +73,18 @@ export async function start() {
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
   const source =
-    typeof browser !== 'undefined' && browser.runtime && browser.runtime.id ? 'content-script' : 'page';
+    api && api.runtime && api.runtime.id ? 'content-script' : 'page';
   const started = performance.now();
   let socket = null;
   let panelState = null;
   let lastCommand = null;
+  // A room that arrives with a key seals every frame it sends. The key stays in
+  // the fragment, so the relay never receives it in a request line.
+  let sealKey = null;
+  let sealState = 'off';
+  let sealError = null;
+  let sealedOut = 0;
+  let sealedIn = 0;
 
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
@@ -69,6 +94,7 @@ export async function start() {
     try {
       const url = new URL(href);
       for (const key of roomParams) url.searchParams.delete(key);
+      if (new URLSearchParams(url.hash.replace(/^#/, '')).has('k')) url.hash = '';
       return url.toString();
     } catch {
       return href;
@@ -110,6 +136,18 @@ export async function start() {
       })
     : null;
 
+  // A sealed room sends bytes, not text. Every frame the client hands over
+  // passes this one call site, so the seal lives in one place.
+  function sendText(text) {
+    if (!socket || socket.readyState !== 1) return;
+    if (!sealKey) {
+      socket.send(text);
+      return;
+    }
+    socket.send(sealFrame(sealKey, new TextEncoder().encode(text), { room }));
+    sealedOut += 1;
+  }
+
   const client = createRoomClient({
     role,
     room,
@@ -147,9 +185,7 @@ export async function start() {
     // clock. performance.now() starts at zero in each process, and the offset
     // then absorbs the page's own start time instead of a clock difference.
     now: () => Date.now(),
-    send: (frame) => {
-      if (socket && socket.readyState === 1) socket.send(frame);
-    },
+    send: (frame) => sendText(frame),
   });
 
   // A page can name its own ad signal. The probe is read on every tick, so a
@@ -166,8 +202,8 @@ export async function start() {
   // One object feeds the dataset and the room panel, so the UI cannot show a
   // different number from the harness.
   const panelUrl =
-    typeof browser !== 'undefined' && browser.runtime && browser.runtime.getURL
-      ? browser.runtime.getURL('panel/room.html')
+    api && api.runtime && api.runtime.getURL
+      ? api.runtime.getURL('panel/room.html')
       : null;
 
   const status = () => ({
@@ -177,6 +213,10 @@ export async function start() {
     panelState,
     command: lastCommand,
     bias,
+    seal: { mode: sealState, room, out: sealedOut, in: sealedIn, error: sealError },
+    // The panel builds the join link from this. The announced location stays
+    // clean, so a peer never copies the key into its own tab URL.
+    inviteUrl: inviteKey ? `${cleanUrl(location.href)}#k=${inviteKey}` : null,
     socket: socket ? socket.readyState : -1,
     elapsed: Math.round(performance.now() - started),
     location: location.href,
@@ -248,12 +288,42 @@ export async function start() {
   // carries the port, because the jitter proxy listens on 8788.
   const relayHost = location.hostname || '127.0.0.1';
 
+  // The invite carries the key in the fragment. A room with a key refuses to
+  // run in the clear, because a silent downgrade is worse than no room.
+  const inviteKey =
+    config.key || new URLSearchParams(location.hash.replace(/^#/, '')).get('k') || null;
+  if (inviteKey) {
+    sealState = 'pending';
+    try {
+      sealKey = await roomKey(inviteKey);
+      sealState = 'on';
+    } catch (error) {
+      sealState = 'failed';
+      sealError = error.message;
+    }
+  }
+
   const connect = () => {
     socket = new WebSocket(
       `ws://${relayHost}:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
     );
+    // A sealed frame arrives as binary. An unsealed frame in a sealed room is a
+    // bug or an attack, so it is dropped rather than trusted.
+    socket.binaryType = 'arraybuffer';
     socket.onmessage = (event) => {
-      client.receive(event.data, Date.now());
+      let frame = event.data;
+      if (sealKey) {
+        if (!(frame instanceof ArrayBuffer)) return;
+        try {
+          frame = new TextDecoder().decode(openFrame(sealKey, new Uint8Array(frame), { room }));
+          sealedIn += 1;
+        } catch {
+          return;
+        }
+      } else if (typeof frame !== 'string') {
+        frame = new TextDecoder().decode(frame);
+      }
+      client.receive(frame, Date.now());
       publish();
     };
     socket.onopen = () => {
@@ -277,6 +347,10 @@ export async function start() {
       }
     };
   };
+  if (sealState === 'failed') {
+    publish();
+    return { started: false, reason: 'seal-failed', error: sealError };
+  }
   connect();
 
   // A page cannot reach this content script directly. A page-level game talks
@@ -291,38 +365,54 @@ export async function start() {
 
   // The panel lives in the browser chrome. The background page opens it, and
   // it carries the panel's own render report back here for the harness.
-  if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.sendMessage) {
+  if (api && api.runtime && api.runtime.sendMessage) {
     if (config.openPanel) {
-      browser.runtime
+      api.runtime
         .sendMessage({ type: 'brosr:open-panel', selftest: Boolean(config.selftest) })
         .catch(() => {});
     }
     // The panel cannot see this tab with tabs.query in a headless window, so
     // the tab registers itself instead.
     const hello = () =>
-      browser.runtime.sendMessage({ type: 'brosr:room-hello', role }).catch(() => {});
+      api.runtime.sendMessage({ type: 'brosr:room-hello', role }).catch(() => {});
     hello();
     setInterval(hello, 2000);
     setInterval(async () => {
       try {
-        const reply = await browser.runtime.sendMessage({ type: 'brosr:panel-state' });
+        const reply = await api.runtime.sendMessage({ type: 'brosr:panel-state' });
         if (reply && reply.state) panelState = reply.state;
       } catch {
         // The background page is restarting.
       }
     }, 500);
+    // A sidebar can be refused the tab channel, and a tab id can arrive as the
+    // -1 placeholder. This copy of the status needs neither, so the panel can
+    // always render the room this tab is in.
+    setInterval(() => {
+      api.runtime
+        .sendMessage({
+          type: 'brosr:room-status',
+          room,
+          peerId,
+          role,
+          source,
+          panelUrl,
+          data: status(),
+        })
+        .catch(() => {});
+    }, 1000);
   }
 
-  // A room page cannot reach the browser chrome, and Zen hides its toolbar in
-  // compact mode. One small button keeps the panel findable. The reply says
-  // whether the sidebar or a tab opened, so a harness can read the outcome.
+  // A room page cannot reach the browser chrome. One small button keeps the
+  // room window findable. The reply says whether a window or a tab opened, so
+  // a harness can read the outcome.
   if (source === 'content-script' && ROOM_PAGE.test(location.href)) {
     const style = document.createElement('style');
     style.textContent = `
       #brosr-panel-button {
         position: fixed;
-        right: 8px;
-        bottom: 8px;
+        right: 10px;
+        bottom: 10px;
         z-index: 2147483647;
         margin: 0;
         padding: 6px 8px;
@@ -346,12 +436,12 @@ export async function start() {
     button.id = 'brosr-panel-button';
     button.type = 'button';
     button.textContent = 'Room panel';
-    button.setAttribute('aria-label', 'Open the Brosr room panel');
+    button.setAttribute('aria-label', 'Open the Brosr room window');
     button.addEventListener('click', async () => {
       try {
-        const reply = await browser.runtime.sendMessage({ type: 'brosr:open-sidebar' });
+        const reply = await api.runtime.sendMessage({ type: 'brosr:open-panel' });
         document.documentElement.dataset.brosrPanel =
-          reply && reply.sidebar ? 'sidebar' : reply && reply.tabId ? 'tab' : 'failed';
+          reply && reply.windowId ? 'window' : reply && reply.tabId ? 'tab' : 'failed';
       } catch {
         document.documentElement.dataset.brosrPanel = 'failed';
       }
@@ -381,21 +471,39 @@ export async function start() {
   publish();
 
   // The room panel lives in the browser chrome, so it asks the tab. Only
-  // Firefox exposes browser.runtime here, and a plain page test still works.
-  if (typeof browser !== 'undefined' && browser.runtime && browser.runtime.onMessage) {
-    browser.runtime.onMessage.addListener((message) => {
+  // Firefox exposes api.runtime here, and a plain page test still works.
+  if (api && api.runtime && api.runtime.onMessage) {
+    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      // Gecko accepts a returned promise. Chrome does not, so every reply also
+      // goes out through sendResponse and the listener holds the channel open.
+      const reply = (value) => {
+        sendResponse(value);
+        return true;
+      };
       if (!message) return undefined;
       if (message.type === 'brosr:status') {
         // Firefox resolves a response only from a Promise or sendResponse.
-        return Promise.resolve({ ok: true, room, peerId, role, source, data: status(), panelUrl });
+        return reply({ ok: true, room, peerId, role, source, data: status(), panelUrl });
       }
       if (message.type === 'brosr:grant') {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
-        return Promise.resolve({ ok: Boolean(applied), granted: Boolean(message.allowed) });
+        return reply({ ok: Boolean(applied), granted: Boolean(message.allowed) });
       }
       if (message.type === 'brosr:command') {
         lastCommand = String(message.command || '');
-        return Promise.resolve({ ok: true });
+        return reply({ ok: true });
+      }
+      if (message.type === 'brosr:leave') {
+        // A leave is not a dropped connection. It clears the stored room, so a
+        // later page load starts fresh instead of rejoining with a stale id.
+        leaving = true;
+        try {
+          sessionStorage.removeItem('brosr-room');
+        } catch {
+          // Storage can be off. The socket still closes.
+        }
+        if (socket && socket.readyState <= 1) socket.close();
+        return reply({ ok: true });
       }
       return undefined;
     });

@@ -111,6 +111,8 @@ export function createRoomClient({
     appReceived: 0,
     appDropped: 0,
     lastApp: null,
+    hostId,
+    hostMigrations: 0,
   };
   let firstSeen = false;
   let firstAt = 0;
@@ -125,7 +127,11 @@ export function createRoomClient({
   let batcher = null;
   let lastInputFlush = -Infinity;
 
-  const isHost = () => role === 'host';
+  // The host can change. A room elects a successor when the host leaves, so
+  // both the role and the host id stay mutable inside the client.
+  let currentRole = role;
+  let currentHost = hostId;
+  const isHost = () => currentRole === 'host';
   // The host owns the room clock. Its own local time is room time, and a peer
   // converts its local time with the offset it measured from the host.
   const roomTimeOf = (local = now()) => (isHost() ? local : clock.roomTime(local));
@@ -156,6 +162,29 @@ export function createRoomClient({
 
   function sendSnapshot() {
     sendMessage(state.snapshot());
+  }
+
+  // The host left. Every peer holds the same list of live ids, so they all name
+  // the same successor without a vote. The successor takes over the room clock
+  // and answers a hello with the snapshot it already holds.
+  function migrateHost(gone) {
+    if (!gone || gone !== currentHost) return null;
+    const next = state.electNextHost(gone);
+    stats.hostMigrations += 1;
+    if (!next) {
+      currentHost = '';
+      stats.hostId = '';
+      return null;
+    }
+    currentHost = next;
+    stats.hostId = next;
+    if (next === peerId) {
+      currentRole = 'host';
+      stats.role = 'host';
+      state.role = 'host';
+      sendSnapshot();
+    }
+    return next;
   }
 
   function setGrant(peer, allowed) {
@@ -328,7 +357,7 @@ export function createRoomClient({
       stats.position = Math.round(nowState.position * 1000) / 1000;
       stats.playing = nowState.playing;
     }
-    if (role === 'host') return { ok: true };
+    if (isHost()) return { ok: true };
     if (!element) return { ok: false, reason: 'no-media' };
 
     const expected =
@@ -459,7 +488,7 @@ export function createRoomClient({
         return { ok: true };
       }
       case 'pong':
-        if (message.from && message.from !== hostId) return { ok: true, ignored: 'not-host' };
+        if (message.from && message.from !== currentHost) return { ok: true, ignored: 'not-host' };
         clock.onPong(message, local);
         stats.rtt = clock.roundTrip();
         return { ok: true };
@@ -544,7 +573,13 @@ export function createRoomClient({
         return { ok: true };
       }
       case 'bye':
-        return { ok: true };
+        // A host that says goodbye hands the room to the smallest live id. A
+        // peer that leaves only leaves.
+        if (message.peerId === currentHost) {
+          state.leave(message.peerId);
+          migrateHost(message.peerId);
+        }
+        return { ok: true, host: currentHost };
       default:
         return { ok: true };
     }
@@ -588,13 +623,17 @@ export function createRoomClient({
   function tick(local = now()) {
     // A dropped socket leaves its entry behind. The count only means live peers
     // once the map forgets a peer that stopped sending presence.
-    state.prune({ at: local });
+    const gone = state.prune({ at: local });
+    // A host that stops sending presence has left, and the room elects again.
+    if (currentHost && currentHost !== peerId && gone.includes(currentHost)) {
+      migrateHost(currentHost);
+    }
     if (batcher && local - lastInputFlush >= POINTER_INTERVAL_MS) {
       lastInputFlush = local;
       batcher.flush();
     }
     if (!isHost() && clock.due(local)) {
-      sendMessage({ ...clock.ping(local), to: hostId });
+      sendMessage({ ...clock.ping(local), to: currentHost });
     }
     if (!isHost()) return stats;
     if (local - lastHostTick >= HOST_TICK_MS) {
@@ -636,8 +675,10 @@ export function createRoomClient({
   function publish() {
     const grantedPeers = new Set(grants.active().map((grant) => grant.peerId));
     return {
-      role,
+      role: currentRole,
       peerId,
+      hostId: currentHost,
+      hostMigrations: stats.hostMigrations,
       rtt: stats.rtt,
       position: stats.position,
       pos: stats.position,
@@ -701,7 +742,7 @@ export function createRoomClient({
   }
 
   return {
-    role,
+    role: currentRole,
     room,
     peerId,
     receive,

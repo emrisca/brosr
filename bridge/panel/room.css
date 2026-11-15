@@ -1,0 +1,697 @@
+/* The panel sits in Zen's left column, so it borrows that column's habits: a
+   muted surface, 8px rows, one accent, 6/8/10 spacing and a 240px floor. Zen
+   supplies the theme colours and the panel rewrites them for contrast. */
+
+:root {
+  color-scheme: light dark;
+  --room-base: Canvas;
+  --room-text: CanvasText;
+  --room-bg: color-mix(in srgb, var(--room-text) 5%, var(--room-base));
+  --room-dim: color-mix(in srgb, var(--room-text) 70%, var(--room-base));
+  --room-border: color-mix(in srgb, var(--room-text) 14%, transparent);
+  --room-surface: color-mix(in srgb, var(--room-text) 7%, transparent);
+  --room-surface-hover: color-mix(in srgb, var(--room-text) 12%, transparent);
+  --room-menu-bg: color-mix(in srgb, var(--room-base) 96%, var(--room-text) 4%);
+  --room-accent: #b07a52;
+  --room-focus: #4d8df0;
+  /* Status colours need one value per scheme, because a mid tone cannot reach
+     4.5 to 1 on a light surface and a dark one. The plain value is the
+     fallback for an engine without light-dark. */
+  --room-live: #1d7a4d;
+  --room-live: light-dark(#1d7a4d, #5fd39a);
+  --room-down: #a3271a;
+  --room-down: light-dark(#a3271a, #ff9d8a);
+  --room-radius: 8px;
+  --room-radius-sm: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--room-bg);
+  color: var(--room-text);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+  min-height: 100vh;
+  padding: 8px 8px 10px;
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* The panel is often narrow, so every block sizes against its own width. */
+  container-type: inline-size;
+  scrollbar-gutter: stable;
+  animation: room-in 160ms ease-out both;
+}
+
+/* The toolbar popup takes its size from this document, so it holds one column
+   and caps its height instead of filling a window. The browser draws the popup
+   frame, so the page adds no entrance motion of its own. */
+:root[data-surface="popup"] body {
+  width: 360px;
+  min-height: 0;
+  max-height: 560px;
+  overflow-y: auto;
+  animation: none;
+}
+
+p,
+h1 {
+  margin: 0;
+}
+
+/* Two rows keep the room name whole while the chips wrap under it. The header
+   stays on top of the scroller, so the menu and the seal stay reachable. */
+.room-header {
+  position: sticky;
+  top: -8px;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title actions"
+    "meta actions";
+  gap: 2px 8px;
+  align-items: start;
+  margin: -8px -8px 0;
+  padding: 8px 8px 8px;
+  border-bottom: 1px solid var(--room-border);
+  background: color-mix(in srgb, var(--room-base) 92%, transparent);
+  backdrop-filter: blur(12px) saturate(1.05);
+}
+
+.room-title {
+  grid-area: title;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.room-meta {
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+}
+
+.room-header .icon-button {
+  grid-area: actions;
+}
+
+h1 {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--room-dim);
+}
+
+.dot[data-state="live"] {
+  background: var(--room-live);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--room-live) 22%, transparent);
+}
+
+.dot[data-state="down"] {
+  background: var(--room-down);
+}
+
+.count {
+  flex: none;
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.count:empty,
+.role:empty {
+  display: none;
+}
+
+/* The seal tells a person whether this room is private on the wire. A failed
+   key is the one state that needs a colour, because the room will not open. */
+.seal {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--room-radius-sm);
+  background: var(--room-surface);
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.seal[hidden] {
+  display: none;
+}
+
+.seal[data-state="on"] {
+  color: var(--room-live);
+}
+
+.seal[data-state="failed"] {
+  color: var(--room-down);
+}
+
+.role {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--room-radius-sm);
+  background: var(--room-surface);
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.icon-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--room-radius-sm);
+  background: transparent;
+  color: var(--room-dim);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.icon-button svg {
+  fill: currentColor;
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded="true"] {
+  background: var(--room-surface-hover);
+  color: var(--room-text);
+}
+
+/* The menu is the only place a room action hides, so every row carries an
+   icon and a plain name. The two rules split the safe actions from hiding the
+   panel and leaving, and the last row keeps the one colour that means stop. */
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 1px;
+  min-width: 196px;
+  max-width: min(248px, calc(100vw - 16px));
+  padding: 5px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius);
+  background: var(--room-menu-bg);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--room-base) 55%, transparent);
+  transform-origin: top right;
+  animation: menu-in 120ms ease-out;
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--room-border);
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+/* A row is a 32px target with the icon on its own column, so the labels line
+   up even when one wraps at a narrow width. */
+.menu button {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--room-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+
+.menu button:hover {
+  background: var(--room-surface-hover);
+}
+
+.menu button:hover svg,
+.menu button:focus-visible svg {
+  opacity: 1;
+}
+
+.menu .menu-danger {
+  color: var(--room-down);
+}
+
+.menu .menu-danger:hover {
+  background: color-mix(in srgb, var(--room-down) 12%, transparent);
+}
+
+.status,
+.notice {
+  min-height: 1.45em;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.status[data-state="error"],
+.notice[data-bad="1"] {
+  color: var(--room-down);
+}
+
+/* An empty notice takes no height, but it stays a live region so the next line
+   still reaches a screen reader. The short panel needs that room for the
+   watch card. */
+.notice:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.section-title {
+  margin-bottom: 6px;
+  color: var(--room-dim);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+ul {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--room-radius);
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+li:hover {
+  background: var(--room-surface);
+}
+
+li .swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--room-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--room-text) 10%, transparent);
+}
+
+li .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+li .latency {
+  flex: none;
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+li .grant {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+li .grant::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--room-live);
+}
+
+.empty {
+  justify-content: space-between;
+  color: var(--room-dim);
+}
+
+.empty span {
+  min-width: 0;
+}
+
+.skeleton {
+  display: grid;
+  gap: 6px;
+  padding: 10px 8px;
+}
+
+.skeleton:hover {
+  background: transparent;
+}
+
+.skeleton span {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--room-border);
+}
+
+.skeleton .w-long {
+  width: 60%;
+}
+
+.skeleton .w-short {
+  width: 35%;
+}
+
+button {
+  flex: none;
+  border: 0;
+  border-radius: var(--room-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+button:hover {
+  background: var(--room-surface-hover);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button:focus-visible,
+.icon-button:focus-visible,
+.menu button:focus-visible {
+  outline: 2px solid var(--room-focus);
+  outline-offset: 1px;
+}
+
+.peer-control {
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--room-border);
+  font-size: 11px;
+}
+
+.control {
+  padding-top: 10px;
+  border-top: 1px solid var(--room-border);
+}
+
+.control .history {
+  margin: 0;
+}
+
+.control .history li {
+  min-height: 0;
+  padding: 2px 0;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.control .history li:hover {
+  background: transparent;
+}
+
+.invite label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.invite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.invite-copy {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--room-border);
+  font-size: 11px;
+}
+
+.invite input {
+  display: block;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius-sm);
+  background: var(--room-surface);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.invite input:focus-visible {
+  outline: 2px solid var(--room-focus);
+  outline-offset: 1px;
+}
+
+/* A tile dropped on the panel lands above the peer list. */
+.site-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.site-list a {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 6px 8px;
+  border-radius: var(--room-radius-sm);
+  background: var(--room-surface);
+  color: inherit;
+  font-size: 11px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-list a:hover {
+  background: var(--room-surface-hover);
+}
+
+/* The watch card reports playback now and holds the control for the media
+   bridge, so the panel never shows a button that looks live and is not. */
+.watch {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--room-border);
+}
+
+.watch-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.watch-head .section-title {
+  margin-bottom: 0;
+}
+
+.watch-state {
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.watch-row .watch-copy {
+  flex: 1;
+  min-width: 0;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.watch-button {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--room-border);
+  font-size: 11px;
+  color: var(--room-dim);
+}
+
+.watch-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.watch-button:disabled:hover {
+  background: transparent;
+}
+
+footer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 10px;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--room-border);
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+footer .stat:last-child {
+  text-align: right;
+}
+
+.stat {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty button {
+  border: 1px solid var(--room-border);
+}
+
+/* A narrow column drops the role chip and stacks the two rows that carry a
+   button. Nothing is hidden that a person needs to reach the room. */
+@container (max-width: 260px) {
+  .role {
+    display: none;
+  }
+
+  .invite-row,
+  .watch-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .invite-copy,
+  .watch-button {
+    justify-self: start;
+  }
+
+  footer {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .room-header {
+    background: var(--room-bg);
+    backdrop-filter: none;
+  }
+}
+
+@keyframes room-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    animation: none;
+  }
+
+  .menu {
+    animation: none;
+  }
+
+  li,
+  button,
+  .icon-button {
+    transition: none;
+  }
+
+  button:active {
+    transform: none;
+  }
+}

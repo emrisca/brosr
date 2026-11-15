@@ -6,6 +6,14 @@ export const MAX_NAV_PER_SECOND = 1;
 // Presence frames arrive every 100 ms. A peer unseen for this long has gone.
 export const PEER_TTL_MS = 5000;
 
+// Host migration. Every peer elects the same successor without a vote, so a
+// room survives the host closing the lid. The smallest live id wins, which is
+// identical on every machine and needs no shared clock or join order.
+export function electHost(ids = []) {
+  const live = [...new Set(ids)].filter((id) => typeof id === 'string' && id).sort();
+  return live.length ? live[0] : null;
+}
+
 export class Room {
   constructor({ role = 'peer', peerId = 'me', now = () => Date.now() } = {}) {
     this.role = role;
@@ -48,6 +56,12 @@ export class Room {
     }
     for (const id of gone) this.leave(id);
     return gone;
+  }
+
+  // The host is gone. This peer and every other live peer see the same list,
+  // so they all name the same successor.
+  electNextHost(gone) {
+    return electHost([this.peerId, ...this.peers.keys()].filter((id) => id !== gone));
   }
 
   nextSequence() {

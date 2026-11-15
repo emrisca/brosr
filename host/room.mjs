@@ -1,0 +1,389 @@
+// The room lifecycle for the app. One call builds a profile, starts the relay,
+// opens the browser and writes a run file. The app reads that file for status
+// and calls stop to end it.
+import fs from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { newRoomKey } from '../core/seal.mjs';
+import { prepareProfile } from '../zen/profile.mjs';
+import { buildChrome, buildXpi } from '../zen/package.mjs';
+import { find, launchArgs, rememberStart } from './browsers.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+export const ROOT = path.join(here, '..');
+const RUN_DIR = path.join(here, '.run');
+const RUN_FILE = path.join(RUN_DIR, 'room.json');
+const PROFILE = path.join(RUN_DIR, 'profile');
+// A Chromium room keeps its own data directory, because the add-on format and
+// the profile layout are not the ones Gecko reads.
+const PROFILE_CHROME = path.join(RUN_DIR, 'profile-chrome');
+const CHROME_BRIDGE = path.join(ROOT, 'zen', '.runtime', 'bridge-chrome');
+const BRIDGE = path.join(ROOT, 'zen', '.runtime', 'bridge.xpi');
+const RELAY = path.join(ROOT, 'spike', 'relay.js');
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// The relay serves the fixtures, so the bridge has to be in the build the relay
+// hands to the page. A missing file is built on the spot.
+export function ensureBridge() {
+  const built = !fs.existsSync(BRIDGE);
+  if (built) buildXpi(BRIDGE);
+  return { file: BRIDGE, built };
+}
+
+function portOpen(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => server.close(() => resolve(true)));
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+export async function freePort(start = 8787) {
+  for (let port = start; port < start + 40; port += 1) {
+    if (await portOpen(port)) return port;
+  }
+  throw new Error(`no free port between ${start} and ${start + 39}`);
+}
+
+function relayReady(port) {
+  return new Promise((resolve) => {
+    const request = http.get(
+      { host: '127.0.0.1', port, path: '/room-b.html', timeout: 800 },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode === 200);
+      }
+    );
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolve(false));
+  });
+}
+
+// The room count the app shows comes from the relay itself, so a peer that
+// left is gone on the next poll. A relay that cannot answer reads as zero.
+function relayStatus(port, room) {
+  return new Promise((resolve) => {
+    const request = http.get(
+      {
+        host: '127.0.0.1',
+        port,
+        path: `/status?room=${encodeURIComponent(room)}`,
+        timeout: 800,
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolve(null));
+  });
+}
+
+async function waitForRelay(port, ms = 12000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (await relayReady(port)) return true;
+    await delay(120);
+  }
+  return false;
+}
+
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+// A browser starts helper processes. On POSIX the spawn is a group leader, so
+// one signal reaches the whole tree. Windows needs taskkill for the same job.
+function killTree(pid) {
+  if (!alive(pid)) return false;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(-pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    try {
+      process.kill(pid, 'SIGTERM');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function readRun() {
+  try {
+    return JSON.parse(fs.readFileSync(RUN_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeRun(run) {
+  ensureDir(RUN_DIR);
+  fs.writeFileSync(RUN_FILE, JSON.stringify(run, null, 2));
+  return run;
+}
+
+export function roomId() {
+  const bytes = new Uint8Array(3);
+  crypto.getRandomValues(bytes);
+  return `room-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// The room page reads the key from the fragment, so the relay never sees it.
+export function roomUrl({ port, room, key, name, role = 'host', peer = 'host', panel = true }) {
+  const url = new URL(`http://127.0.0.1:${port}/room-b.html`);
+  url.searchParams.set('role', role);
+  url.searchParams.set('room', room);
+  url.searchParams.set('peer', peer);
+  url.searchParams.set('name', name);
+  // The page connects to the relay on this port. Without it the page falls back
+  // to 8787, which is wrong as soon as the first port is busy.
+  url.searchParams.set('relay', String(port));
+  if (panel) url.searchParams.set('panel', '1');
+  url.hash = `k=${key}`;
+  return url.toString();
+}
+
+// A Chromium room loads the bridge as an unpacked folder, so the build is a
+// directory and not an XPI.
+function ensureChromeBridge() {
+  return { dir: buildChrome(CHROME_BRIDGE).dir, built: true };
+}
+
+// A prepared profile is the slow step. The app shows the result line by line,
+// so this returns a report instead of only a path.
+export async function prepare({ browser: browserId, bridge = true, onProgress } = {}) {
+  const browser = find(browserId);
+  // A build that refuses the add-on cannot host a room. The reason is the same
+  // one the setup screen shows, so nothing is hidden behind a silent launch.
+  if (!browser.supported) {
+    throw new Error(browser.reason || `${browser.name} cannot host a room`);
+  }
+  if (browser.family === 'chromium') {
+    const existed = fs.existsSync(PROFILE_CHROME);
+    const extension = ensureChromeBridge();
+    ensureDir(PROFILE_CHROME);
+    if (typeof onProgress === 'function') {
+      onProgress({ step: 1, total: 1, label: 'Room profile ready' });
+    }
+    return {
+      browser,
+      profile: PROFILE_CHROME,
+      bridge: { file: extension.dir, built: extension.built, version: bridgeVersion() },
+      extension: extension.dir,
+      extensions: 1,
+      reused: existed,
+      blocker: false,
+      staged: null,
+    };
+  }
+  const bridgeInfo = bridge ? ensureBridge() : { file: BRIDGE, built: false };
+  const report = await prepareProfile(PROFILE, {
+    bridge: bridgeInfo.file,
+    native: browser.native,
+    configure: false,
+    onProgress,
+    // A room profile that already matches its inputs is ready as it stands, so
+    // the second start of a room does not copy anything.
+    reuse: true,
+  });
+  const extensions = report.safeBrowsing ? report.safeBrowsing.installed.length : 0;
+  return {
+    browser,
+    profile: report.profile,
+    bridge: {
+      file: bridgeInfo.file,
+      built: bridgeInfo.built,
+      version: bridgeVersion(),
+    },
+    extensions,
+    reused: Boolean(report.reused),
+    blocker: Boolean(report.blocker),
+    staged: report.safeBrowsing ? report.safeBrowsing.staged : null,
+  };
+}
+
+function bridgeVersion() {
+  try {
+    const manifest = path.join(ROOT, 'bridge', 'manifest.json');
+    return JSON.parse(fs.readFileSync(manifest, 'utf8')).version || null;
+  } catch {
+    return null;
+  }
+}
+
+// One room at a time. A second start stops the first, because two relays on one
+// port and two windows on one profile would fight.
+export async function start(options = {}) {
+  const previous = readRun();
+  if (previous && (alive(previous.relayPid) || alive(previous.browserPid))) stop();
+
+  // Each leg is timed, because the whole wait is the sum of three steps and the
+  // report says which one cost the time.
+  const began = Date.now();
+  const browser = find(options.browser);
+  const port = Number(options.port) || (await freePort());
+  const room = options.room || roomId();
+  const name = options.name || 'Host';
+  const key = newRoomKey();
+
+  // The relay does not read the profile, so it boots while the profile is
+  // written. A cold first run then costs the larger of the two legs, not both.
+  const relay = spawn(process.execPath, [RELAY], {
+    cwd: ROOT,
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' },
+    detached: true,
+    stdio: 'ignore',
+  });
+  relay.unref();
+
+  let prepared;
+  try {
+    prepared = await prepare({ browser: browser.id });
+  } catch (error) {
+    killTree(relay.pid);
+    throw error;
+  }
+  const preparedAt = Date.now();
+
+  const ready = await waitForRelay(port);
+  if (!ready) {
+    killTree(relay.pid);
+    throw new Error(`the relay did not answer on port ${port}`);
+  }
+  const relayAt = Date.now();
+
+  const url = roomUrl({ port, room, key, name });
+  const args = launchArgs(browser, {
+    profile: prepared.profile,
+    url,
+    headless: Boolean(options.headless),
+    extension: prepared.extension || null,
+  });
+  const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
+  child.unref();
+  const launchedAt = Date.now();
+
+  const run = writeRun({
+    ok: true,
+    started: new Date().toISOString(),
+    browser: { id: browser.id, name: browser.name, path: browser.path, family: browser.family },
+    room,
+    name,
+    port,
+    url,
+    invite: url,
+    profile: prepared.profile,
+    relayPid: relay.pid,
+    browserPid: child.pid,
+    bridge: prepared.bridge,
+    extensions: prepared.extensions,
+    timings: {
+      prepareMs: preparedAt - began,
+      relayMs: relayAt - preparedAt,
+      launchMs: launchedAt - relayAt,
+      totalMs: launchedAt - began,
+      reused: Boolean(prepared.reused),
+    },
+  });
+  return run;
+}
+
+export function stop() {
+  const run = readRun();
+  if (!run) return { ok: true, stopped: false, reason: 'no room is running' };
+  const relay = killTree(run.relayPid);
+  const browser = killTree(run.browserPid);
+  try {
+    fs.rmSync(RUN_FILE);
+  } catch {
+    // A second stop has nothing to remove.
+  }
+  return { ok: true, stopped: relay || browser, relay, browser, room: run.room };
+}
+
+export async function status() {
+  const run = readRun();
+  if (!run) return { ok: true, running: false };
+  const relay = alive(run.relayPid);
+  const browser = alive(run.browserPid);
+  const ready = relay ? await relayReady(run.port) : false;
+  const link = ready ? await relayStatus(run.port, run.room) : null;
+  const peers = link ? link.peers : 0;
+  // The first peer proves the page loaded and the bridge ran. That wait is the
+  // start time a person feels, so it is recorded once and kept for the order.
+  if (peers > 0 && !run.liveMs) {
+    run.liveMs = Date.now() - Date.parse(run.started);
+    writeRun(run);
+    rememberStart(run.browser.id, run.liveMs);
+  }
+  return {
+    ...run,
+    running: relay || browser,
+    relayAlive: relay,
+    browserAlive: browser,
+    relayReady: ready,
+    peers,
+  };
+}
+
+// The room window belongs to the extension, so the app cannot open it. It can
+// open one short lived tab, which the bridge turns into a request for the
+// window and then closes.
+export function showPanel() {
+  const run = readRun();
+  if (!run) throw new Error('no room is running');
+  if (!alive(run.browserPid)) throw new Error(`the browser is closed. Start the room again`);
+  const browser = find(run.browser.id);
+  const url = new URL(run.url);
+  for (const key of ['role', 'room', 'peer', 'name', 'host', 'bias', 'relay', 'panel', 'capture', 'selftest']) {
+    url.searchParams.delete(key);
+  }
+  url.searchParams.set('summon', '1');
+  url.hash = '';
+  const child = spawn(
+    browser.path,
+    launchArgs(browser, {
+      profile: run.profile,
+      url: url.toString(),
+      handoff: true,
+      extension: browser.family === 'chromium' ? run.bridge.file : null,
+    }),
+    { detached: true, stdio: 'ignore' }
+  );
+  child.unref();
+  return { ok: true, pid: child.pid, url: url.toString() };
+}
+
+export { RUN_FILE, PROFILE };

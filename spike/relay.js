@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 8787);
+const STARTED = Date.now();
 // Loopback by default. A LAN test sets HOST=0.0.0.0, and this relay has no
 // authentication, so never do that on a network you do not trust.
 const HOST = process.env.HOST || '127.0.0.1';
@@ -16,11 +17,23 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
 };
 
 // One table per room. A frame never crosses from one room to another.
 const rooms = new Map();
-const stats = { forwarded: 0 };
+const stats = { forwarded: 0, text: 0, binary: 0 };
+// A proof reads this file to show what the relay saw. It stays off by default,
+// because a capture holds every frame the room carried.
+const CAPTURE = process.env.RELAY_CAPTURE || '';
+
+function capture(room, opcode, payload) {
+  if (!CAPTURE) return;
+  fs.appendFileSync(
+    CAPTURE,
+    JSON.stringify({ room, opcode, bytes: payload.length, hex: payload.toString('hex') }) + '\n'
+  );
+}
 
 function leave(client) {
   const room = rooms.get(client.room);
@@ -40,8 +53,28 @@ const server = http.createServer((req, res) => {
     const body = JSON.stringify({
       rooms: Object.fromEntries([...rooms].map(([name, set]) => [name, set.size])),
       forwarded: stats.forwarded,
+      text: stats.text,
+      binary: stats.binary,
     });
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(body);
+    return;
+  }
+  // The app asks how many people are in the room. One small read keeps that
+  // number out of the frame path and gives the webview no new transport.
+  if (url.pathname === '/status') {
+    const room = url.searchParams.get('room') || '';
+    const body = JSON.stringify({
+      room,
+      peers: room && rooms.has(room) ? rooms.get(room).size : 0,
+      rooms: Object.fromEntries([...rooms].map(([name, set]) => [name, set.size])),
+      uptime: Math.round((Date.now() - STARTED) / 1000),
+    });
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'access-control-allow-origin': '*',
+    });
     res.end(body);
     return;
   }
@@ -49,6 +82,11 @@ const server = http.createServer((req, res) => {
   // The base name strips a traversal attempt before it reaches the disk.
   if (url.pathname.startsWith('/media/')) {
     serveMedia(path.join(__dirname, '.runtime', path.basename(url.pathname)), req, res);
+    return;
+  }
+  // The mark lives in one folder, so a room page needs no copy.
+  if (url.pathname.startsWith('/assets/')) {
+    serve(path.join(__dirname, '..', 'assets', path.basename(url.pathname)), res);
     return;
   }
   const rel = url.pathname === '/' ? '/sync.html' : url.pathname;
@@ -173,13 +211,18 @@ function readFrames(client) {
       for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
     }
     buf = buf.subarray(off + maskLen + len);
-    if (opcode === 1) {
-      const text = payload.toString('utf8');
+    // A sealed frame is binary. The relay parses neither kind and forwards the
+    // opcode with the bytes, so a seal holds end to end.
+    if (opcode === 1 || opcode === 2) {
+      const out = opcode === 1 ? Buffer.from(payload.toString('utf8'), 'utf8') : payload;
+      if (opcode === 1) stats.text += 1;
+      else stats.binary += 1;
+      capture(client.room, opcode, out);
       const room = rooms.get(client.room);
       if (room) {
         for (const other of room) {
           if (other !== client) {
-            sendFrame(other, 0x01, Buffer.from(text, 'utf8'));
+            sendFrame(other, opcode, out);
             stats.forwarded += 1;
           }
         }

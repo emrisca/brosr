@@ -9,9 +9,11 @@ script and a Node test drive the same modules.
 | `clock.mjs` | Four-timestamp offset, smallest round trip wins, a re-measure every 30 s |
 | `drift.mjs` | Seek over 300 ms, rate nudge over 40 ms, pause for buffering and ads |
 | `media.mjs` | `HTMLMediaElement` adapter keyed by a source URL |
+| `youtube.mjs` | YouTube IFrame player adapter, with an element view for the room |
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
 | `overlay.mjs` | Cursor overlay inside one closed shadow root |
 | `input.mjs` | Batcher, grants, origin allowlist, sensitive fields, targeting, replay |
+| `seal.mjs` | Room key, HKDF-SHA256 expansion, XChaCha20-Poly1305 frames, invite link |
 | `sync.mjs` | The client that wires the rest, relays app messages, with an injected transport |
 | `browser-entry.mjs` | Content-script entry: relay socket, reconnect, ticks, `dataset.brosr` |
 
@@ -53,7 +55,12 @@ Each one cost a spike run to learn.
 5. An input frame names its sender. The receiver looks up the grant by peer, and it refuses a
    frame without `peerId`.
 
-`npm test` runs 65 tests with the Node test runner and no dependencies.
+`npm test` runs 124 tests with the Node test runner and no dependencies. The wire test also runs
+against the axum relay when `RELAY_BIN` names its binary.
+
+A room whose invite carries a key seals every frame it sends, and it drops an unsealed frame
+instead of trusting it. A key that fails to derive refuses the connection rather than falling
+back to plain text.
 
 Nothing here opens a socket, draws outside the shadow root, or reads a cookie. Input and grants
 live in `input.mjs`, and the trusted actuator is M7.

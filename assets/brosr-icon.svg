@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="base" x1="180" y1="120" x2="860" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#414144"/>
+      <stop offset="1" stop-color="#212124"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="508" r="310" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#base)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#glow)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"/>
+
+  <g stroke="#ffffff" stroke-opacity="0.42" stroke-width="8" stroke-linecap="round">
+    <path d="M512 512 L330 352"/>
+    <path d="M512 512 L704 378"/>
+    <path d="M512 512 L322 646"/>
+    <path d="M512 512 L722 660"/>
+    <path d="M512 512 L512 272"/>
+    <path d="M512 512 L468 764"/>
+    <path d="M330 352 L512 272"/>
+    <path d="M704 378 L722 660"/>
+    <path d="M322 646 L468 764"/>
+  </g>
+
+  <g fill="#ffffff" fill-opacity="0.92">
+    <circle cx="330" cy="352" r="26"/>
+    <circle cx="704" cy="378" r="30"/>
+    <circle cx="322" cy="646" r="22"/>
+    <circle cx="722" cy="660" r="26"/>
+    <circle cx="512" cy="272" r="20"/>
+    <circle cx="468" cy="764" r="22"/>
+  </g>
+
+  <circle cx="512" cy="512" r="64" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="3"/>
+  <circle cx="512" cy="512" r="46" fill="#ffffff"/>
+</svg>

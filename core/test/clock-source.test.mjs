@@ -12,7 +12,9 @@ const source = fs.readFileSync(path.join(here, '..', 'browser-entry.mjs'), 'utf8
 
 test('the page hands the room client wall time', () => {
   assert.match(source, /now: \(\) => Date\.now\(\)/);
-  assert.match(source, /client\.receive\(event\.data, Date\.now\(\)\)/);
+  // The sealed path decodes into frame first, so the call names frame. What
+  // matters is that a wall clock stamps it, not a page timeline.
+  assert.match(source, /client\.receive\(frame, Date\.now\(\)\)/);
   assert.match(source, /client\.tick\(Date\.now\(\)\)/);
 });
 

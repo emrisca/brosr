@@ -64,7 +64,7 @@ The extension requirement is the one that cannot be negotiated, so it decides th
 | A Gecko build of our own | Yes, in theory | Mozilla ended desktop embedding. A fork is years of work |
 
 **Decision: the browser is Firefox, and the app starts it with a Brosr profile.** The
-launcher, the bridge extension and the relay are ours. The rendering, tabs, address bar,
+start path, the bridge extension and the relay are ours. The rendering, tabs, address bar,
 add-on manager and updates belong to Firefox.
 
 Two consequences follow, and both shape the rest of this document.
@@ -80,14 +80,14 @@ does not pretend the two are equal.
 
 ### 3.1 Firefox against Chromium, side by side
 
-Both builds share the launcher, the protocol, the relay and the media policy. They differ in
+Both builds share the start path, the protocol, the relay and the media policy. They differ in
 three places: the engine, the trusted actuator, and the extension catalogue.
 
 | Question | Firefox build | Chromium build |
 | --- | --- | --- |
 | Full uBlock Origin | Yes, and every other MV2 add-on | No. Chromium retired Manifest V2 |
 | Other extensions | The Firefox add-on catalogue | The Chrome Web Store catalogue |
-| Trusted actuator | BiDi through the launcher, M7 | `chrome.debugger` in the bridge, with M8 |
+| Trusted actuator | BiDi through a Node helper, M7 | `chrome.debugger` in the bridge, with M8 |
 | Trusted input in v1 | Synthetic events only | Synthetic events plus the debugger |
 | Visible cost of a grant | The sidebar indicator | The browser's debug bar for the whole grant |
 | Bridge install | Signed XPI, or a temporary add-on in development | Unpacked folder with developer mode on |
@@ -124,7 +124,7 @@ change. Neither do the cursor overlay, the allowlists, the profile isolation or 
 move credentials. That is why the Chromium build stays cheap: one sync core, two thin adapters.
 
 **Cost of keeping both.** One extra bridge, about two to three weeks, plus a second test
-harness and a second install story. The launcher, the relay and the protocol stay as they are.
+harness and a second install story. The start path, the relay and the protocol stay as they are.
 
 ## 4. Extensions, in detail
 
@@ -154,9 +154,10 @@ work there, and the plan does not suggest it.
 The bridge declares `browser_specific_settings.gecko.id`, because signing needs a stable id.
 Each submission consumes a version number, so the build script bumps it.
 
-The plan never bundles uBlock Origin. It is GPLv3, it is already signed on AMO, and the person
-installs it from the add-on page in one click. Bundling adds a licence obligation and a stale
-copy to update.
+The room profile comes with uBlock Origin. `zen/profile.mjs` stages the AMO signed XPI once and
+copies it into the profile, so a new room starts blocked. The profile setup downloads the XPI
+and never redistributes it with the app, which keeps the licence obligation on Mozilla's signed
+copy. To restage the current version, remove `zen/.runtime/ubo.xpi`.
 
 ### 4.3 Coexistence with uBlock and with the page
 
@@ -208,8 +209,8 @@ space is the canvas and not the window.
 
 ```
 +---------------------------------------------------------------+
-| Launcher (Tauri v2, React)                                    |
-|  lobby | invite link | relay host | profile manager | BiDi     |
+| Start path (Node, zen/live.mjs)                               |
+|  room id | invite link | profile build | relay start | panel  |
 +------------------------------+--------------------------------+
                                | starts Firefox with a profile
 +------------------------------v--------------------------------+
@@ -233,14 +234,14 @@ space is the canvas and not the window.
 
 **Four parts.**
 
-1. **Launcher.** Tauri v2 with React 19 and Vite, like the other apps here. It finds Firefox
-   and manages the room profile. It starts the browser, writes the invite link, hosts the relay
-   for LAN rooms, and shows the lobby. It never renders a page.
+1. **Start path.** One Node script, `zen/live.mjs`. It finds Firefox, builds the room profile,
+   starts the browser, starts the relay for a LAN room, writes the invite link and opens the
+   panel. It renders no page of its own, so the browser draws every pixel the person sees.
 2. **Bridge.** A Firefox WebExtension in Manifest V2, so its background page stays alive for
    the length of a room. Content scripts handle the page, a sidebar holds the room UI, and the
    background page holds the sync core, the transport and the sealing.
-3. **Remote agent helper.** When the room wants a trusted actuator, the launcher starts Firefox with
-   `--remote-debugging-port` and owns one WebDriver BiDi session. The bridge asks the launcher
+3. **Remote agent helper.** When the room wants a trusted actuator, a Node helper starts Firefox
+   with `--remote-debugging-port` and owns one WebDriver BiDi session. The bridge asks the helper
    for actions over a loopback socket with a one-time token. Section 8 has the detail.
 4. **Relay.** One Rust binary with axum. It forwards sealed frames between the members of a
    room and stores nothing.
@@ -316,10 +317,10 @@ Forms, native controls and sites that check the flag do care.
 **v1 uses the synthetic actuator.** It covers cursors, scroll, media, canvas games and typing
 through the value setter. It needs nothing beyond the extension, so it works on any Firefox.
 
-**M7 adds the trusted actuator.** The launcher starts Firefox with `--remote-debugging-port`
+**M7 adds the trusted actuator.** The helper starts Firefox with `--remote-debugging-port`
 on a random loopback port, opens one WebDriver BiDi session, and reads the port Firefox
 announces on stdout. The bridge sends hover, press, release, key and text actions to the
-launcher over a loopback socket with a one-time token. The launcher translates them into
+helper over a loopback socket with a one-time token. The helper translates them into
 `input.performActions` for the tab's browsing context.
 
 Three rules for that channel:
@@ -351,18 +352,17 @@ Two things to design around:
 Firefox owns the tabs, the address bar, the add-on manager, the downloads and the devtools.
 The app owns everything around the room.
 
-- **Room profile.** `%APPDATA%/Brosr/profile` on Windows, the equivalent elsewhere, created by
-  the launcher with `-CreateProfile` on first run. The launcher starts it with
+- **Room profile.** A directory in the checkout, `zen/.runtime/live-profile` by default, built
+  by `zen/profile.mjs` on the first run. The start path runs Zen with
   `--profile <path> --no-remote`, which runs a separate instance beside the person's daily
-  Firefox. The cost is that logins and add-ons do not carry over, and the app says so during
-  onboarding.
+  browser. The cost is that logins and add-ons do not carry over, and the first run says so.
 - **Sidebar.** `sidebar_action` holds the room UI: members with colours, who holds a grant,
-  playback state, relay status and the invite link. The launcher opens it on each start.
+  playback state, relay status and the invite link. The start path opens it on each run.
 - **Add-ons.** Full uBlock Origin installs from its add-on page in one click. The bridge needs
   a signed build or a temporary add-on, and the onboarding shows which.
 - **Onboarding.** Three steps: create the room profile, install uBlock Origin, install the
-  bridge. The launcher opens the right pages in the right order and checks each step before it
-  continues.
+  bridge. The start path runs all three and checks each step before it continues. A flag skips
+  the add-on pass for a throwaway profile.
 - **Not in v1:** our own tab strip, our own address bar, bookmarks, a password manager, and
   profile import from the daily Firefox.
 
@@ -397,13 +397,13 @@ room treats input as a privilege, not a default.
 
 | Option | Works over the internet | Our cost | Notes |
 | --- | --- | --- | --- |
-| Relay in the launcher, on the LAN | No | None | Room code plus LAN address. Good for a house, useless for a friend in another city |
-| Relay in the launcher plus a tunnel | Yes, poorly | None | Works, and nobody will do it |
+| Relay on this machine, on the LAN | No | None | Room code plus LAN address. Good for a house, useless for a friend in another city |
+| Relay on this machine plus a tunnel | Yes, poorly | None | Works, and nobody will do it |
 | Hosted relay on a small VPS (axum, one binary) | Yes | A few dollars a month | The same code as the LAN relay. Rooms are rows in memory |
 | Hosted relay on a serverless realtime platform | Yes | Free tier at this scale | Less code, one more vendor, and the seal means the vendor learns nothing |
 
-**Decision: write one axum relay binary, run it in the launcher for LAN rooms, and deploy the
-same binary for internet rooms.** The app needs no vendor to work. A hosted platform stays an
+**Decision: write one axum relay binary, start it beside the browser for LAN rooms, and deploy
+the same binary for internet rooms.** The app needs no vendor to work. A hosted platform stays an
 option if running a VPS becomes annoying. The Gravity Index catalogue has no realtime relay
 service that fits this shape, so the plan does not pick one.
 
@@ -461,11 +461,11 @@ says.
 
 One limit stays open. The drift figure is a loopback result on one machine, not a network
 result. The spike closed the other two: the media test ran a real `HTMLMediaElement`, and a
-token-gated loopback agent carried a trusted key through the launcher's channel. That agent
-ran inside the harness, not in a Tauri process, so the launcher half is still M7.
+token-gated loopback agent carried a trusted key beside the browser. That agent ran inside the
+harness, so a start path that owns it is still M7.
 
 M0 also settles whether the sidebar holds a room across tab switches, and whether Firefox
-locks the profile while the launcher updates it.
+locks the profile while the start path updates it.
 
 ### M1 · Sync core and presence
 
@@ -493,6 +493,15 @@ Ad detection and pause. Buffering policy. *Done when:* a 40-minute video holds w
 p95 across three peers, with at most one seek per ten minutes. A deliberate 600 ms network
 delay then causes one seek rather than a loop.
 
+**As built (14 November 2026).** [core/media.mjs](core/media.mjs) holds the `HTMLMediaElement`
+adapter. [core/youtube.mjs](core/youtube.mjs) holds the YouTube one. The peer path reads element
+fields, so the YouTube adapter hands back a view with those fields. One path then drives both
+players. `core/test/youtube-room.test.mjs` drives a fake IFrame player through the real client.
+A peer that matches the host never seeks. A 20 s drift seeks once through `seekTo`, and a 200 ms
+drift nudges the rate. A buffering player pauses, and the ad class pauses. Still missing from M2:
+the bridge does not hand the player object in yet. So a real YouTube tab keeps the element
+adapter, and no three-peer run exists.
+
 ### M3 · Rooms, invites, encryption, reconnect
 
 Invite links with the key in the fragment, sealed frames, room bar, join and leave. Host
@@ -502,7 +511,38 @@ seconds leaves the room intact after it returns.
 
 The spike relay keeps one table per room, so a frame cannot cross between rooms, and a test
 proves it. Killing the spike relay for 2.5 s left every peer connected again at the host's
-scroll. Invites, sealing and the axum relay are still to come.
+scroll.
+
+**As built (14 November 2026).** [core/seal.mjs](core/seal.mjs) holds the frame cipher, the room
+key and the invite codec. The cipher is plain JavaScript, so a content script and a Node test run
+the same bytes. HKDF-SHA256 comes from WebCrypto, which both expose. The suite checks the draft's
+HChaCha20 subkey and its full AEAD vector. It checks the RFC 8439 Poly1305 vector too. A frame also
+fails after one flipped bit, in the nonce, the ciphertext or the tag. It checks a frame from another
+room and a frame from another key too. One test seals a presence frame and asserts the bytes carry
+neither the URL nor the peer name. That is the relay-log half of the done-when. The invite keeps its
+128-bit key in the fragment, and a test proves the key never lands in the query string.
+
+Sealing is now on the wire. [core/browser-entry.mjs](core/browser-entry.mjs) derives the key from
+the invite fragment or from stored config, sends every frame through `sealFrame`, and drops a
+binary frame that fails to open. An invite with a key never falls back to plain text, and a key
+that fails to derive never connects. A test spawns [spike/relay.js](spike/relay.js) with
+`RELAY_CAPTURE`, runs a two-peer room through it, and asserts the capture holds sealed frames with
+no `http`, `Peer Two` or `presence` bytes. That is the relay-log half of the done-when, taken from
+the relay's own witness.
+
+The room also migrates its host. Every peer elects the smallest live peer id, so the machines
+agree without a shared clock. [core/sync.mjs](core/sync.mjs) moves the role on a bye or a pruned
+peer.
+
+The room bar now lives in the panel. It shows the seal state, the join link carries the key, and
+Leave room closes the tab's socket and clears its stored identity. The live start path mints a key for
+each run and puts it in the fragment.
+
+The axum relay also runs. [relay/](relay/) forwards text and binary frames with their own
+opcode, keeps one table per room, and writes the same `RELAY_CAPTURE` lines. The core wire test
+runs against it through `RELAY_BIN`, and both frame rules pass. Two M3 limits stay open. The
+relay serves no range requests, so a seeking clip still needs the Node relay. A live Zen run has
+not yet repeated with the seal on.
 
 ### M4 · Input relay and grants
 
@@ -542,21 +582,25 @@ room per space is still open.
 
 ### M6 · Packaging, signing and relay
 
-Launcher installer and updater, following the
-[tauri-releases](../../.agents/skills/tauri-releases/SKILL.md) procedure. Also the signed
-unlisted XPI and a relay binary with a deployment note. Then a privacy page that states what
-the relay sees, and a first-run flow that survives a Firefox major update. *Done when:* an
-update installs over the previous version, and a signed bridge installs on release Firefox. A
-room works between two networks through the hosted relay.
+A start path a person can install without a checkout: a Node runtime and one command. Also the
+signed unlisted XPI and a relay binary with a deployment note. Then a privacy page that states
+what the relay sees, and a first-run flow that survives a browser major update. *Done when:* the
+start path runs from a clean install with no developer tools, and a signed bridge installs on
+release Firefox. A room works between two networks through the hosted relay.
 
 ### M7 · Trusted input through the remote agent
 
-The BiDi session in the launcher, the loopback channel, token handling, the per-grant
+The BiDi session beside the start path, the loopback channel, token handling, the per-grant
 lifecycle, and the mapping from an input batch to `input.performActions`.
 
 *Done when:* typing into a form arrives with `isTrusted: true`, the agent starts only while
 a grant is active, and killing the room closes the session. The spike's `agent.mjs` already
 covers the token, the loopback bind, the grant refusal and the revoke.
+
+The shell is gone. The Tauri window added a second install, a webview that never drew a page and
+a build step. It only spawned `node zen/live.mjs` for a named room. The start path is that
+script, so one command now covers the whole run. The BiDi session, the token channel and the
+grant lifecycle are still open, and they belong to a Node helper beside the start path.
 
 ### M8 · Optional Chromium variant, and voice
 
@@ -606,8 +650,8 @@ Windows page counters cover loopback only.
 - **Failure injection.** 200 ms delay, 5% loss and reorder. Also a peer that ignores pings, a
   bridge background page the browser restarted, and a page that navigates inside an input
   batch.
-- **Manual.** The launcher, the install flow and the sidebar get a written script. Playwright
-  cannot drive a Tauri window or Firefox's own chrome.
+- **Manual.** The start path, the install flow and the sidebar get a written script. Playwright
+  cannot drive Firefox's own chrome.
 
 ## 15. Risks that could sink it
 
@@ -619,7 +663,7 @@ Windows page counters cover loopback only.
 | A remote agent is a control channel | It can drive the whole browser | M7 | Per-grant lifetime, loopback bind, random port, token |
 | Sidebar quirks | It behaves differently per window and per version | M5 | A popup window for the room UI |
 | Firefox updates break the profile | A major version can migrate or reset things | M6 | Pin the profile layout and test each ESR |
-| Profile locked by the launcher | Firefox refuses a second instance on one profile | M0 | One room window per profile, and a clear message |
+| Profile locked by a second run | Firefox refuses a second instance on one profile | M0 | One room window per profile, and a clear message |
 | Layout differs across peers | A relayed click lands on the wrong element | `layout-diff.html` fixture | Element-path targeting only, with drops |
 | A site refuses synthetic input | Games and some apps check `isTrusted` | M0 | BiDi actuator, when M7 lands |
 | DRM video | No script control of the pipeline | First Netflix test | State the limit in the UI |
@@ -633,10 +677,10 @@ Windows page counters cover loopback only.
 Windows 11 first, because the repo's other apps ship Windows first and the Firefox profile
 code is best tested there. macOS follows once the same code works, and Linux is last.
 
-v1 is a launcher and a room profile with full uBlock Origin and the bridge. It gives rooms of
-up to eight people one shared tab set and synced scroll. Synced video with two adapters, live
+v1 is one start script and a room profile with full uBlock Origin and the bridge. It gives rooms
+of up to eight people one shared tab set and synced scroll. Synced video with two adapters, live
 cursors, and input relay with grants follow. It is not a screenshare replacement, the trusted
-actuator is not in v1, and the first screen of the app says both.
+actuator is not in v1, and the first run says both.
 
 ## 17. Open questions
 

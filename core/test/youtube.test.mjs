@@ -134,7 +134,7 @@ test('apply seeks, plays, pauses and nudges through the player API', () => {
 test('a key that names another video is refused', () => {
   const player = fakePlayer();
   const adapter = new YouTubeAdapter({ player, key: 'youtube:abc123' });
-  assert.equal(adapter.pick('youtube:abc123'), player);
+  assert.equal(adapter.pick('youtube:abc123').player, player, 'the view names the player');
   assert.equal(adapter.pick('youtube:other'), null);
   assert.equal(new YouTubeAdapter().pick('youtube:abc123'), null);
 });

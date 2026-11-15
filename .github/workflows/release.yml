@@ -1,0 +1,49 @@
+name: release
+
+# A tag is the only trigger, so a release always matches a commit.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "app/src-tauri -> target"
+
+      - name: Install the app dependencies
+        working-directory: app
+        run: npm ci
+
+      # The action builds the bundle, signs the updater files with the key in
+      # TAURI_SIGNING_PRIVATE_KEY and attaches latest.json to the release. The
+      # running app reads that file from releases/latest/download.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Brosr ${{ github.ref_name }}"
+          releaseBody: "Mac build for ${{ github.ref_name }}. The updater files sit beside the app."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

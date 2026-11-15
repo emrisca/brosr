@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Room protocol, clock, drift policy, media adapter, cursor overlay and sync client for Brosr.",
+  "description": "Room protocol, clock, drift policy, media adapter, cursor overlay, seal and sync client for Brosr.",
   "exports": {
     ".": "./sync.mjs",
     "./protocol": "./protocol.mjs",
@@ -11,7 +11,8 @@
     "./drift": "./drift.mjs",
     "./media": "./media.mjs",
     "./overlay": "./overlay.mjs",
-    "./room": "./room.mjs"
+    "./room": "./room.mjs",
+    "./seal": "./seal.mjs"
   },
   "scripts": {
     "test": "node --test"

@@ -1,8 +1,18 @@
 // Creates the Zen room profile. Pref names come from the shipped build's
 // browser/defaults/preferences/firefox.js, so they match what Zen reads.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { findZen as pickZen } from './binary.mjs';
+import {
+  EXTENSIONS,
+  RUNTIME,
+  cachedCopy,
+  installExtensions,
+  prepareSafeBrowsing,
+} from './safe-browsing.mjs';
+import { zipEntry } from '../spike/unzip.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (name, fallback) => {
@@ -10,19 +20,164 @@ const arg = (name, fallback) => {
   return hit ? hit.split('=').slice(1).join('=') : fallback;
 };
 
-const CANDIDATES = [
-  'C:/Program Files/Zen Browser/zen.exe',
-  'C:/Program Files (x86)/Zen Browser/zen.exe',
-  path.join(process.env.LOCALAPPDATA || '', 'Programs/Zen Browser/zen.exe'),
-  '/Applications/Zen.app/Contents/MacOS/zen',
-  '/usr/bin/zen-browser',
-  '/opt/zen-browser/zen',
-];
+// Full uBlock Origin is the reason this build is Firefox based. The room
+// profile gets the whole safe browsing set from signed XPIs, staged once and
+// copied in, so a new room starts blocked. The catalogue lives in
+// safe-browsing.mjs, and this file keeps the blocker entry for a caller that
+// only asks one question.
+export const BLOCKER = EXTENSIONS[0];
+
+export const BRIDGE_ID = 'bridge@brosr.app';
+
+// The bridge is the second extension, and a room has no cursors without it. The
+// profile gets it as a file, the same way the blockers arrive, so no run needs a
+// prompt. A profile with signature checking on takes only the signed file, so
+// the resolver prefers that one and names what it found.
+const BRIDGE_SIGNED = 'bridge-signed.xpi';
+const BRIDGE_BUILT = 'bridge.xpi';
+const SOURCE_MANIFEST = path.join(here, '..', 'bridge', 'manifest.json');
+
+function sourceVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(SOURCE_MANIFEST, 'utf8')).version || null;
+  } catch {
+    return null;
+  }
+}
+
+function inspect(file) {
+  const found = { path: file, version: null, signed: false, error: null };
+  try {
+    const manifest = JSON.parse(zipEntry(file, 'manifest.json').toString('utf8'));
+    found.version = manifest.version || null;
+    found.signed = Boolean(zipEntry(file, 'META-INF/mozilla.rsa'));
+  } catch (error) {
+    found.error = error.message;
+  }
+  return found;
+}
+
+// The signed file wins, because the alternative is a profile that refuses the
+// add-on. Its version can lag the source after a fix, and a lagging copy still
+// runs, so the report carries the mismatch instead of hiding it.
+export function bridgeSource(dir = RUNTIME) {
+  const want = sourceVersion();
+  const errors = [];
+  // The signed file wins, so a signed copy left over from an earlier build
+  // would install silently and drop the current panel. Name that state.
+  const signedFile = path.join(dir, BRIDGE_SIGNED);
+  const builtFile = path.join(dir, BRIDGE_BUILT);
+  const signedBehind = (() => {
+    try {
+      return (
+        fs.statSync(builtFile).mtimeMs > fs.statSync(signedFile).mtimeMs
+      );
+    } catch {
+      return false;
+    }
+  })();
+  for (const name of [BRIDGE_SIGNED, BRIDGE_BUILT]) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) continue;
+    const found = inspect(file);
+    if (found.error) {
+      errors.push(`${name}: ${found.error}`);
+      continue;
+    }
+    return {
+      ...found,
+      name,
+      want,
+      stale: Boolean(want && found.version && found.version !== want),
+      signedBehind,
+      signaturesRequired: found.signed,
+      errors,
+    };
+  }
+  return {
+    path: null,
+    name: null,
+    version: null,
+    want,
+    signed: false,
+    stale: false,
+    signedBehind,
+    signaturesRequired: false,
+    errors,
+  };
+}
+
+export function installBridge(profile, dir = RUNTIME) {
+  const source = bridgeSource(dir);
+  if (!source.path) return { installed: false, ...source };
+  const dest = path.join(profile, 'extensions');
+  fs.mkdirSync(dest, { recursive: true });
+  const file = path.join(dest, `${BRIDGE_ID}.xpi`);
+  fs.copyFileSync(source.path, file);
+  return { installed: true, file, ...source };
+}
+
+// A release reads the same resolver a room uses. A signed copy that lags the
+// source would ship an older panel with signature checking on, so this reports
+// the gap instead of letting the install hide it.
+export function signedGap(dir = RUNTIME) {
+  const want = sourceVersion();
+  const name = BRIDGE_SIGNED;
+  const file = path.join(dir, name);
+  if (!fs.existsSync(file)) return { ok: false, reason: 'no signed copy', name, version: null, want };
+  const found = inspect(file);
+  if (found.error) return { ok: false, reason: found.error, name, version: null, want };
+  if (!found.signed) return { ok: false, reason: 'the signed copy has no signature', name, version: found.version, want };
+  if (!want) return { ok: false, reason: 'no source manifest to compare', name, version: found.version, want };
+  if (found.version !== want) {
+    return {
+      ok: false,
+      reason: `signed ${found.version} but source is ${want}`,
+      name,
+      version: found.version,
+      want,
+    };
+  }
+  return { ok: true, reason: 'signed copy matches the source', name, version: found.version, want };
+}
+
+// A named file reports the same shape as bridgeSource, so the CLI can print the
+// build it actually installed instead of the default one.
+export function bridgeFile(file) {
+  const found = inspect(file);
+  const want = sourceVersion();
+  return {
+    ...found,
+    name: path.basename(file),
+    want,
+    stale: Boolean(want && found.version && found.version !== want),
+    signedBehind: false,
+    signaturesRequired: found.signed,
+    errors: found.error ? [found.error] : [],
+  };
+}
+
+// A named file installs as it is, so a run of the current tree does not wait
+// for AMO. The signature pref follows the file, and an unsigned build needs the
+// check off.
+export function installBridgeFile(profile, file) {
+  const found = inspect(file);
+  if (found.error) return { installed: false, ...found, signaturesRequired: false };
+  const dest = path.join(profile, 'extensions');
+  fs.mkdirSync(dest, { recursive: true });
+  const target = path.join(dest, `${BRIDGE_ID}.xpi`);
+  fs.copyFileSync(file, target);
+  return {
+    installed: true,
+    file: target,
+    ...found,
+    name: path.basename(file),
+    signaturesRequired: found.signed,
+  };
+}
 
 export function findZen() {
-  const given = arg('zen', '');
-  if (given && fs.existsSync(given)) return given;
-  return CANDIDATES.find((candidate) => candidate && fs.existsSync(candidate)) || null;
+  return pickZen(arg('zen', ''));
 }
 
 // Vertical tabs and compact chrome are the Zen shape. The rest keeps the
@@ -30,11 +185,14 @@ export function findZen() {
 const PREFS = [
   ['zen.tabs.vertical', true],
   ['zen.tabs.vertical.right-side', false],
+  // Single toolbar parks the URL bar inside the tab column. Off puts it across
+  // the top of the page, which is the layout a room wants.
+  ['zen.view.use-single-toolbar', false],
   ['zen.view.compact.hide-tabbar', false],
   ['zen.view.compact.hide-toolbar', false],
   ['zen.view.compact.show-sidebar-and-toolbar-on-hover', true],
   ['zen.view.sidebar-expanded', true],
-  ['zen.view.sidebar-expanded.max-width', 500],
+  ['zen.view.sidebar-expanded.max-width', 640],
   ['zen.view.show-newtab-button-top', true],
   ['zen.workspaces.continue-where-left-off', false],
   ['zen.theme.hide-unified-extensions-button', false],
@@ -44,25 +202,69 @@ const PREFS = [
   ['datareporting.policy.dataSubmissionEnabled', false],
   ['toolkit.telemetry.enabled', false],
   ['toolkit.legacyUserProfileCustomizations.stylesheets', true],
+  // The dock paints the window surface at 90 percent, so the macOS window needs
+  // its material on and the browser layers must allow a see through surface.
+  ['zen.widget.macos.window-vibrancy', true],
+  ['browser.tabs.allow_transparent_browser', true],
+  // The add-ons arrive as sideloaded signed XPIs, so the profile must allow that
+  // scope and must not disable them on first start. The signature pref is not in
+  // this list, because it follows the bridge file the profile actually gets.
+  ['extensions.autoDisableScopes', 0],
+  ['extensions.enabledScopes', 15],
+  // A new profile imports bookmarks.html once at first start, then clears this
+  // pref itself, so the import does not run a second time.
+  ['browser.places.importBookmarksHTML', true],
 ];
 
-function userJs() {
+function userJs(signaturesRequired, native) {
+  // A plain Gecko browser ignores the zen.* names, but a profile should not
+  // carry preferences that only one fork reads. A native adapter keeps them.
+  const prefs = native ? PREFS : PREFS.filter(([name]) => !name.startsWith('zen.'));
   const lines = [
-    '// Written by apps/brosr/zen/profile.mjs. Pref names are Zen 1.24 names.',
-    '// The room profile is disposable. Edit this file and rerun the script.',
+    '// Written by host/cli.mjs. The room profile is disposable.',
+    '// Edit this file and rerun the setup step.',
     '',
   ];
-  for (const [name, value] of PREFS) {
+  for (const [name, value] of [
+    ...prefs,
+    ['xpinstall.signatures.required', signaturesRequired],
+  ]) {
     lines.push(`user_pref(${JSON.stringify(name)}, ${JSON.stringify(value)});`);
   }
   return lines.join('\n') + '\n';
 }
 
+
 // Zen restores the sidebar width from xulstore.json, and its own default on
-// macOS is 230 pixels. A wider stored value gives the expanded column the
-// width of the panel that fills it.
+// macOS is 230 pixels. The room panel needs a wider floor, because the room
+// menu, the join link and a peer row with a Grant button share that column.
 const XULSTORE_DOC = 'chrome://browser/content/browser.xhtml';
-const SIDEBAR_WIDTH = '480px';
+const SIDEBAR_WIDTH = '420px';
+
+// Two bookmarks ship with every profile, because a room starts with the sites a
+// viewer opens first. The toolbar folder is the place a first run looks.
+const BOOKMARKS = [
+  ['FMHY', 'https://fmhy.net'],
+  ['YouTube', 'https://www.youtube.com'],
+];
+
+function writeBookmarks(profile) {
+  const rows = BOOKMARKS.map(([name, url]) => `        <DT><A HREF="${url}">${name}</A>`).join(
+    '\n'
+  );
+  const doc = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+<DL><p>
+    <DT><H3 PERSONAL_TOOLBAR_FOLDER="true">Bookmarks Toolbar</H3>
+    <DL><p>
+${rows}
+    </DL><p>
+</DL><p>
+`;
+  fs.writeFileSync(path.join(profile, 'bookmarks.html'), doc);
+}
 
 function writeXulstore(profile) {
   const file = path.join(profile, 'xulstore.json');
@@ -78,18 +280,198 @@ function writeXulstore(profile) {
   fs.writeFileSync(file, JSON.stringify(store));
 }
 
-export function writeProfile(dir) {
+// A profile built before the set changed still holds the old add-on, and a
+// reused profile is never written again. The folder is reconciled on every
+// prepare, so only the bridge and the current catalogue stay.
+function pruneExtensions(profile) {
+  const dest = path.join(profile, 'extensions');
+  if (!fs.existsSync(dest)) return;
+  const keep = new Set([`${BRIDGE_ID}.xpi`, ...EXTENSIONS.map((entry) => entry.file)]);
+  for (const name of fs.readdirSync(dest)) {
+    if (!name.endsWith('.xpi') || keep.has(name)) continue;
+    fs.rmSync(path.join(dest, name), { force: true });
+  }
+}
+
+// The bridge goes in before the first window, and the signature pref follows the
+// file that landed. Pass bridge false for a harness that installs its own build
+// over BiDi, because signature checking would refuse that one. Pass a file path
+// to install a named build, such as the unsigned copy of the current tree.
+export function writeProfile(dir, options = {}) {
   const profile = path.resolve(dir);
+  // Only a native adapter, which today means Zen, reads the column width from
+  // xulstore. A stock Gecko browser starts on its own width.
+  const native = options.native !== false;
   fs.mkdirSync(profile, { recursive: true });
-  fs.writeFileSync(path.join(profile, 'user.js'), userJs());
-  writeXulstore(profile);
+  const bridge =
+    options.bridge === false
+      ? { installed: false, signaturesRequired: false }
+      : typeof options.bridge === 'string'
+        ? installBridgeFile(profile, options.bridge)
+        : installBridge(profile);
+  fs.writeFileSync(path.join(profile, 'user.js'), userJs(bridge.signaturesRequired, native));
+  writeBookmarks(profile);
+  if (native) writeXulstore(profile);
+  installExtensions(profile);
   return profile;
 }
 
+// A room opens the same profile on every start, and a second build with the same
+// inputs copies the same files for nothing. This stamp records what went in, so
+// a match skips the copy and the profile is ready at once.
+const STAMP = 'brosr-profile.json';
+
+function inputStamp(options) {
+  const parts = [options.native === false ? 'native:0' : 'native:1'];
+  // A pref or bookmark edit changes the stamp, so the profile is written again.
+  parts.push(createHash('sha256').update(JSON.stringify(PREFS) + JSON.stringify(BOOKMARKS)).digest('hex'));
+  if (options.bridge) {
+    try {
+      const stat = fs.statSync(options.bridge);
+      parts.push(`bridge:${path.basename(options.bridge)}:${stat.size}:${Math.round(stat.mtimeMs)}`);
+    } catch {
+      parts.push('bridge:missing');
+    }
+  } else {
+    parts.push('bridge:default');
+  }
+  for (const entry of EXTENSIONS) {
+    const file = cachedCopy(entry);
+    if (!file) {
+      parts.push(`${entry.id}:missing`);
+      continue;
+    }
+    const stat = fs.statSync(file);
+    parts.push(`${entry.id}:${stat.size}:${Math.round(stat.mtimeMs)}`);
+  }
+  return createHash('sha256').update(parts.join('\n')).digest('hex');
+}
+
+function readStamp(profile) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(profile, STAMP), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// A stamp counts only when every extension landed, so a download that failed is
+// retried on the next run instead of being remembered as done. A reuse request
+// also stands aside for a configure pass, a refresh or a force.
+function reusable(profile, options, want) {
+  if (!options.reuse) return null;
+  if (options.force || options.refresh || options.configure) return null;
+  const seen = readStamp(profile);
+  if (!seen || !seen.complete || seen.input !== want) return null;
+  return seen;
+}
+
+function writeStamp(profile, stamp) {
+  fs.writeFileSync(path.join(profile, STAMP), JSON.stringify(stamp, null, 2) + '\n');
+}
+
+// One call for the start path. It stages every extension first, so the profile
+// copies land in the same pass as the prefs that enable them. The optional
+// configure pass runs the one headless setup for the list.
+export async function prepareProfile(dir, options = {}) {
+  // Four stages, each reported on the way in. The app turns them into a bar,
+  // so a slow fetch looks like work and not a stall.
+  const total = 4;
+  const report = (step, label) => {
+    if (typeof options.onProgress === 'function') options.onProgress({ step, total, label });
+  };
+  const profile = path.resolve(dir);
+  pruneExtensions(profile);
+  const input = inputStamp(options);
+  const seen = reusable(profile, options, input);
+  if (seen) {
+    report(total, 'Room profile ready');
+    return {
+      profile,
+      reused: true,
+      blocker: Boolean(seen.blocker),
+      safeBrowsing: {
+        staged: { ready: seen.extensions, missing: [] },
+        installed: seen.extensions,
+        configured: Boolean(seen.configured),
+        marker: null,
+      },
+      staged: { ready: seen.extensions, missing: [] },
+    };
+  }
+  report(1, 'Writing the profile');
+  writeProfile(profile, { bridge: options.bridge, native: options.native });
+  const safeBrowsing = await prepareSafeBrowsing(profile, {
+    configure: Boolean(options.configure),
+    refresh: Boolean(options.refresh),
+    force: Boolean(options.force),
+    port: options.port,
+    log: options.log,
+    report,
+  });
+  report(total, 'Room profile ready');
+  const blocker = safeBrowsing.installed.includes(BLOCKER.id);
+  const staged = safeBrowsing.staged;
+  if (!staged.missing.length && safeBrowsing.installed.length === EXTENSIONS.length) {
+    writeStamp(profile, {
+      when: new Date().toISOString(),
+      input,
+      complete: true,
+      extensions: safeBrowsing.installed,
+      blocker,
+      configured: Boolean(safeBrowsing.configured),
+    });
+  }
+  return { profile, reused: false, blocker, safeBrowsing, staged };
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const profile = writeProfile(arg('profile', path.join(here, '.runtime', 'profile')));
+  // A guard reads the shipped files only, so it works before a profile exists
+  // and a release can refuse a signed copy that lags the tree.
+  if (process.argv.includes('--guard')) {
+    const gap = signedGap(arg('dir', RUNTIME));
+    console.log(JSON.stringify(gap));
+    process.exit(gap.ok ? 0 : 1);
+  }
+  // A named build wins over the default resolver, and a typo fails here rather
+  // than leaving a profile with no bridge and a silent signature pref.
+  const named = arg('bridge', '');
+  if (named && !fs.existsSync(named)) {
+    console.error(`[zen] no bridge at ${named}`);
+    process.exit(1);
+  }
+  const { profile, safeBrowsing } = await prepareProfile(
+    arg('profile', path.join(here, '.runtime', 'profile')),
+    {
+      bridge: named || undefined,
+      // A refresh fetches the list again, so it needs the pass as well.
+      configure: process.argv.includes('--configure') || process.argv.includes('--refresh'),
+      refresh: process.argv.includes('--refresh'),
+      force: process.argv.includes('--force'),
+      port: arg('port', '9341'),
+      log: (line) => console.error(`[zen] ${line}`),
+    }
+  );
   const zen = findZen();
   console.log(`[zen] profile ${profile}`);
+  console.log(`[zen] extensions ${safeBrowsing.installed.length} of ${EXTENSIONS.length} installed`);
+  const bridge = named ? bridgeFile(named) : bridgeSource();
+  console.log(
+    bridge.path
+      ? `[zen] bridge ${bridge.version || 'unknown'} from ${bridge.name}, signed ${bridge.signed}, signatures required ${bridge.signaturesRequired}${bridge.stale ? `, source is ${bridge.want}` : ''}`
+      : `[zen] bridge missing. Run node zen/package.mjs or put the signed file in ${RUNTIME}`
+  );
+  if (bridge.signedBehind) {
+    console.log(
+      '[zen] the signed copy is older than bridge.xpi. Sign the current build before a room relies on it.'
+    );
+  }
+  for (const miss of safeBrowsing.staged.missing) {
+    console.log(`[zen] ${miss.name} is missing: ${miss.why}`);
+  }
+  if (safeBrowsing.configured) console.log('[zen] uBlock Origin holds the FMHY list');
+  if (process.argv.includes('--refresh')) console.log('[zen] list refreshed from upstream');
+  if (safeBrowsing.error) console.log(`[zen] the setup pass failed: ${safeBrowsing.error}`);
   if (!zen) {
     console.log('[zen] no Zen binary found. Pass --zen=<path>.');
     process.exit(1);

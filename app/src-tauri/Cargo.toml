@@ -1,0 +1,24 @@
+[package]
+name = "brosr-app"
+version = "0.2.0"
+description = "Brosr room setup"
+authors = ["Brosr"]
+edition = "2021"
+rust-version = "1.77"
+# The window title, the bundle name and the binary name agree, so the process
+# and the About box read Brosr instead of the package name.
+default-run = "Brosr"
+
+[[bin]]
+name = "Brosr"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -2,69 +2,45 @@
 // the bridge, opens a host room and opens the room panel. It sends the real
 // shortcut chord, so the sidebar opens expanded. If no sidebar report arrives,
 // it falls back to a panel tab. Nothing is killed on the way out, so the window
-// stays usable by hand.
+// stays usable by hand. Pass --bridge=built to run the unsigned build in
+// zen/.runtime/bridge.xpi instead of the signed copy.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
-import { makeZip } from '../spike/zip.mjs';
 import { dockPanel } from './chrome.mjs';
-import { findZen, writeProfile } from './profile.mjs';
+import { BRIDGE_ID, bridgeSource, findZen, prepareProfile } from './profile.mjs';
+import { readExtensions } from './safe-browsing.mjs';
+import { newRoomKey } from '../core/seal.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const spike = path.join(here, '..', 'spike');
-const core = path.join(here, '..', 'core');
 const runtime = path.join(here, '.runtime');
-const PROFILE = path.join(runtime, 'live-profile');
 
 const arg = (name, fallback) => {
   const hit = process.argv.find((value) => value.startsWith(`--${name}=`));
   return hit ? hit.split('=').slice(1).join('=') : fallback;
 };
+const PROFILE = path.resolve(arg('profile', path.join(runtime, 'live-profile')));
+// A build of the current tree can run before AMO signs it. The profile then
+// carries no signature check, because the file is unsigned.
+const BUILT = path.join(runtime, 'bridge.xpi');
+const USE_BUILT = arg('bridge', 'auto') === 'built';
+// The safe browsing pass opens its own headless window and fetches a list, so a
+// quick lane can skip it and keep its marker out of a throwaway profile.
+const CONFIGURE = !process.argv.includes('--no-configure');
 const PORT = Number(arg('port', 9335));
 const RELAY = Number(arg('relay', 8787));
 const ROOM = arg('room', 'live');
 const NAME = arg('name', 'Host');
+// Each run mints its own room key, so every frame leaves this machine as
+// ciphertext and the relay captures bytes it cannot read.
+const ROOM_KEY = arg('key', '') || newRoomKey();
 const MARIONETTE = Number(arg('marionette', 2828));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(...args);
-
-const CORE = [
-  'protocol.mjs',
-  'clock.mjs',
-  'drift.mjs',
-  'media.mjs',
-  'room.mjs',
-  'overlay.mjs',
-  'input.mjs',
-  'sync.mjs',
-  'browser-entry.mjs',
-  'youtube.mjs',
-];
-
-function buildXpi() {
-  fs.mkdirSync(runtime, { recursive: true });
-  const out = path.join(runtime, 'bridge-live.xpi');
-  const panel = ['room.html', 'room.css', 'room.js'];
-  fs.writeFileSync(
-    out,
-    makeZip([
-      { name: 'manifest.json', data: fs.readFileSync(path.join(spike, 'bridge', 'manifest.json')) },
-      { name: 'content.js', data: fs.readFileSync(path.join(spike, 'bridge', 'content.js')) },
-      {
-        name: 'background.js',
-        data: fs.readFileSync(path.join(spike, 'bridge', 'background.js')),
-      },
-      ...CORE.map((name) => ({ name: `core/${name}`, data: fs.readFileSync(path.join(core, name)) })),
-      ...panel.map((name) => ({
-        name: `panel/${name}`,
-        data: fs.readFileSync(path.join(here, 'panel', name)),
-      })),
-    ])
-  );
-  return out;
-}
 
 async function healthy() {
   try {
@@ -111,6 +87,22 @@ async function evaluate(bidi, context, expression) {
   return res.result ? res.result.value : undefined;
 }
 
+// Marionette takes its port from the default and ignores a port argument, so a
+// second window on this machine would die on a bind failure. A busy port means
+// the dock is unavailable, not that the room cannot start.
+function portFree(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const done = (free) => {
+      socket.destroy();
+      resolve(free);
+    };
+    socket.once('connect', () => done(false));
+    socket.once('error', () => done(true));
+    socket.setTimeout(600, () => done(true));
+  });
+}
+
 function keypostPath() {
   // The panel shortcut is a browser command, so only a real chord opens the
   // sidebar. This helper posts that chord to the exact process id.
@@ -141,12 +133,46 @@ function postChord(pid) {
   };
 }
 
+// extensions.json lands a moment after startup.
+async function waitForAddon(id, timeoutMs) {
+  const end = Date.now() + timeoutMs;
+  let seen = null;
+  while (Date.now() < end) {
+    seen = readExtensions(PROFILE)[id] || null;
+    if (seen && seen.active) return seen;
+    await sleep(400);
+  }
+  return seen;
+}
+
 async function main() {
   const zen = findZen();
   if (!zen || !fs.existsSync(zen)) throw new Error('no Zen binary');
   fs.mkdirSync(runtime, { recursive: true });
-  writeProfile(PROFILE);
-  const xpi = buildXpi();
+  // The setup pass runs once per profile, so the room gets the extensions, the
+  // list and the script without a manual step. The marker keeps later runs quick.
+  const prepared = await prepareProfile(PROFILE, {
+    configure: CONFIGURE,
+    bridge: USE_BUILT && fs.existsSync(BUILT) ? BUILT : undefined,
+    log: (line) => log('[live] ' + line),
+  });
+  // The profile writer copied the bridge before the window starts. Nothing is
+  // installed over BiDi now, because a second copy would shadow the signed one.
+  const bridge =
+    USE_BUILT && fs.existsSync(BUILT)
+      ? { name: path.basename(BUILT), path: BUILT, signed: false, signaturesRequired: false }
+      : bridgeSource();
+  log(
+    '[live] bridge',
+    JSON.stringify({
+      name: bridge.name,
+      version: bridge.version,
+      signed: bridge.signed,
+      want: bridge.want,
+      stale: bridge.stale,
+      signaturesRequired: bridge.signaturesRequired,
+    })
+  );
 
   let relay = null;
   if (!(await healthy())) {
@@ -159,22 +185,21 @@ async function main() {
     await waitHealth();
   }
 
+  const marionetteFree = await portFree(MARIONETTE);
+  const browserArgs = [
+    '--profile',
+    PROFILE,
+    '--no-remote',
+    '--new-instance',
+    '--remote-debugging-port',
+    String(PORT),
+  ];
+  if (marionetteFree) browserArgs.push('--marionette');
+  browserArgs.push('--width', '1440', '--height', '900', 'about:blank');
+
   const browser = spawn(
     zen,
-    [
-      '--profile',
-      PROFILE,
-      '--no-remote',
-      '--new-instance',
-      '--remote-debugging-port',
-      String(PORT),
-      '--marionette',
-      '--width',
-      '1440',
-      '--height',
-      '900',
-      'about:blank',
-    ],
+    browserArgs,
     {
       stdio: 'ignore',
       detached: true,
@@ -185,7 +210,14 @@ async function main() {
 
   let result = {
     relay: { pid: relay ? relay.pid : null, reused: !relay, port: RELAY },
-    browser: { pid: browser.pid, port: PORT, marionette: MARIONETTE, profile: PROFILE },
+    browser: {
+      pid: browser.pid,
+      port: PORT,
+      marionette: MARIONETTE,
+      profile: PROFILE,
+      blocker: prepared.blocker,
+    },
+    bridge: null,
     room: null,
     panel: null,
     affordance: null,
@@ -197,15 +229,24 @@ async function main() {
     // the drag bar go in through Marionette. Its session replaces the first
     // window, so it runs before any browsing context is chosen. The injected
     // script polls, so it docks the panel as soon as the sidebar opens.
-    const dock = await dockPanel({ port: MARIONETTE });
+    // The dock is a nicety. A window without Marionette still gets the room and
+    // the panel, so a refused dock records the error instead of ending the run.
+    const dock = marionetteFree
+      ? await dockPanel({ port: MARIONETTE, open: true }).catch((error) => ({
+          injected: false,
+          geometry: null,
+          error: error.message,
+        }))
+      : { injected: false, geometry: null, error: `marionette port ${MARIONETTE} is busy` };
     result.dock = dock;
     log('[live] dock', JSON.stringify(dock));
 
     const bidi = await connect();
-    await bidi
-      .cmd('webExtension.install', { extensionData: { type: 'archivePath', path: xpi } })
-      .then((installed) => log('[live] installed', installed.extension))
-      .catch((error) => log('[live] install skipped', error.message));
+    // The window reads the add-on from the profile at startup, so this reads what
+    // the browser wrote rather than asking for an install that could replace it.
+    const addon = await waitForAddon(BRIDGE_ID, 20000);
+    result.bridge = addon;
+    log('[live] bridge state', JSON.stringify(addon));
 
     // Headful create hangs on this build, so reuse the window's own tab.
     const tree = await bidi.cmd('browsingContext.getTree', {});
@@ -222,11 +263,16 @@ async function main() {
     const base =
       `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${encodeURIComponent(ROOM)}` +
       `&peer=host&name=${encodeURIComponent(NAME)}`;
+    // The key rides in the fragment. The relay logs the request line, so a key
+    // in the query string would land in its log and in any proxy on the way.
+    // The panel flag goes before the fragment, or it would join the key.
+    const invite = `${base}#k=${encodeURIComponent(ROOM_KEY)}`;
+    const panelInvite = `${base}&panel=1#k=${encodeURIComponent(ROOM_KEY)}`;
     // The room tab opens as a normal tab. The chord below opens the sidebar
-    // beside it, which is the surface this launcher is proving.
+    // beside it, which is the surface this run is proving.
     await bidi.cmd('browsingContext.navigate', {
       context,
-      url: base,
+      url: invite,
       wait: 'complete',
     });
 
@@ -251,7 +297,13 @@ async function main() {
       if (!roomData) await sleep(300);
     }
     if (!roomData) throw new Error('the room tab did not connect');
-    result.room = { context, url: base, peers: roomData.peerList || roomData.peers || null };
+    result.room = {
+      context,
+      url: base,
+      invite,
+      sealed: Boolean(roomData.seal && roomData.seal.mode === 'on'),
+      peers: roomData.peerList || roomData.peers || null,
+    };
 
     // The page carries the button whether or not its click is driven here.
     const affordance = await evaluate(
@@ -283,10 +335,14 @@ async function main() {
     const end = Date.now() + 12000;
     while (Date.now() < end) {
       const state = (await readDataset())?.panelState;
-      if (state && state.visible === 'visible' && Number(state.width) > 100) {
-        panel = state;
-        mode = Number(state.width) > 700 ? 'tab' : 'sidebar';
-        if (state.state === 'live') break;
+      if (state && state.visible === 'visible') {
+        // A live sidebar can report zero width until Zen expands it, so a live
+        // state is enough to accept the panel. The route says how it got here.
+        if (state.state === 'live' || Number(state.width) > 100) {
+          panel = state;
+          mode = state.surface || (Number(state.width) > 700 ? 'tab' : 'window');
+          if (state.state === 'live') break;
+        }
       }
       await sleep(300);
     }
@@ -304,7 +360,7 @@ async function main() {
       log('[live] no sidebar report, opening the panel as a tab');
       await bidi.cmd('browsingContext.navigate', {
         context,
-        url: `${base}&panel=1`,
+        url: panelInvite,
         wait: 'complete',
       });
       let panelContext = null;
@@ -352,10 +408,22 @@ async function main() {
       JSON.stringify({ when: new Date().toISOString(), ...result }, null, 2) + '\n'
     );
     log('[live] relay', result.relay.reused ? 'reused' : `pid ${result.relay.pid}`);
-    log('[live] zen pid', browser.pid, 'port', PORT);
+    log('[live] uBlock Origin', prepared.blocker ? 'installed' : 'missing');
+  log('[live] zen pid', browser.pid, 'port', PORT);
     log('[live] room', base);
-    if (result.panel && result.panel.mode === 'sidebar') {
-      log('[live] the expanded sidebar is open. The window stays usable by hand.');
+    log('[live] sealed invite', invite);
+    if (result.panel && result.panel.mode === 'window') {
+      log(
+        '[live] panel window',
+        JSON.stringify({
+          width: result.panel.width,
+          height: result.panel.height,
+          surface: result.panel.surface || null,
+          route: result.panel.route || null,
+          geometry: result.panel.geometry || null,
+        })
+      );
+      log('[live] the room window is open. The browser stays usable by hand.');
     } else {
       log('[live] window left running. Click Room panel or press Ctrl+Alt+B.');
     }

@@ -5,6 +5,9 @@
 # Zen check runtime: the room profile, the built XPI and its results.
 /zen/.runtime
 
+# The refresh record from the scheduled task. Syncthing still copies it.
+/zen/refresh-status.json
+
 # Syncthing folder marker, which is per device.
 /.stfolder
 
@@ -35,10 +38,16 @@ build/
 .vite/
 *.tsbuildinfo
 
+# A prepared room profile and the run file the app reads.
+/host/.run/
+
 # Run, build and test output.
 *.log
 coverage/
 *.profraw
+
+# Local credentials. The AMO key and secret live here, never in a tracked file.
+/.secrets/
 
 # OS and editor metadata.
 .DS_Store

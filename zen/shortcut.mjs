@@ -37,6 +37,7 @@ function buildXpi() {
   fs.mkdirSync(runtime, { recursive: true });
   const out = path.join(runtime, 'bridge-shortcut.xpi');
   const panel = ['room.html', 'room.css', 'room.js'];
+  const icons = [16, 32, 48, 96, 128];
   fs.writeFileSync(
     out,
     makeZip([
@@ -50,6 +51,14 @@ function buildXpi() {
       ...panel.map((name) => ({
         name: `panel/${name}`,
         data: fs.readFileSync(path.join(here, 'panel', name)),
+      })),
+      ...icons.map((size) => ({
+        name: `assets/icon-${size}.png`,
+        data: fs.readFileSync(path.join(here, '..', 'assets', `icon-${size}.png`)),
+      })),
+      ...['action-16.png', 'action-32.png', 'action-48.png'].map((name) => ({
+        name: `assets/${name}`,
+        data: fs.readFileSync(path.join(here, '..', 'assets', name)),
       })),
     ])
   );

@@ -11,14 +11,14 @@ function findEndOfCentralDirectory(buf) {
   throw new Error('no end of central directory record');
 }
 
-export function unzipTo(zipPath, dest) {
-  const buf = fs.readFileSync(zipPath);
-  const root = path.resolve(dest);
+// One walk over the central directory. A signed XPI holds a manifest and a
+// signature block beside twenty payload files, and a caller that needs two
+// names should not unpack the rest.
+function* centralEntries(buf) {
   const eocd = findEndOfCentralDirectory(buf);
   const count = buf.readUInt16LE(eocd + 10);
   const centralOffset = buf.readUInt32LE(eocd + 16);
   let cursor = centralOffset;
-  let written = 0;
 
   for (let i = 0; i < count; i++) {
     if (buf.readUInt32LE(cursor) !== 0x02014b50) {
@@ -32,24 +32,45 @@ export function unzipTo(zipPath, dest) {
     const localOffset = buf.readUInt32LE(cursor + 42);
     const name = buf.toString('utf8', cursor + 46, cursor + 46 + nameLength);
     cursor += 46 + nameLength + extraLength + commentLength;
+    yield { buf, method, compressedSize, localOffset, name };
+  }
+}
 
+function entryData(entry) {
+  const { buf, method, compressedSize, localOffset, name } = entry;
+  const localNameLength = buf.readUInt16LE(localOffset + 26);
+  const localExtraLength = buf.readUInt16LE(localOffset + 28);
+  const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+  const raw = buf.subarray(dataStart, dataStart + compressedSize);
+
+  if (method === 0) return Buffer.from(raw);
+  if (method === 8) return zlib.inflateRawSync(raw);
+  throw new Error(`unsupported compression method ${method} for ${name}`);
+}
+
+// One named file, or null when the archive holds no such name.
+export function zipEntry(zipPath, wanted) {
+  const buf = fs.readFileSync(zipPath);
+  for (const entry of centralEntries(buf)) {
+    if (entry.name === wanted) return entryData(entry);
+  }
+  return null;
+}
+
+export function unzipTo(zipPath, dest) {
+  const buf = fs.readFileSync(zipPath);
+  const root = path.resolve(dest);
+  let written = 0;
+
+  for (const entry of centralEntries(buf)) {
+    const { name } = entry;
     if (name.endsWith('/')) continue;
 
     const target = path.resolve(root, name);
     if (!target.startsWith(root + path.sep)) throw new Error(`path escapes archive: ${name}`);
 
-    const localNameLength = buf.readUInt16LE(localOffset + 26);
-    const localExtraLength = buf.readUInt16LE(localOffset + 28);
-    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
-    const raw = buf.subarray(dataStart, dataStart + compressedSize);
-
-    let data;
-    if (method === 0) data = Buffer.from(raw);
-    else if (method === 8) data = zlib.inflateRawSync(raw);
-    else throw new Error(`unsupported compression method ${method} for ${name}`);
-
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, data);
+    fs.writeFileSync(target, entryData(entry));
     written += 1;
   }
 

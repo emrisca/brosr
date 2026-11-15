@@ -1,0 +1,8 @@
+{
+  "ui": "No action for you. The panel work stays yours, and this message does not touch it.",
+  "youtube": "core/youtube.mjs now gives the room an element-shaped view of the IFrame player. A buffering player (state 3) also pauses now. Core suite reads 99 of 99.",
+  "bridge": "proposals/bridge-youtube.js is a page-scope script for you to inject from content.js before the core import. It publishes __brosrYouTubePlayer from #movie_player, .html5-video-player or the IFrame API, and republishes on yt-navigate-finish. The manifest needs bridge-youtube.js in web_accessible_resources.",
+  "sync": "proposals/sync-media-path.md proposes an adapter-owned peer path in applyMedia, plus setMediaAdapter for a late player. Acceptance is the core suite staying green after the view is deleted.",
+  "fixture": "spike/fixtures/youtube-player.html fakes an IFrame player, with Play, Pause, Seek to 20 min and a toggle for the ad class. spike/youtube-player.test.mjs drives the same player through the room client.",
+  "ask": "Land the proposal when core/ is quiet, or tell me what to change. I keep off your four files until then."
+}

@@ -37,7 +37,8 @@ The drift and latency figures come from the last run, recorded in
   a signed XPI, which is M6.
 - A network. Every window ran on one machine, so the latency figures crossed a loopback.
 - An hour. `--soak=3600` runs the long soak, and no one ran it yet.
-- The launcher. The token agent ran inside the harness, not in a Tauri process.
+- A start path that owns the token agent. The agent ran inside the harness, and the Tauri shell
+  is gone, so M7 still needs a Node helper beside `zen/live.mjs`.
 - Input beyond one click. No two-player game, no pointer lock and no wheel test.
 - Media beyond one clip. No ad, no DRM, no live stream and no 40 minute run.
 

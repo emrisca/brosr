@@ -391,8 +391,7 @@ window is 420 s rather than 600 s, and it is not a WAN window.
 | `agent.test.mjs` | Seven tests for the token, the grant, expiry and revoke |
 | `unzip.mjs` | A minimal ZIP reader, because GNU tar cannot open a zip |
 | `zip.mjs` | A minimal stored ZIP writer, for the XPI |
-| `bridge/manifest.json` | Manifest V2 bridge with a content script and the core modules |
-| `bridge/content.js` | Content script that loads the core and starts a room |
+| `../bridge/` | The Manifest V2 extension source, packaged by `zen/package.mjs` |
 | `fixtures/` | Media, form, ad, sync, board, game, tall and the two room pages |
 | `../core/` | Protocol, clock, drift, media, room, overlay, input and the sync client |
 | `results.json` | The last run's output |
