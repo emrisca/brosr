@@ -119,15 +119,26 @@ export class YouTubeAdapter {
   state(handle = this.player) {
     const player = this.playerOf(handle);
     if (!player) return null;
+    const status = player.getPlayerState();
     return {
       key: this.key,
       position: Number(player.getCurrentTime() || 0),
       duration: Number(player.getDuration() || 0),
-      playing: player.getPlayerState() === 1,
+      playing: status === 1,
       rate: Number(player.getPlaybackRate() || 1),
       // The IFrame API reports volume from 0 to 100, and the room uses 0 to 1.
       volume: Number(player.getVolume() ?? 100) / 100,
+      // The API reports no seek, so this adapter never wedges on one. A
+      // buffering player reads as starved, so the room waits instead of
+      // chasing a position that cannot move.
+      seeking: false,
+      readyState: status === 3 || status === 5 ? 1 : 4,
     };
+  }
+
+  // A player fetches the data it needs, so no seek can land outside a buffer.
+  bufferedAround() {
+    return true;
   }
 
   // State 3 is buffering. State 5 is a queued video that has not started.

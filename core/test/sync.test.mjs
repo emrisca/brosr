@@ -473,3 +473,204 @@ test('a peer pings the host, and a ping addressed elsewhere is not answered', ()
   client.receive(encode({ type: 'ping', t0: 40, to: 'p3' }), now);
   assert.equal(sent.length, 0, 'a ping for someone else gets no pong');
 });
+
+test('a remote cursor reaches the browser, and a relayed pointer drives presence', () => {
+  const shared = [];
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    send: (frame) => sent.push(decode(frame)),
+    onPresence: (peer) => shared.push(peer),
+  });
+
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 5, y: 6 },
+      url: 'https://example.com/',
+      roomTime: 0,
+    }),
+    0
+  );
+  // The room tab hands this to its browser so every other tab can draw it.
+  assert.deepEqual(shared.at(-1), {
+    id: 'p2',
+    name: 'P',
+    colour: '#fff',
+    point: { x: 5, y: 6 },
+    url: 'https://example.com/',
+  });
+
+  // A pointer that lives on another tab arrives as a point, not an event.
+  assert.equal(client.setPointer({ point: 'no' }), false);
+  assert.equal(client.setPointer({ x: 40.4, y: 12.6 }, 'https://example.com/'), true);
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 40, y: 13 });
+  assert.equal(sent.at(-1).url, 'https://example.com/');
+});
+
+// The overlay only needs its own elements to place a cursor.
+function cursorDocument() {
+  const make = () => ({
+    style: {},
+    children: [],
+    parentNode: null,
+    textContent: '',
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+    appendChild(child) {
+      child.parentNode = this;
+      this.children.push(child);
+      return child;
+    },
+    removeChild(child) {
+      this.children = this.children.filter((entry) => entry !== child);
+      child.parentNode = null;
+      return child;
+    },
+    attachShadow() {
+      this.shadowRoot = make();
+      return this.shadowRoot;
+    },
+  });
+  return { documentElement: make(), createElement: make, createElementNS: make };
+}
+
+test('a cursor draws only on the page it belongs to', () => {
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: cursorDocument(),
+    pageUrl: () => 'https://example.com/',
+    send: () => {},
+  });
+
+  const presence = (url, x) =>
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x, y: x },
+      url,
+      roomTime: 0,
+    });
+
+  // A peer on another page draws nothing here, so the pointer never lands on
+  // an unrelated tab.
+  client.receive(presence('https://www.youtube.com/watch?v=1', 9), 0);
+  assert.equal(client.publish().cursors, 0);
+
+  client.receive(presence('https://example.com/', 10), 0);
+  assert.equal(client.publish().cursors, 1);
+
+  // The peer moves to another page, so the cursor leaves this one.
+  client.receive(presence('https://www.youtube.com/watch?v=2', 11), 0);
+  assert.equal(client.publish().cursors, 0);
+});
+
+test('presence carries the last trusted pointer position', () => {
+  const listeners = new Map();
+  const doc = {
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    send: (frame) => sent.push(decode(frame)),
+  });
+
+  doc.dispatch('pointermove', { isTrusted: true, clientX: 321.4, clientY: 222.6 });
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+
+  // Replayed remote input is synthetic, so it is not this page's pointer.
+  doc.dispatch('pointermove', { isTrusted: false, clientX: 10, clientY: 10 });
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+});
+
+test('the peer path reads and writes only through the adapter', () => {
+  // No currentTime, paused or seeking fields. A player object looks like this,
+  // and the peer path must not need any of them.
+  const seen = {
+    key: 'youtube:abc',
+    position: 12,
+    duration: 600,
+    playing: true,
+    rate: 1,
+    volume: 1,
+    seeking: false,
+    readyState: 4,
+  };
+  const writes = [];
+  const bare = {
+    pick: (key) => (key === seen.key ? seen : null),
+    state: (handle) => (handle === seen ? { ...seen } : null),
+    flags: () => ({ buffering: false, adPlaying: false }),
+    apply: (handle, command) => {
+      writes.push(command);
+      if (command.action === 'seek') seen.position = command.position;
+      if (command.action === 'play') seen.playing = true;
+      if (command.action === 'tick' && command.rate) seen.rate = command.rate;
+      return 'applied';
+    },
+    bufferedAround: () => true,
+  };
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 5000,
+    mediaAdapter: bare,
+    send: () => {},
+  });
+  const frame = (position, roomTime) =>
+    encode({ type: 'media', key: seen.key, action: 'tick', position, roomTime, playing: true });
+
+  const step = client.receive(frame(2, 5000), 5000);
+  assert.equal(step.step.action, 'seek');
+  assert.deepEqual(
+    writes.find((entry) => entry.action === 'seek'),
+    { action: 'seek', position: 2 },
+    'the seek goes through apply, not a field'
+  );
+  assert.equal(seen.position, 2, 'the adapter made the write');
+  assert.equal(client.publish().key, seen.key);
+});
+
+test('a late player replaces the adapter, and a missing one restores the element adapter', () => {
+  const client = createRoomClient({ role: 'peer', peerId: 'peer', now: () => 0, send: () => {} });
+  const player = {
+    pick: () => null,
+    state: () => null,
+    flags: () => ({ buffering: false, adPlaying: false }),
+    apply: () => 'applied',
+  };
+
+  assert.equal(client.setMediaAdapter(player), player);
+  assert.equal(client.media, player);
+
+  const restored = client.setMediaAdapter(null);
+  assert.equal(restored, client.media);
+  assert.notEqual(restored, player);
+  assert.equal(typeof restored.pick, 'function');
+});

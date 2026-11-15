@@ -5,7 +5,7 @@
 import { decode, encode } from './protocol.mjs';
 import { ClockEstimator } from './clock.mjs';
 import { DriftController } from './drift.mjs';
-import { MediaAdapter } from './media.mjs';
+import { MediaAdapter, bufferedAround } from './media.mjs';
 import { CursorOverlay } from './overlay.mjs';
 import { Room } from './room.mjs';
 import {
@@ -19,7 +19,9 @@ import {
 } from './input.mjs';
 
 export const HOST_TICK_MS = 250;
-export const PRESENCE_TICK_MS = 100;
+// The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
+// fresh target, and the overlay eases between them.
+export const PRESENCE_TICK_MS = 33;
 export const SAMPLE_AFTER_MS = 4000;
 // A seek takes time to land. Deciding again during that window stacks seeks
 // and the player never reaches any of the targets.
@@ -31,16 +33,9 @@ export const SEEK_TIMEOUT_MS = 8000;
 // middle of the seek, which is where it wedges here. The peer waits this long
 // for data, then seeks anyway so a big gap is never held forever.
 export const SEEK_BUFFER_WAIT_MS = 2500;
-export const SEEK_BUFFER_MARGIN_S = 0.5;
-
-export function bufferedAround(element, seconds, margin = SEEK_BUFFER_MARGIN_S) {
-  const ranges = element && element.buffered;
-  if (!ranges || typeof ranges.length !== 'number') return true;
-  for (let i = 0; i < ranges.length; i += 1) {
-    if (seconds >= ranges.start(i) && seconds <= ranges.end(i) - margin) return true;
-  }
-  return false;
-}
+// The range check lives on the adapter now, and these names stay exported so a
+// caller that imported them from here keeps working.
+export { bufferedAround, SEEK_BUFFER_MARGIN_S } from './media.mjs';
 export const VIEW_TICK_MS = 50;
 export const SCROLL_EPSILON = 0.002;
 export const LATENCY_LIMIT = 5000;
@@ -64,6 +59,15 @@ export function createRoomClient({
   scrollTo = null,
   // A page-level message from another peer. The room does not interpret it.
   onApp = null,
+  // A cursor from another peer. The room tab hands each one to its browser,
+  // so every other tab can draw it.
+  onPresence = null,
+  // A media frame for a film this tab does not hold. The room hands it to the
+  // tab that does, and a false reply keeps the frame unhandled.
+  onMedia = null,
+  // The page this tab shows. Presence carries it, and a cursor draws only on
+  // the tab that shows the same page.
+  pageUrl = null,
   now = () => Date.now(),
   overlay = true,
   sampleLimit = 200,
@@ -73,7 +77,7 @@ export function createRoomClient({
   // The controller holds a seek on the same clock and window as the settle
   // check below, so the two never disagree about when a seek may land.
   const drift = new DriftController({ now });
-  const media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
+  let media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
   const state = new Room({ role, peerId, now });
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
@@ -93,6 +97,7 @@ export function createRoomClient({
     nudges: 0,
     corrections: 0,
     stuckSeeks: 0,
+    relayed: 0,
     firstDrift: null,
     convergedAt: null,
     scroll: 0,
@@ -126,6 +131,11 @@ export function createRoomClient({
   let remoteGrant = false;
   let batcher = null;
   let lastInputFlush = -Infinity;
+  // The last trusted pointer position in viewport coordinates. Presence reuses
+  // it so a peer sees the mouse, not a placeholder at the origin.
+  let lastPointer = null;
+  // The page that point belongs to. A cursor shows only on that page.
+  let lastPointerUrl = null;
 
   // The host can change. A room elects a successor when the host leaves, so
   // both the role and the host id stay mutable inside the client.
@@ -318,10 +328,8 @@ export function createRoomClient({
 
   function applyPeers() {
     if (!cursor) return;
-    for (const peer of state.peers.values()) {
-      if (peer.id === peerId) continue;
-      cursor.setPeer(peer);
-    }
+    // Presence is what places a cursor, because it carries the page and the
+    // point. A roster entry carries neither, so it draws nothing.
     stats.cursors = cursor.stats().peers;
   }
 
@@ -339,30 +347,65 @@ export function createRoomClient({
       }
     }
     state.join({ id: message.peerId, name: message.name, colour: message.colour });
-    if (!cursor) return;
-    cursor.setPeer({
+    const position = {
       id: message.peerId,
       name: message.name,
       colour: message.colour,
       point: message.point,
-    });
+      url: message.url,
+    };
+    // Only the room tab holds a socket, so it is the one that shares a cursor
+    // with the rest of this browser.
+    if (onPresence) {
+      try {
+        onPresence(position);
+      } catch {
+        // A listener cannot break the room.
+      }
+    }
+    if (!cursor) return;
+    // A cursor belongs to one page. A tab shows it only while the peer is on
+    // that same page, so a pointer never lands on an unrelated tab.
+    const here = pageUrl ? pageUrl() : '';
+    if (!message.url || !here || message.url !== here) {
+      cursor.removePeer(message.peerId);
+    } else {
+      cursor.setPeer(position);
+    }
     stats.cursors = cursor.stats().peers;
   }
 
   function applyMedia(message, local) {
-    const element = media.pick(message.key);
-    const nowState = media.state(element);
-    if (nowState) {
-      stats.key = nowState.key;
-      stats.position = Math.round(nowState.position * 1000) / 1000;
-      stats.playing = nowState.playing;
+    // The adapter owns every read and write. A player object and a media
+    // element meet one interface, so the peer path never touches a field.
+    const picked = media.pick(message.key);
+    const read = picked ? media.state(picked) : null;
+    if (read) {
+      stats.key = read.key;
+      stats.position = Math.round(read.position * 1000) / 1000;
+      stats.playing = read.playing;
     }
     if (isHost()) return { ok: true };
-    if (!element) return { ok: false, reason: 'no-media' };
 
     const expected =
       message.position + (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
-    const actual = Number(element.currentTime || 0);
+    // A room tab with no player of its own hands the frame to the tab that
+    // shows the film. The expected position is anchored on this tab's clock,
+    // so the tab needs no clock estimate of its own.
+    if (!read) {
+      if (!onMedia) return { ok: false, reason: 'no-media' };
+      try {
+        if (onMedia({ ...message, expected, at: local }) === false) {
+          return { ok: false, reason: 'no-media' };
+        }
+        stats.relayed += 1;
+        return { ok: true, relayed: true };
+      } catch (error) {
+        return { ok: false, reason: 'handler', error: error.message };
+      }
+    }
+
+    const actual = read.position;
     const driftMs = (actual - expected) * 1000;
 
     if (!firstSeen) {
@@ -377,61 +420,58 @@ export function createRoomClient({
     const settleMs = Math.max(SEEK_SETTLE_MS, drift.cooldownMs || 0);
     // The element can report a seek that never finishes. Waiting on it forever
     // leaves the peer behind by the whole gap, so the wait has a limit.
-    if (element.seeking && Number.isFinite(lastSeekAt) && local - lastSeekAt > SEEK_TIMEOUT_MS) {
-      // A fresh write to currentTime is what frees this element, so the retry
-      // is issued here. Counting it alone would leave the peer behind.
+    if (read.seeking && Number.isFinite(lastSeekAt) && local - lastSeekAt > SEEK_TIMEOUT_MS) {
+      // A fresh seek is what frees this element, so the retry is issued here.
+      // Counting it alone would leave the peer behind.
       stats.stuckSeeks += 1;
-      const limit = Number.isFinite(element.duration) ? element.duration : expected;
-      element.currentTime = Math.max(0, Math.min(expected, limit));
+      const limit = Number.isFinite(read.duration) && read.duration > 0 ? read.duration : expected;
+      media.apply(picked, { action: 'seek', position: Math.max(0, Math.min(expected, limit)) });
       lastSeekAt = local;
-      element.playbackRate = 1;
-      if (message.playing && element.paused) {
-        const started = element.play();
-        if (started && typeof started.catch === 'function') started.catch(() => {});
-      }
+      if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
+      if (message.playing && !read.playing) media.apply(picked, { action: 'play' });
       return { ok: true, pending: 'seek-retry', stuckSeeks: stats.stuckSeeks };
     }
-    if (element.seeking || local - lastSeekAt < settleMs) {
-      if (element.playbackRate !== 1) element.playbackRate = 1;
+    if (read.seeking || local - lastSeekAt < settleMs) {
+      if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
       stats.position = Math.round(actual * 1000) / 1000;
-      stats.playing = !element.paused;
+      stats.playing = read.playing;
       return { ok: true, pending: 'seek' };
     }
 
     // The adapter owns the flags. A starved element and a site ad reach the
     // policy through one call, so neither site can forget one of them.
-    const step = drift.tick(driftMs, media.flags(element));
+    const step = drift.tick(driftMs, media.flags(picked));
 
     if (step.action === 'seek') {
-      const max = Number.isFinite(element.duration) ? element.duration : expected;
+      const max = Number.isFinite(read.duration) && read.duration > 0 ? read.duration : expected;
       const target = Math.max(0, Math.min(expected, max));
-      if (!bufferedAround(element, target)) {
+      // A site player fetches on seek, so only an element needs the range check.
+      const buffered = media.bufferedAround
+        ? media.bufferedAround(picked, target)
+        : bufferedAround(picked, target);
+      if (!buffered) {
         if (waitingSince === null) waitingSince = local;
         if (local - waitingSince < SEEK_BUFFER_WAIT_MS) {
-          element.playbackRate = 1;
+          if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
           return { ok: true, pending: 'buffer' };
         }
       }
       waitingSince = null;
-      element.currentTime = target;
+      media.apply(picked, { action: 'seek', position: target });
       lastSeekAt = local;
       lastSeekTarget = Math.round(target * 1000) / 1000;
       stats.corrections += 1;
-      element.playbackRate = 1;
-      // A seek can leave the element paused. The room is playing, so play.
-      if (message.playing && element.paused) {
-        const started = element.play();
-        if (started && typeof started.catch === 'function') started.catch(() => {});
-      }
+      if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
+      // A seek can leave the player paused. The room is playing, so play.
+      if (message.playing && !read.playing) media.apply(picked, { action: 'play' });
     } else if (step.action === 'pause') {
-      if (!element.paused) element.pause();
-      element.playbackRate = 1;
+      // The adapter knows whether a buffering player needs a pause, so the
+      // decision passes through rather than being second-guessed here.
+      media.apply(picked, { action: 'pause' });
+      if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
     } else {
-      if (message.playing && element.paused) {
-        const started = element.play();
-        if (started && typeof started.catch === 'function') started.catch(() => {});
-      }
-      if (element.playbackRate !== drift.rate) element.playbackRate = drift.rate;
+      if (message.playing && !read.playing) media.apply(picked, { action: 'play' });
+      if (read.rate !== drift.rate) media.apply(picked, { action: 'tick', rate: drift.rate });
     }
     stats.seeks = drift.seeks;
     stats.nudges = drift.nudges;
@@ -444,8 +484,10 @@ export function createRoomClient({
         stats.convergedAt = Math.round(elapsed);
       }
     }
-    stats.position = Math.round(actual * 1000) / 1000;
-    stats.playing = !element.paused;
+    // Read once more, so the panel shows what the writes above produced.
+    const after = media.state(picked) || read;
+    stats.position = Math.round(after.position * 1000) / 1000;
+    stats.playing = after.playing;
     stats.debug = {
       local: Math.round(local),
       offset: Math.round(clock.offset()),
@@ -454,12 +496,19 @@ export function createRoomClient({
       expected: Math.round(expected * 1000) / 1000,
       actual: Math.round(actual * 1000) / 1000,
       driftMs: Math.round(driftMs),
-      seeking: Boolean(element.seeking),
-      paused: element.paused,
-      readyState: element.readyState,
+      seeking: Boolean(after.seeking),
+      paused: !after.playing,
+      readyState: after.readyState,
       lastSeekTarget,
     };
     return { ok: true, driftMs: Math.round(driftMs), step };
+  }
+
+  // A page that hands its player in after the core starts swaps the adapter
+  // here. A missing value goes back to the element adapter.
+  function setMediaAdapter(next) {
+    media = next || new MediaAdapter({ root: mediaRoot });
+    return media;
   }
 
   function followSnapshot(message) {
@@ -586,14 +635,19 @@ export function createRoomClient({
   }
 
   function presence(peer = {}) {
-    sendMessage({
+    const message = {
       type: 'presence',
       peerId: peer.id || peerId,
       name: peer.name || name,
       colour: peer.colour || colour,
-      point: peer.point || { x: 0, y: 0 },
+      point: peer.point || lastPointer || { x: 0, y: 0 },
       roomTime: roomTimeOf(),
-    });
+    };
+    // The page this cursor is on. Another tab draws it only when it shows that
+    // same page.
+    const here = peer.url || lastPointerUrl || (pageUrl ? pageUrl() : null);
+    if (here) message.url = here;
+    sendMessage(message);
   }
 
   // Layer 1 and 2 on the host: it is the only side that publishes a URL or a
@@ -620,6 +674,35 @@ export function createRoomClient({
     });
   }
 
+  function setupPointer() {
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    doc.addEventListener(
+      'pointermove',
+      (event) => {
+        // Replayed remote input is synthetic, so it is not this page's pointer.
+        if (!event.isTrusted) return;
+        const x = Number(event.clientX);
+        const y = Number(event.clientY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        lastPointer = { x: Math.round(x), y: Math.round(y) };
+        lastPointerUrl = pageUrl ? pageUrl() : null;
+      },
+      { passive: true, capture: true }
+    );
+  }
+
+  // A cursor that lives on another tab of this browser reports here. Presence
+  // publishes the newest point either way, so the room follows that tab.
+  function setPointer(point, url) {
+    if (!point) return false;
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    lastPointer = { x: Math.round(x), y: Math.round(y) };
+    if (url) lastPointerUrl = String(url);
+    return true;
+  }
+
   function tick(local = now()) {
     // A dropped socket leaves its entry behind. The count only means live peers
     // once the map forgets a peer that stopped sending presence.
@@ -640,6 +723,9 @@ export function createRoomClient({
       lastHostTick = local;
       const element = media.pick(null);
       const nowState = media.state(element);
+      // A starved or ad state travels with the anchor, so a peer panel can say
+      // why the film is not moving yet.
+      const flags = media.flags(element);
       if (nowState) {
         stats.key = nowState.key;
         stats.position = Math.round(nowState.position * 1000) / 1000;
@@ -652,6 +738,8 @@ export function createRoomClient({
           playing: nowState.playing,
           rate: nowState.rate,
           volume: nowState.volume,
+          buffering: Boolean(flags.buffering),
+          ad: Boolean(flags.adPlaying),
           // The host owns the room clock, so its local time is room time.
           roomTime: local,
         });
@@ -689,6 +777,7 @@ export function createRoomClient({
       nudges: stats.nudges,
       corrections: stats.corrections,
       stuckSeeks: stats.stuckSeeks,
+      relayed: stats.relayed,
       firstDrift: stats.firstDrift,
       convergedAt: stats.convergedAt,
       sampleCount: samples.length,
@@ -735,6 +824,7 @@ export function createRoomClient({
     };
   }
 
+  setupPointer();
   setupInput();
 
   if (isHost() && input && input.grantTo) {
@@ -751,12 +841,17 @@ export function createRoomClient({
     setGrant,
     tick,
     presence,
+    setPointer,
     hello,
     publish,
     roomState: state,
     clock,
     drift,
-    media,
+    // A getter, so a page that swaps in a player sees the current adapter.
+    get media() {
+      return media;
+    },
+    setMediaAdapter,
     cursor,
     stats,
   };

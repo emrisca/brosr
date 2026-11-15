@@ -92,8 +92,11 @@ test('a state read maps the player scale to the room scale', () => {
     playing: true,
     rate: 1,
     volume: 0.4,
+    seeking: false,
+    readyState: 4,
   });
   assert.equal(new YouTubeAdapter().state(), null);
+  assert.equal(adapter.bufferedAround(), true, 'a player never needs the buffer wait');
 });
 
 test('buffering is player state 3, and a queued video is state 5', () => {
