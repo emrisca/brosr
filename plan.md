@@ -9,8 +9,10 @@ Short answer to "is this possible": yes, for pages whose state can be reproduced
 machine, which is most pages people actually share. No, for anything that needs identical
 pixels. Section 2 states the line.
 
-Status: **M0 passed, and the M1 core runs.** The spike and its results live in
-[spike/](spike/), and the shared code lives in [core/](core/). Nothing ships yet.
+Status: **M0 through M3 are built in the core, and a two-browser YouTube room
+holds the same playhead.** The spike and its results live in [spike/](spike/),
+the shared code in [core/](core/), and Section 18 tracks each step. Nothing ships
+yet.
 
 ## 1. The idea, and the thing it must not become
 
@@ -194,6 +196,11 @@ Five layers. Each one is independent, so a page can use layers 0 and 3 while ign
 | 2 View | Scroll offset, zoom | Scroll ratio plus a viewport fingerprint | The two window sizes differ enough to change the layout |
 | 3 Media | Playhead, play and pause, rate, volume | A site adapter over `HTMLMediaElement` or the YouTube player | DRM, ads, live streams |
 | 4 Input | Pointer sequence, keys, wheel, text | Event relay through the actuator | The page needs pointer lock, or renders per user |
+
+**Layer 0 detail.** A cursor stays inside the room tab. A plain tab carries the film and
+nothing else, so a person's mouse never appears on a page the room did not open. Cross-tab
+cursors were removed on 15 November 2026 because a cursor on a YouTube tab made no sense
+to the people testing it.
 
 **Layer 2 detail.** Scroll travels as a ratio of document height, and the receiver clamps it
 to its own maximum. The receiver sends back a fingerprint of `innerWidth`, `innerHeight`,
@@ -498,9 +505,64 @@ adapter. [core/youtube.mjs](core/youtube.mjs) holds the YouTube one. The peer pa
 fields, so the YouTube adapter hands back a view with those fields. One path then drives both
 players. `core/test/youtube-room.test.mjs` drives a fake IFrame player through the real client.
 A peer that matches the host never seeks. A 20 s drift seeks once through `seekTo`, and a 200 ms
-drift nudges the rate. A buffering player pauses, and the ad class pauses. Still missing from M2:
-the bridge does not hand the player object in yet. So a real YouTube tab keeps the element
-adapter, and no three-peer run exists.
+drift nudges the rate. A buffering player pauses, and the ad class pauses.
+
+**As built (15 November 2026).** The bridge now hands the IFrame player in, so a real YouTube
+tab uses the player adapter after the page loads and adopts a new one on a single-page
+navigation. The tab that shows the film reports it, the room tab forwards the anchor, and the
+film tab applies it to its own player. A two-browser room ran with Zen as the host and Brave as
+the guest. The room carried `youtube:aqz-KE-bpKQ`, the guest film tab applied 132 frames, and
+its last drift was 0.2 s. Volume stays local: the room sets the playhead and the rate, and
+never the volume. The guest browser loads the bridge from an unpacked folder, which works in
+Brave 157. Still missing from M2: a three-peer run, an hour-long film, and the sites in M2b.
+
+### M2b · Other sites
+
+YouTube is one player. The next step is the sites people already watch, which usually means a
+player inside an iframe and a source that changes per quality.
+
+- **Any `HTMLMediaElement`.** `mediaStateFromDocument` samples a plain `<video>` or `<audio>` in
+  the top frame, and the key comes from the source URL. A site whose player sits in the page
+  needs no new adapter.
+- **Cross-origin players.** A player inside an iframe is invisible to the top frame. The bridge
+  needs a content script in every frame, with the frame URL in the key, and the room tab still
+  holds the socket.
+- **HLS and DASH.** The source URL changes on a quality switch, so the key must come from the
+  page and the player, not from the media source alone.
+- **p-stream and its forks.** The same page and the same player, so one adapter covers each fork.
+  The extension the user already runs is the reference.
+- **The fmhy video list.** Pick three sites, one of them iframe-embedded, and hold them in the
+  test matrix. Ads and live streams keep the M2 policy.
+
+**As built (15 November 2026).** [core/media-relay.mjs](core/media-relay.mjs) names a film by the
+page when the source cannot name one. A blob, a media source and an HLS or DASH manifest all hand
+back the page origin and path, so a quality switch keeps the same key and both viewers open the
+same URL. A plain file URL still names itself. The bridge content script runs in every frame, a
+frame reports the player it holds over the same tab channel, and an apply frame reaches every
+frame of that tab, where only the frame with the matching key acts. A frame never becomes a room
+tab. YouTube keeps its own adapter.
+
+**Live matrix (15 November 2026).** Brave 157 loaded the bridge and uBlock Origin Lite as two
+unpacked packs. Both service workers ran, both ids stayed in `pinned_extensions` across a restart,
+and the profile allows the third party cookie that Google sign-in needs. `https://cinecat.eu/`,
+`https://www.movy.sx/` and `https://7movies.ac/` loaded their home pages. The 7movies title page
+at `/movie/1368337/watch` loaded too, and it holds two frames with no top frame player, so its
+player sits in a frame and the per frame content script is the path under test. A playback run on a
+title page is still open.
+
+*Done when:* two browsers hold within 1 s on three sites from the list, one of them inside an
+iframe, with at most one seek per ten minutes and no seek loop.
+
+### M2c · A shared login
+
+Some sites show the film only to a signed-in account, and one person in the room may hold that
+account. A cookie copy between the two browsers on one machine covers it. The host reads the
+cookies for one site from its own browser and writes them into the guest profile over the guest's
+local debug port. Credentials never reach the relay, and a peer on another machine never receives
+them. A site that rotates a session can sign one browser out, so a copy may need a repeat.
+
+*Done when:* a signed-in page in the host browser opens signed in on the guest, and no cookie
+value appears in a relay capture.
 
 ### M3 · Rooms, invites, encryption, reconnect
 
@@ -695,3 +757,27 @@ actuator is not in v1, and the first run says both.
 5. Is a Chromium variant worth a second bridge, given it cannot run full uBlock Origin?
 6. When two people type in the same field, does the room need a lock, or is last-writer-wins
    acceptable? Last-writer-wins is cheaper and wrong more often.
+7. Does a cross-origin player need a content script in every frame, or can one page script
+   publish its player on the window the way YouTube does? Answered: every frame, because a
+   cross-origin frame is opaque to the page. The bridge now runs in every frame.
+
+## 18. Progress log
+
+Newest first. Each line names what changed, not what was planned.
+
+- **15 November 2026.** Other-site media. A blob, an HLS manifest or a cross-origin player now
+  names a film by its page, and the bridge runs in every frame so an embedded player reaches the
+  room. A host command copies one site's login into the guest browser over the local debug port,
+  so no credential touches the relay. The two browsers restarted on the new bridge.
+- **15 November 2026.** Two browsers, one room, one film. Zen hosts and Brave joins. The room
+  carries `youtube:aqz-KE-bpKQ`, the guest film tab follows the host playhead, and volume stays
+  local. Cross-tab cursors are removed, so a plain tab carries media only. The Brave profile
+  pins the bridge on the toolbar, and the launcher opens the film in the host browser because
+  the host is the anchor.
+- **14 November 2026.** YouTube adapter and the bridge hand-in. Sealed frames on the wire, host
+  migration, and the room panel with the seal state and the invite key.
+- **13 November 2026.** Sync core, cursor overlay, clock, room state, input and grants. A LAN
+  hop measured 3 ms p95 on Windows and 10 ms p95 on the Mac.
+- **13 November 2026.** M0 spike. Two profiles, a temporary XPI, uBlock Origin, a trusted BiDi
+  key, and one synced `HTMLMediaElement`.
+- **12 November 2026.** Zen profile, bridge install in Zen, room panel, and grant plus revoke.
