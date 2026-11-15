@@ -237,11 +237,121 @@ function renderSeal(seal) {
         : 'The room key is loading.';
 }
 
+// The tab list is read from the background page, which knows the role and the
+// tab ids. The panel writes the same state back, so one render pass draws both.
+let tabState = null;
+
+// A film key names a page. The card shows a short label and keeps the full key
+// in a title, so a long URL never pushes the button off the row.
+function filmLabel(key) {
+  const text = String(key || '');
+  if (text.startsWith('youtube:')) return 'YouTube film';
+  try {
+    return new URL(text).hostname.replace(/^www\./, '') || 'The film';
+  } catch {
+    return 'The film';
+  }
+}
+
+// A position reads better as a clock than as a raw second count.
+function clockText(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '-';
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  const pad = (value) => String(value).padStart(2, '0');
+  return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
+}
+
+// One badge per peer says what that peer's own tab is doing with the film.
+function viewerLabel(viewer) {
+  if (!viewer) return 'No report';
+  if (!viewer.open) return 'No tab on the film';
+  if (viewer.ad) return 'Ad';
+  if (viewer.buffering) return 'Buffering';
+  if (!viewer.playing) return 'Paused';
+  const gap = Number(viewer.behind);
+  if (!Number.isFinite(gap)) return 'Watching';
+  return Math.abs(gap) <= 1 ? 'In sync' : `${Math.abs(gap).toFixed(1)} s off`;
+}
+
+// The watch card states what the room plays, where this browser's own tab has
+// it, and what each peer reports. The button opens the film, or brings an open
+// film tab to the front, so joining takes one click.
+function renderWatch(reply) {
+  const data = (reply && reply.data) || {};
+  const media = data.media || null;
+  const state = $('watch-state');
+  const copy = $('watch-copy');
+  const button = $('watch-toggle');
+  const list = $('watch-viewers');
+  if (!list) return;
+  list.replaceChildren();
+  delete copy.title;
+  if (!media) {
+    state.textContent = 'No media';
+    delete state.dataset.state;
+    copy.textContent =
+      reply && reply.role === 'host'
+        ? 'Play something in a tab and the room follows it.'
+        : 'The host has not started a film.';
+    button.textContent = 'Open the film';
+    button.disabled = true;
+    button.title = 'No film in this room yet';
+    return;
+  }
+  const flag = media.ad ? 'Ad' : media.buffering ? 'Buffering' : '';
+  const label = media.playing ? 'Playing' : 'Paused';
+  state.textContent = flag ? `${label}, ${flag.toLowerCase()}` : label;
+  state.dataset.state = media.playing ? 'playing' : 'paused';
+  const place = clockText(Number(media.position));
+  const here =
+    media.open && Number.isFinite(media.localPosition)
+      ? ` Your tab is at ${clockText(Number(media.localPosition))}.`
+      : '';
+  copy.textContent = media.open
+    ? `${filmLabel(media.key)} at ${place}.${here}`
+    : `${filmLabel(media.key)} at ${place}. No tab on it here.`;
+  copy.title = String(media.key || '');
+  button.textContent = media.open ? 'Show the film' : 'Open the film';
+  button.disabled = !media.url;
+  button.title = media.open
+    ? 'Bring the film tab to the front'
+    : 'Open the film in a new tab';
+
+  const peers = Array.isArray(data.peerList) ? data.peerList : [];
+  const reports = Array.isArray(data.viewers) ? data.viewers : [];
+  const byId = new Map(reports.map((entry) => [String(entry && entry.id), entry]));
+  for (const peer of peers) {
+    if (!peer || !peer.id || peer.self) continue;
+    const entry = byId.get(String(peer.id));
+    if (!entry) continue;
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'watch-name';
+    name.textContent = peer.name || peer.id;
+    const badge = document.createElement('span');
+    badge.className = 'watch-badge';
+    badge.textContent = viewerLabel(entry.viewer);
+    if (entry.viewer && entry.viewer.inSync === true) badge.dataset.sync = '1';
+    if (entry.viewer && entry.viewer.inSync === false) badge.dataset.sync = '0';
+    row.append(name, badge);
+    list.append(row);
+  }
+}
+
 function render(reply) {
   lastReply = reply;
   const data = reply.data || {};
   $('room').textContent = reply.room || 'room';
   $('role').textContent = reply.role || '';
+  // The background page learns the role from the room tab hello. When the tab
+  // list lands first, this fills the gap on the next status pass.
+  if (tabState && !tabState.role && reply.role) {
+    tabState.role = reply.role;
+    renderTabs();
+  }
   $('dot').dataset.state = data.socket === 1 ? 'live' : 'down';
   setStatus(data.socket === 1 ? 'Connected' : 'Reconnecting...');
   $('control').hidden = reply.role !== 'host';
@@ -295,6 +405,7 @@ function render(reply) {
     if (presence && Number.isFinite(presence.p95)) {
       const time = document.createElement('span');
       time.className = 'latency';
+      time.title = 'Presence latency, 95th percentile.';
       time.textContent = `${Math.round(presence.p95)} ms`;
       row.append(time);
     }
@@ -322,11 +433,9 @@ function render(reply) {
     list.append(row);
   }
 
-  // The watch card states what the room plays now. The control stays off until
-  // the bridge hands a player to the room.
-  const playing = typeof data.playing === 'boolean' ? data.playing : null;
-  $('watch-state').textContent = playing === null ? 'No media' : playing ? 'Playing' : 'Paused';
-  $('watch-toggle').textContent = 'Sync playback';
+  // The watch card states what the room plays and where this browser's own tab
+  // has it. The button opens or fronts the film, so joining takes one click.
+  renderWatch(reply);
   $('latency').textContent = latencyLabel(data);
   const reconnects = Number(data.reconnects) || 0;
   $('relay').textContent =
@@ -350,7 +459,7 @@ function missing(reason) {
   renderSeal(null);
   $('playback').textContent = '-';
   $('relay').textContent = '-';
-  $('watch-state').textContent = 'No media';
+  renderWatch(null);
 }
 
 // A sidebar sender can report the placeholder id -1. Sending to it throws, so
@@ -558,9 +667,173 @@ menu.addEventListener('keydown', (event) => {
   items[next].focus();
 });
 
+// Tab sharing is host led. The panel only says what this browser sends, and the
+// background page opens what the host announces.
+function hostOf(url) {
+  try {
+    return new URL(String(url)).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+function renderTabs() {
+  const list = $('tabs-list');
+  const auto = $('tabs-auto');
+  const note = $('tabs-note');
+  if (!list || !auto || !note) return;
+  const state = tabState;
+  const host = Boolean(state && state.role === 'host');
+  const guest = Boolean(state && state.role === 'peer');
+  auto.disabled = !host;
+  auto.checked = Boolean(state && state.auto);
+  auto.title = host ? 'Send every new tab to the room.' : 'Only the host shares tabs.';
+  note.hidden = !guest;
+  note.textContent = guest
+    ? 'The host shares tabs. Tabs they share open here in the background.'
+    : '';
+  list.replaceChildren();
+  // A guest never shares, so its own tabs are not a choice and the list stays
+  // empty. Showing them would suggest a control the guest does not have.
+  if (guest) return;
+  const tabs = (state && Array.isArray(state.tabs) ? state.tabs : []).filter((tab) => !tab.room);
+  if (!tabs.length) {
+    const empty = document.createElement('li');
+    empty.className = 'tabs-empty';
+    empty.textContent = state ? 'No other tab to share yet.' : 'Reading tabs...';
+    list.append(empty);
+    return;
+  }
+  for (const tab of tabs) {
+    const row = document.createElement('li');
+    const label = document.createElement('label');
+    label.className = 'tab-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = Boolean(tab.shared);
+    box.disabled = !host;
+    box.setAttribute('aria-label', `Share ${tab.title || 'this tab'}`);
+    const text = document.createElement('span');
+    text.className = 'tab-text';
+    const title = document.createElement('span');
+    title.className = 'tab-title';
+    title.textContent = tab.title || tab.url || 'Tab';
+    title.title = tab.url || '';
+    const hostName = document.createElement('span');
+    hostName.className = 'tab-host';
+    hostName.textContent = hostOf(tab.url);
+    text.append(title, hostName);
+    label.append(box, text);
+    box.addEventListener('change', () => setShared(tab, box));
+    row.append(label);
+    list.append(row);
+  }
+}
+
+// A worker that is still starting can hold a message channel open. A short
+// timeout keeps the list from waiting forever, and the next pass fills it.
+function tabMessage(payload) {
+  return Promise.race([
+    api.runtime.sendMessage(payload),
+    new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+  ]);
+}
+
+async function loadTabs() {
+  if (!api || !api.runtime || !$('tabs-list')) return;
+  try {
+    const reply = await tabMessage({ type: 'brosr:tabs-list' });
+    if (reply && reply.ok) {
+      tabState = {
+        role: reply.role || '',
+        auto: Boolean(reply.auto),
+        tabs: Array.isArray(reply.tabs) ? reply.tabs : [],
+      };
+      renderTabs();
+      return;
+    }
+  } catch {
+    // A worker restart drops one read. The next open fills the list.
+  }
+  if (!tabState) {
+    tabState = { role: '', auto: false, tabs: [] };
+    renderTabs();
+  }
+}
+
+// The box moves at once and rolls back when the background page refuses, so a
+// guest never sees a tab marked shared that the room never received.
+async function setShared(tab, box) {
+  const wanted = box.checked;
+  box.disabled = true;
+  try {
+    const reply = await tabMessage({
+      type: 'brosr:tab-share',
+      tabId: tab.id,
+      shared: wanted,
+    });
+    if (reply && reply.ok) {
+      notice(wanted ? 'Sharing that tab.' : 'That tab stays private.');
+      await loadTabs();
+      return;
+    }
+    box.checked = !wanted;
+    notice('Only the host shares tabs.', true);
+  } catch {
+    box.checked = !wanted;
+    notice('The background page did not answer.', true);
+  }
+  box.disabled = false;
+}
+
+$('tabs-auto').addEventListener('change', async (event) => {
+  const box = event.currentTarget;
+  const wanted = box.checked;
+  box.disabled = true;
+  try {
+    const reply = await tabMessage({ type: 'brosr:tabs-auto', on: wanted });
+    if (reply && reply.ok) {
+      notice(wanted ? 'New tabs go to the room.' : 'New tabs stay private.');
+      await loadTabs();
+      return;
+    }
+    box.checked = !wanted;
+    notice('Only the host shares tabs.', true);
+  } catch {
+    box.checked = !wanted;
+    notice('The background page did not answer.', true);
+  }
+  box.disabled = false;
+});
+
 renderPanelSites();
 renderSkeleton();
+// One pass before the read, so the section states what it is doing instead of
+// sitting blank while a cold worker starts.
+renderTabs();
+loadTabs();
 $('refresh').addEventListener('click', refresh);
+
+// The watch button opens the room's film. A tab that already shows it comes to
+// the front, so a second click never opens a duplicate.
+$('watch-toggle').addEventListener('click', async () => {
+  const media = lastReply && lastReply.data ? lastReply.data.media : null;
+  if (!media || !media.url) return notice('No film in this room yet.', true);
+  try {
+    const reply = await api.runtime.sendMessage({
+      type: 'brosr:open-film',
+      key: media.key,
+      url: media.url,
+    });
+    if (reply && reply.ok) {
+      notice(reply.focused ? 'The film tab is in front.' : 'Opened the film.');
+    } else {
+      notice('The browser did not open the film.', true);
+    }
+  } catch {
+    notice('The browser did not open the film.', true);
+  }
+});
 
 // One copy path serves the invite card and the menu item. The button confirms
 // in place, so a person sees the copy without reading the notice line.
@@ -642,7 +915,30 @@ setInterval(async () => {
         invite: $('invite').value,
         count: $('count').textContent,
         playback: $('playback').textContent,
+        media: lastReply && lastReply.data ? lastReply.data.media || null : null,
+        viewers:
+          lastReply && lastReply.data && Array.isArray(lastReply.data.viewers)
+            ? lastReply.data.viewers.map((entry) => ({
+                id: entry.id,
+                open: Boolean(entry.viewer && entry.viewer.open),
+                inSync: entry.viewer ? entry.viewer.inSync : null,
+                behind: entry.viewer ? entry.viewer.behind : null,
+              }))
+            : [],
+        watch:
+          $('watch-state').textContent +
+          ' | ' +
+          [...document.querySelectorAll('#watch-viewers .watch-badge')]
+            .map((node) => node.textContent)
+            .join(', '),
         control: !$('control').hidden,
+        tabs: tabState
+          ? {
+              role: tabState.role,
+              auto: tabState.auto,
+              count: tabState.tabs.filter((tab) => !tab.room).length,
+            }
+          : null,
         notice: $('notice').textContent,
         status: $('status').textContent,
         peers: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent),

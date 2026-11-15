@@ -603,6 +603,161 @@ button:focus-visible,
   background: transparent;
 }
 
+.watch-state[data-state="playing"] {
+  color: var(--room-text);
+}
+
+/* A viewer row says what each peer's own tab does with the film, so the gap is
+   visible without asking anyone. The badge is the only coloured part, and its
+   two colours keep the status contrast the rest of the panel uses. */
+.watch-viewers {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.watch-viewers li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.watch-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--room-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-badge {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius-sm);
+  color: var(--room-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.watch-badge[data-sync="1"] {
+  border-color: color-mix(in srgb, var(--room-live) 45%, var(--room-border));
+  color: var(--room-live);
+}
+
+.watch-badge[data-sync="0"] {
+  border-color: color-mix(in srgb, var(--room-down) 40%, var(--room-border));
+  color: var(--room-down);
+}
+
+/* Tab sharing lists one row per shareable tab. The row is a label, so the
+   checkbox and the title take one click and the host can mute a tab without
+   hunting for the box. */
+.tabs {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--room-border);
+}
+
+.tabs-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tabs-head .section-title {
+  margin-bottom: 0;
+}
+
+.tabs-auto {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  color: var(--room-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tabs-auto input,
+.tab-row input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--room-accent);
+  cursor: pointer;
+}
+
+.tabs-auto input:disabled,
+.tab-row input:disabled {
+  cursor: not-allowed;
+}
+
+.tabs-note {
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.tabs-note[hidden] {
+  display: none;
+}
+
+.tab-list li {
+  min-height: 32px;
+  padding: 6px;
+}
+
+.tab-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  cursor: pointer;
+}
+
+.tab-row input:disabled ~ .tab-text {
+  opacity: 0.6;
+}
+
+.tab-text {
+  display: grid;
+  min-width: 0;
+}
+
+.tab-title,
+.tab-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-title {
+  font-size: 12px;
+}
+
+.tab-host {
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.tab-list .tabs-empty {
+  padding: 6px 0;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.tab-list .tabs-empty:hover {
+  background: transparent;
+}
+
 footer {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -646,6 +801,10 @@ footer .stat:last-child {
   .invite-copy,
   .watch-button {
     justify-self: start;
+  }
+
+  .tabs-head {
+    flex-wrap: wrap;
   }
 
   footer {

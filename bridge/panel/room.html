@@ -111,15 +111,15 @@
       <ul id="peers"></ul>
     </section>
 
-    <section class="watch" id="watch">
+    <section class="watch" id="watch" aria-labelledby="watch-label">
       <div class="watch-head">
-        <p class="section-title">Watch together</p>
+        <p class="section-title" id="watch-label">Watch together</p>
 
         <span class="watch-state" id="watch-state">No media</span>
       </div>
 
       <div class="watch-row">
-        <p class="watch-copy" id="watch-copy">Needs the media bridge.</p>
+        <p class="watch-copy" id="watch-copy">The host has not started a film.</p>
 
         <button
           class="watch-button"
@@ -127,17 +127,35 @@
           type="button"
           disabled
           aria-describedby="watch-copy"
-          title="Needs the media bridge"
+          title="No film in this room yet"
         >
-          Sync playback
+          Open the film
         </button>
       </div>
+
+      <ul class="watch-viewers" id="watch-viewers"></ul>
     </section>
 
     <section class="control" id="control" hidden>
       <p class="section-title">Control</p>
 
       <ul class="history" id="history"></ul>
+    </section>
+
+    <section class="tabs" id="tabs-section" aria-labelledby="tabs-label">
+      <div class="tabs-head">
+        <p class="section-title" id="tabs-label">Sync tabs</p>
+
+        <label class="tabs-auto" for="tabs-auto">
+          <input type="checkbox" id="tabs-auto" />
+
+          <span>Share new tabs</span>
+        </label>
+      </div>
+
+      <p class="tabs-note" id="tabs-note" hidden></p>
+
+      <ul class="tab-list" id="tabs-list"></ul>
     </section>
 
     <footer>

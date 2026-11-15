@@ -8,7 +8,32 @@
 
 const api = globalThis.browser || globalThis.chrome;
 
+// A YouTube player object lives in the page's own world. This sandbox cannot
+// see it, so one classic script from the extension origin publishes it on the
+// window before the core reads that hand-in.
+function injectPlayer() {
+  return new Promise((resolve) => {
+    try {
+      const tag = document.createElement('script');
+      tag.src = api.runtime.getURL('bridge-youtube.js');
+      tag.dataset.brosrPlayer = '1';
+      tag.onload = () => {
+        tag.remove();
+        resolve();
+      };
+      tag.onerror = () => {
+        tag.remove();
+        resolve();
+      };
+      document.documentElement.append(tag);
+    } catch {
+      resolve();
+    }
+  });
+}
+
 (async () => {
+  await injectPlayer();
   const url = api.runtime.getURL('core/browser-entry.mjs');
   try {
     const core = await import(url);

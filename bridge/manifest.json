@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Brosr bridge",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Loads the Brosr core into a room tab: cursors, presence and media sync.",
   "browser_specific_settings": {
     "gecko": {
@@ -34,7 +34,8 @@
   "content_scripts": [
     {
       "matches": [
-        "http://*/*"
+        "http://*/*",
+        "https://*/*"
       ],
       "js": [
         "content.js"
@@ -43,7 +44,8 @@
     }
   ],
   "web_accessible_resources": [
-    "core/*.mjs"
+    "core/*.mjs",
+    "bridge-youtube.js"
   ],
   "commands": {
     "open-room-panel": {
