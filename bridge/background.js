@@ -104,7 +104,6 @@ api.tabs.query({}).then((tabs) => {
 api.tabs.onRemoved.addListener((id) => {
   announced.delete(id);
   remoteTabs.delete(id);
-  cursorTabs.delete(id);
   mediaTabs.delete(id);
   let unkeyed = false;
   for (const [key, tabId] of [...remoteKeys]) {
@@ -116,8 +115,6 @@ api.tabs.onRemoved.addListener((id) => {
   state().then((seen) => {
     if (id === seen.roomTabId) {
       save({ roomTabId: null, roomRole: null });
-      // The room is gone, so the cursors on the other tabs go with it.
-      relayCursors({ type: 'brosr:presence-roster', peers: [] });
     }
   });
 });
@@ -125,7 +122,7 @@ api.tabs.onRemoved.addListener((id) => {
 // Sharing is host-led. A guest opens what the host announces and never sends
 // its own tabs, so one person's browsing stays private by default.
 const local = api.storage && api.storage.local ? api.storage.local : null;
-const prefs = { autoShare: true, muted: {} };
+const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, granted: false };
 let roomRole = null;
 let prefsLoaded = false;
 
@@ -134,10 +131,13 @@ async function loadPrefs() {
   prefsLoaded = true;
   if (!local) return prefs;
   try {
-    const saved = await local.get(['autoShare', 'muted']);
+    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'granted']);
     if (saved) {
       prefs.autoShare = saved.autoShare !== false;
       prefs.muted = saved.muted || {};
+      prefs.shared = saved.shared || {};
+      prefs.sync = saved.sync !== false;
+      prefs.granted = saved.granted === true;
     }
   } catch {
     // A refused read keeps the defaults.
@@ -176,62 +176,15 @@ state()
     for (const [key, id] of Object.entries(book)) if (validId(id)) remoteKeys.set(key, id);
   })
   .catch(() => {});
-// Pages outside the room that asked to draw its cursors, keyed by the page
-// each one shows. A cursor goes only to the tabs on its own page.
-const cursorTabs = new Map();
 // Tabs with a player, keyed by the film each one shows. The room tab drives
 // playback through this map, because the film is usually in another tab.
 const mediaTabs = new Map();
+// A host tab can reach the open path from several frames at once. One slot per
+// host tab keeps that burst to a single local tab.
+const opening = new Set();
 // The film this browser plays last. A paused background tab does not replace
 // the film someone is watching, so only a playing tab takes the focus.
 let mediaFocus = '';
-// The last page each peer's cursor was seen on. A cursor that moves pages is
-// taken off the page it left at once, so no tab keeps a stale arrow until the
-// next roster.
-const peerPages = new Map();
-
-// A cursor reaches a page only when that page asked for one, and a page that
-// cannot take the message has gone away.
-function relayCursors(payload) {
-  if (payload.type === 'brosr:presence') {
-    const peer = payload.peer;
-    if (peer && peer.id) {
-      const was = peerPages.get(peer.id);
-      if (was !== undefined && was !== peer.url) {
-        for (const [id, page] of [...cursorTabs]) {
-          if (page !== was) continue;
-          api.tabs
-            .sendMessage(id, { type: 'brosr:cursor-drop', id: peer.id })
-            .catch(() => cursorTabs.delete(id));
-        }
-      }
-      if (peer.url) peerPages.set(peer.id, peer.url);
-      else peerPages.delete(peer.id);
-    }
-  } else if (payload.type === 'brosr:presence-roster') {
-    const peers = Array.isArray(payload.peers) ? payload.peers : [];
-    const seen = new Set();
-    for (const peer of peers) {
-      if (!peer || !peer.id) continue;
-      seen.add(peer.id);
-      if (peer.url) peerPages.set(peer.id, peer.url);
-      else peerPages.delete(peer.id);
-    }
-    for (const id of [...peerPages.keys()]) if (!seen.has(id)) peerPages.delete(id);
-  }
-  for (const [id, page] of [...cursorTabs]) {
-    let body = payload;
-    if (payload.type === 'brosr:presence') {
-      if (!payload.peer || payload.peer.url !== page) continue;
-    } else if (payload.type === 'brosr:presence-roster') {
-      // A page that matches nothing still gets the list, so it clears.
-      body = { ...payload, peers: payload.peers.filter((peer) => peer && peer.url === page) };
-    }
-    api.tabs.sendMessage(id, body).catch(() => cursorTabs.delete(id));
-  }
-  return cursorTabs.size;
-}
-
 async function announce(url, key) {
   if (!shareable(url)) return false;
   const id = await roomTab();
@@ -246,17 +199,43 @@ async function announce(url, key) {
   }
 }
 
+// Control allows a tab to go out, and a granted peer holds it just as the host
+// does. A plain peer shares nothing.
+async function mayShare() {
+  await loadPrefs();
+  return roomRole === 'host' || prefs.granted === true;
+}
+
+// One tab id reaches several browser events at once. A set closes the window
+// between the first event and the record that the tab went out, so a host tab
+// opens one copy, not three.
+const announcing = new Set();
+async function shareTab(tab) {
+  if (!tab || !validId(tab.id) || !shareable(tab.url)) return false;
+  if (announcing.has(tab.id)) return false;
+  announcing.add(tab.id);
+  try {
+    if (announced.get(tab.id) === tab.url) return false;
+    announced.set(tab.id, tab.url);
+    return await announce(tab.url, tab.id);
+  } finally {
+    announcing.delete(tab.id);
+  }
+}
+
 async function considerTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return;
-  if (roomRole !== 'host') return;
+  if (!(await mayShare())) return;
   const seen = await state();
   if (tab.id === seen.roomTabId || ROOM_URL.test(tab.url)) return;
   if (remoteTabs.has(tab.id)) return;
   if (announced.get(tab.id) === tab.url) return;
   await loadPrefs();
-  if (!prefs.autoShare || prefs.muted[String(tab.id)]) return;
-  announced.set(tab.id, tab.url);
-  await announce(tab.url, tab.id);
+  // A ticked tab goes out even when new tabs are off, which is what the panel
+  // offers for one tab at a time.
+  if (prefs.muted[String(tab.id)]) return;
+  if (!prefs.autoShare && prefs.shared[String(tab.id)] !== true) return;
+  await shareTab(tab);
 }
 
 // A new tab reports its URL on creation in Gecko and after a navigation in
@@ -317,6 +296,9 @@ async function handle(message, sender) {
     };
   }
   if (message.type === 'brosr:room-status') {
+    // The room tab is the one place that knows whether this browser holds
+    // control, so its report is also the grant state the tab list reads.
+    if (message.granted !== undefined) await savePrefs({ granted: Boolean(message.granted) });
     await save({
       lastRoomStatus: {
         at: Date.now(),
@@ -355,6 +337,8 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tabs-list') {
     await loadPrefs();
     const seen = await state();
+    const role = roomRole || seen.roomRole || '';
+    const canShare = role === 'host' || prefs.granted === true;
     const all = await api.tabs.query({}).catch(() => []);
     const tabs = all
       .filter((tab) => validId(tab.id) && shareable(tab.url))
@@ -365,31 +349,60 @@ async function handle(message, sender) {
         url: tab.url,
         active: Boolean(tab.active),
         room: tab.id === seen.roomTabId,
+        // A ticked tab counts on its own, so one tab can go to the room with
+        // new tabs left off.
         shared:
-          tab.id !== seen.roomTabId && prefs.autoShare && !prefs.muted[String(tab.id)],
+          canShare &&
+          tab.id !== seen.roomTabId &&
+          !prefs.muted[String(tab.id)] &&
+          (prefs.shared[String(tab.id)] === true || prefs.autoShare),
       }));
-    return { ok: true, role: roomRole || seen.roomRole || '', auto: prefs.autoShare, tabs };
+    return {
+      ok: true,
+      role,
+      canShare,
+      auto: prefs.autoShare,
+      sync: prefs.sync,
+      granted: prefs.granted,
+      tabs,
+    };
   }
   if (message.type === 'brosr:tabs-auto') {
+    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
     await savePrefs({ autoShare: Boolean(message.on) });
     return { ok: true, auto: prefs.autoShare };
+  }
+  // Playback sync is a choice. With it off no media frame leaves this browser
+  // and none is applied here, so a tab can sit in a room and play on its own.
+  if (message.type === 'brosr:sync-toggle') {
+    await savePrefs({ sync: Boolean(message.on) });
+    return { ok: true, sync: prefs.sync };
   }
   if (message.type === 'brosr:tab-share') {
     const tabId = Number(message.tabId);
     if (!validId(tabId)) return { ok: false, reason: 'bad-tab' };
+    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
     await loadPrefs();
     const muted = { ...prefs.muted };
-    if (message.shared) delete muted[String(tabId)];
-    else muted[String(tabId)] = true;
-    await savePrefs({ muted });
+    const shared = { ...prefs.shared };
+    if (message.shared) {
+      delete muted[String(tabId)];
+      shared[String(tabId)] = true;
+    } else {
+      delete shared[String(tabId)];
+      muted[String(tabId)] = true;
+    }
+    await savePrefs({ muted, shared });
     // Turning a tab on sends it now, so a tab opened before sharing was on
-    // still reaches the room.
+    // still reaches the room. The same guard stops a second open when the
+    // tab events and this click land together.
     if (message.shared) {
       const tab = await api.tabs.get(tabId).catch(() => null);
-      if (tab && shareable(tab.url)) {
-        announced.set(tabId, tab.url);
-        await announce(tab.url, tabId);
+      if (tab && shareable(tab.url) && announced.get(tabId) !== tab.url) {
+        await shareTab(tab);
       }
+    } else {
+      announced.delete(tabId);
     }
     return { ok: true, shared: Boolean(message.shared) };
   }
@@ -398,31 +411,53 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tab-open-local') {
     if (!shareable(message.url)) return { ok: false, reason: 'url' };
     const key = message.key === undefined || message.key === null ? null : String(message.key);
-    const known = key === null ? null : remoteKeys.get(key);
-    // The same host tab moved to another page. Its copy here moves too, so a
-    // click on a video or a search result does not spawn a second tab.
-    if (validId(known) && typeof api.tabs.update === 'function') {
-      try {
-        await api.tabs.update(known, { url: message.url });
-        return { ok: true, tabId: known, updated: true };
-      } catch {
-        // The copy is gone, so the next step opens a fresh one.
-        remoteKeys.delete(key);
-        remoteTabs.delete(known);
-      }
-    }
+    const slot = key === null ? `url:${message.url}` : `key:${key}`;
+    if (opening.has(slot)) return { ok: true, opening: true };
+    opening.add(slot);
     try {
-      const tab = await api.tabs.create({ url: message.url, active: false });
-      if (tab && validId(tab.id)) {
-        remoteTabs.add(tab.id);
-        if (key !== null) {
-          remoteKeys.set(key, tab.id);
-          await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+      const known = key === null ? null : remoteKeys.get(key);
+      // The same host tab moved to another page. Its copy here moves too, so a
+      // click on a video or a search result does not spawn a second tab. A
+      // redirect that only rewrites the query leaves the copy alone, because
+      // reloading it would restart the film.
+      if (validId(known) && typeof api.tabs.update === 'function') {
+        const copy = await api.tabs.get(known).catch(() => null);
+        if (copy && copy.url === message.url) return { ok: true, tabId: known, updated: false };
+        if (copy) {
+          try {
+            await api.tabs.update(known, { url: message.url });
+            return { ok: true, tabId: known, updated: true };
+          } catch {
+            // The copy is gone, so the next step opens a fresh one.
+            remoteKeys.delete(key);
+            remoteTabs.delete(known);
+          }
+        } else {
+          remoteKeys.delete(key);
+          remoteTabs.delete(known);
         }
       }
-      return { ok: true, tabId: tab && tab.id, updated: false };
-    } catch (error) {
-      return { ok: false, reason: 'create', error: text(error) };
+      // A tab this browser already shows needs no copy. A second player on the
+      // film the host is watching cannot start, and YouTube reports that as an
+      // error card, so the copy is the fault and not the film.
+      const all = await api.tabs.query({}).catch(() => []);
+      const shown = all.find((tab) => validId(tab.id) && tab.url === message.url);
+      if (shown) return { ok: true, tabId: shown.id, existing: true };
+      try {
+        const tab = await api.tabs.create({ url: message.url, active: false });
+        if (tab && validId(tab.id)) {
+          remoteTabs.add(tab.id);
+          if (key !== null) {
+            remoteKeys.set(key, tab.id);
+            await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+          }
+        }
+        return { ok: true, tabId: tab && tab.id, updated: false };
+      } catch (error) {
+        return { ok: false, reason: 'create', error: text(error) };
+      }
+    } finally {
+      opening.delete(slot);
     }
   }
   if (message.type === 'brosr:tab-status') {
@@ -443,38 +478,6 @@ async function handle(message, sender) {
     if (summon !== null) api.tabs.remove(summon).catch(() => {});
     return reply;
   }
-  // A page outside the room asks whether this browser is in one. It draws the
-  // cursors from then on, and the room tab never asks for its own.
-  if (message.type === 'brosr:cursor-hello') {
-    const from = sender && sender.tab ? sender.tab.id : null;
-    if (!validId(from)) return { ok: false, reason: 'no-tab' };
-    const id = await roomTab();
-    if (!validId(id) || id === from) {
-      cursorTabs.delete(from);
-      return { ok: false, reason: 'no-room' };
-    }
-    cursorTabs.set(from, typeof message.url === 'string' ? message.url : '');
-    return { ok: true };
-  }
-  if (message.type === 'brosr:presence-out') {
-    const peer = message.peer;
-    if (!peer || typeof peer !== 'object' || !peer.id) return { ok: false, reason: 'peer' };
-    relayCursors({ type: 'brosr:presence', peer });
-    return { ok: true, tabs: cursorTabs.size };
-  }
-  if (message.type === 'brosr:presence-roster') {
-    const peers = Array.isArray(message.peers) ? message.peers : [];
-    relayCursors({ type: 'brosr:presence-roster', peers });
-    return { ok: true, tabs: cursorTabs.size };
-  }
-  if (message.type === 'brosr:pointer') {
-    const id = await roomTab();
-    if (!validId(id)) return { ok: false, reason: 'no-tab' };
-    api.tabs
-      .sendMessage(id, { type: 'brosr:pointer', point: message.point, url: message.url })
-      .catch(() => {});
-    return { ok: true };
-  }
   // A tab with a player says which film it shows. The room tab owns the
   // socket, so the state goes there from every other tab.
   if (message.type === 'brosr:media-hello') {
@@ -494,6 +497,8 @@ async function handle(message, sender) {
     const media = message.state;
     if (!media || typeof media !== 'object' || !media.key) return { ok: false, reason: 'state' };
     mediaTabs.set(from, { key: String(media.key), at: Date.now() });
+    await loadPrefs();
+    if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     // A tab that is not playing must not take the room away from the film the
     // host is watching. The focused film may always send, playing or paused.
     if (!media.playing && mediaFocus && mediaFocus !== String(media.key)) {
@@ -540,6 +545,8 @@ async function handle(message, sender) {
   if (message.type === 'brosr:media-apply') {
     const key = String(message.key || '');
     if (!key) return { ok: false, reason: 'key' };
+    await loadPrefs();
+    if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     const targets = [...mediaTabs].filter(([, entry]) => entry && entry.key === key);
     const results = await Promise.all(
       targets.map(([id]) =>

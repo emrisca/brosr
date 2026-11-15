@@ -4,7 +4,6 @@
 // numbers whether the core runs in the content script or in the page.
 
 import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
-import { CursorOverlay } from './overlay.mjs';
 import { TAB_APP, tabOpen } from './tabs.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
@@ -59,74 +58,41 @@ function cursorKey(href) {
   }
 }
 
-// A page outside the room draws the room cursors without joining it. Only the
-// room tab holds the socket, so the bridge carries presence from that tab to
-// every page here, and carries this page's pointer back. The relay runs at the
-// presence rate, so a plain tab moves as smoothly as the room page itself.
-const POINTER_RELAY_MS = 16;
-// A room can start after this page did, so a page that found none asks again.
-const CURSOR_RETRY_MS = 4000;
-const CURSOR_RETRY_MAX_MS = 60000;
-// A restarted background forgets which pages asked. A page that joined says so
-// again now and then.
-const CURSOR_HEARTBEAT_MS = 20000;
-
-async function startCursors() {
-  const send = (message) => api.runtime.sendMessage(message);
-  const here = () => cursorKey(location.href);
-
-  let overlay = null;
-  const drawn = new Set();
-  const mount = () => {
-    if (!overlay) overlay = new CursorOverlay({ document }).attach();
-    return overlay;
-  };
-
-  const drop = (id) => {
-    if (!overlay || !drawn.delete(id)) return;
-    overlay.removePeer(id);
-  };
-
-  // A cursor draws only on the page it belongs to.
-  const draw = (peer) => {
-    if (!peer || typeof peer !== 'object' || !peer.id) return;
-    if (peer.url !== here()) {
-      drop(peer.id);
-      return;
-    }
-    mount().setPeer(peer);
-    drawn.add(peer.id);
-  };
-
-  const roster = (peers) => {
-    const next = new Set();
-    for (const peer of Array.isArray(peers) ? peers : []) {
-      if (!peer || !peer.id || peer.url !== here()) continue;
-      next.add(peer.id);
-      draw(peer);
-    }
-    for (const id of [...drawn]) {
-      if (!next.has(id)) drop(id);
+// A tab outside the room can still hold the film, and the room tab holds the
+// socket. Only media crosses that gap now. A cursor on a page the room did not
+// open made no sense on a site like YouTube, so no pointer and no roster reach
+// a plain tab.
+async function startPageMedia() {
+  const runtime = api && api.runtime;
+  if (!runtime || typeof runtime.sendMessage !== 'function' || !runtime.onMessage) {
+    return { started: false, reason: 'no-runtime' };
+  }
+  const send = (message) => {
+    try {
+      return Promise.resolve(runtime.sendMessage(message)).catch(() => undefined);
+    } catch {
+      return Promise.resolve(undefined);
     }
   };
 
-  api.runtime.onMessage.addListener((message) => {
-    if (!message) return undefined;
-    if (message.type === 'brosr:presence') draw(message.peer);
-    else if (message.type === 'brosr:presence-roster') roster(message.peers);
-    else if (message.type === 'brosr:cursor-drop') drop(String(message.id || ''));
-    return undefined;
-  });
+  // The page that holds the player names the film when the source is a blob or
+  // a manifest. A frame passes its own address, which is the page both viewers
+  // load, so an embedded player keeps one key across both browsers.
+  const pageHref = () => location.href;
 
   // A page with a player tells the room where the film is. The room tab has
   // the socket, so this page only relays. A page without a player takes the
   // room anchor instead, and the tab that shows the film applies it.
-  const remote = new RemoteMediaSync({ document, href: location.href, hostname: location.hostname });
+  const remote = new RemoteMediaSync({
+    document,
+    href: pageHref(),
+    hostname: location.hostname,
+  });
   const relay = { key: '', position: 0, playing: false, ad: false, sends: 0, applies: 0, last: null };
   const publishRelay = () => {
     document.documentElement.dataset.brosrRelay = JSON.stringify(relay);
   };
-  api.runtime.onMessage.addListener((message) => {
+  runtime.onMessage.addListener((message) => {
     if (!message || message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
     relay.last = remote.handle(message);
@@ -136,7 +102,7 @@ async function startCursors() {
 
   let relayKey = '';
   setInterval(() => {
-    const state = mediaStateFromDocument(document, location.href, location.hostname);
+    const state = mediaStateFromDocument(document, pageHref(), location.hostname);
     if (!state) return;
     if (state.key !== relayKey) {
       relayKey = state.key;
@@ -151,63 +117,17 @@ async function startCursors() {
     send({ type: 'brosr:media-out', state }).catch(() => {});
   }, RELAY_TICK_MS);
 
-  let joined = false;
-  let last = 0;
-  document.addEventListener(
-    'pointermove',
-    (event) => {
-      if (!joined || !event.isTrusted) return;
-      const now = Date.now();
-      if (now - last < POINTER_RELAY_MS) return;
-      const x = Number(event.clientX);
-      const y = Number(event.clientY);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-      last = now;
-      send({
-        type: 'brosr:pointer',
-        point: { x: Math.round(x), y: Math.round(y) },
-        url: here(),
-      }).catch(() => {});
-    },
-    { passive: true, capture: true }
-  );
-
-  const join = async () => {
-    try {
-      const reply = await send({ type: 'brosr:cursor-hello', url: here() });
-      joined = Boolean(reply && reply.ok);
-    } catch {
-      joined = false;
-    }
-    return joined;
-  };
-
-  // A page that changes without a reload, like a video site, is a different
-  // page in the same tab. The tab stops drawing the old page's cursors.
-  let key = here();
-  setInterval(() => {
-    const next = here();
-    if (next === key) return;
-    key = next;
-    if (overlay) overlay.clear();
-    drawn.clear();
-    if (joined) send({ type: 'brosr:cursor-hello', url: key }).catch(() => {});
-  }, 1000);
-
-  let delay = CURSOR_RETRY_MS;
-  const loop = async () => {
-    const ok = await join();
-    delay = ok ? CURSOR_HEARTBEAT_MS : Math.min(delay * 2, CURSOR_RETRY_MAX_MS);
-    setTimeout(loop, delay);
-  };
-  loop();
-
-  return { started: true, role: 'cursor', room: null, peerId: null };
+  return { started: true, role: 'media', room: null, peerId: null };
 }
 
 export async function start() {
   if (window.__brosrStarted) return { started: false, reason: 'already-running' };
   window.__brosrStarted = true;
+
+  // A player can sit in a cross-origin frame, and the bridge now runs in every
+  // frame. A frame is never a room tab, so it carries the film it holds and
+  // nothing else.
+  if (window.top !== window) return startPageMedia();
 
   const params = new URLSearchParams(location.search);
   // The invite key rides in the fragment, so the search params alone would
@@ -248,9 +168,9 @@ export async function start() {
       // Storage can be off. The page still works without a navigation.
     }
   }
-  // A page with no room of its own is a normal tab. It draws the room cursors
-  // and reports its pointer, and it joins nothing.
-  if (!fresh && !stored && !ROOM_PAGE.test(location.href)) return startCursors();
+  // A tab with no room of its own is a plain tab. It carries a film to the room
+  // and nothing else, so the mouse never follows anyone to another tab.
+  if (!fresh && !stored && !ROOM_PAGE.test(location.href)) return startPageMedia();
   const role = config.role === 'host' ? 'host' : 'peer';
   const room = config.room || 'spike';
   const peerId = config.peerId;
@@ -269,6 +189,9 @@ export async function start() {
   // browser's own film tab last reported.
   let localMedia = null;
   let roomMedia = null;
+  // A host frame for the host's own film comes back from the relay. Counting
+  // that echo is what proves the guard below is doing its work.
+  let echoMedia = 0;
   const viewers = new Map();
   // A room that arrives with a key seals every frame it sends. The key stays in
   // the fragment, so the relay never receives it in a request line.
@@ -363,16 +286,6 @@ export async function start() {
     sealedOut += 1;
   }
 
-  // Remote cursors are drawn here and on every other tab of this browser. Only
-  // this tab holds the socket, so it hands each presence to the bridge, which
-  // fans it out to the pages that asked for cursors.
-  const remoteCursors = new Map();
-  const relayPresence = (peer) => {
-    if (!peer || !peer.id || !api || !api.runtime || !api.runtime.sendMessage) return;
-    remoteCursors.set(peer.id, peer);
-    api.runtime.sendMessage({ type: 'brosr:presence-out', peer }).catch(() => {});
-  };
-
   const client = createRoomClient({
     role,
     room,
@@ -401,6 +314,11 @@ export async function start() {
       // Tabs need the browser, so this side asks its own background instead of
       // forwarding the frame to the page.
       if (message.name === TAB_APP) {
+        // A frame this browser sent is not news here. The relay skips the
+        // sending socket, but a second room tab in the same browser still hears
+        // it, and copying an announcement back to its own sender opens the film
+        // again on the machine that asked for it.
+        if (message.from === peerId) return;
         const open = tabOpen(message.data);
         if (open && api && api.runtime && api.runtime.sendMessage) {
           api.runtime
@@ -422,10 +340,17 @@ export async function start() {
         location.origin
       );
     },
-    onPresence: relayPresence,
     // The room tab holds no player, so a frame for a film goes to the tab that
     // does. The tab applies the anchor against its own element.
     onMedia: (message) => {
+      // The host's film is the anchor. Its own frame coming back would seek the
+      // film against itself, and a page player answers a seek loop with an
+      // error overlay. The sender decides, never the film key. A granted peer
+      // watches the same film, so a key check would drop every command it sends.
+      if (role === 'host' && message.peerId && message.peerId === peerId) {
+        echoMedia += 1;
+        return false;
+      }
       // The frame carries the position this tab should have now, so the panel
       // anchor is the expected value and the moment it arrived.
       const position = Number.isFinite(message.expected)
@@ -500,25 +425,18 @@ export async function start() {
   adoptPlayer();
   setInterval(adoptPlayer, 500);
 
-  // A peer that left stops sending presence. The room prunes it, and this slow
-  // roster is what removes its cursor from the other tabs.
+  // A peer that left stops sending viewer reports. Presence prunes the peer, and
+  // this slow pass drops a report from a peer with no panel open.
   setInterval(() => {
-    if (!api || !api.runtime || !api.runtime.sendMessage) return;
     const live = new Set();
     for (const peer of client.roomState.peers.values()) {
       if (peer.id !== peerId) live.add(peer.id);
-    }
-    for (const id of [...remoteCursors.keys()]) {
-      if (!live.has(id)) remoteCursors.delete(id);
     }
     for (const [id, entry] of [...viewers]) {
       if (!live.has(id) || Date.now() - Number((entry && entry.at) || 0) > VIEWER_STALE_MS) {
         viewers.delete(id);
       }
     }
-    api.runtime
-      .sendMessage({ type: 'brosr:presence-roster', peers: [...remoteCursors.values()] })
-      .catch(() => {});
   }, 1000);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees
@@ -569,6 +487,7 @@ export async function start() {
     // port, so the guest lands in this room and not in the default one.
     inviteUrl: inviteKey ? `${joinUrl(location.href)}#k=${inviteKey}` : null,
     media: panelMedia(),
+    mediaEchoLocal: echoMedia,
     viewers: panelViewers(),
     socket: socket ? socket.readyState : -1,
     elapsed: Math.round(performance.now() - started),
@@ -742,6 +661,7 @@ export async function start() {
     // -1 placeholder. This copy of the status needs neither, so the panel can
     // always render the room this tab is in.
     setInterval(() => {
+      const seen = status();
       api.runtime
         .sendMessage({
           type: 'brosr:room-status',
@@ -750,7 +670,11 @@ export async function start() {
           role,
           source,
           panelUrl,
-          data: status(),
+          // Control is what lets a peer share its tabs. The background reads
+          // this copy, because the grant arrives on the room socket and never
+          // passes through the browser chrome.
+          granted: Boolean(seen.granted),
+          data: seen,
         })
         .catch(() => {});
     }, 1000);
@@ -838,19 +762,18 @@ export async function start() {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
         return reply({ ok: Boolean(applied), granted: Boolean(message.allowed) });
       }
-      if (message.type === 'brosr:pointer') {
-        // A pointer on another tab of this browser. The presence tick carries
-        // it out, so the room sees one cursor per person, not one per tab.
-        return reply({ ok: client.setPointer(message.point, message.url) });
-      }
       if (message.type === 'brosr:media-state') {
         // A tab on this browser shows the film. The panel reads this copy as
         // the local position either way. Only the host room makes it the
         // room's media, because a peer room forwards frames instead.
         const state = message.state;
         if (state && typeof state === 'object' && state.key) localMedia = state;
-        if (client.stats.role !== 'host') return reply({ ok: false, reason: 'peer' });
-        return reply({ ok: relayedMedia.set(state) });
+        if (client.stats.role === 'host') return reply({ ok: relayedMedia.set(state) });
+        // A granted peer drives the room from its own film tab. The background
+        // already stopped this report when playback sync is off, so the room
+        // tab only has to put it on the socket under this peer's id.
+        if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
+        return reply({ ok: client.sendMedia(state), granted: true });
       }
       if (message.type === 'brosr:tabs-announce') {
         // The background saw a tab this person chose to share. It goes out on

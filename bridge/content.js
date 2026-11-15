@@ -32,8 +32,13 @@ function injectPlayer() {
   });
 }
 
+// The bridge runs in every frame, because a player often sits in a cross-origin
+// iframe. Only the top frame holds the room tab and the YouTube hand-in, so a
+// subframe skips the script tag and starts the media path alone.
+const inFrame = window.top !== window;
+
 (async () => {
-  await injectPlayer();
+  if (!inFrame) await injectPlayer();
   const url = api.runtime.getURL('core/browser-entry.mjs');
   try {
     const core = await import(url);
