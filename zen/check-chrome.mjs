@@ -1,14 +1,15 @@
 // Headless proof that a room runs inside a Chromium build. Chrome 137 refuses
 // --load-extension, so this lane picks a build that still reads the flag: Brave,
-// Edge, Chromium or Chrome for Testing. The room fixture carries no bridge
+// Edge, Chromium or Chrome for Testing. The landing page carries no bridge
 // code, so a live dataset can only come from the loaded add-on.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { newRoomKey } from '../core/seal.mjs';
 import { detect, launchArgs } from '../host/browsers.mjs';
-import { freePort } from '../host/room.mjs';
+import { freePort, roomUrl } from '../host/room.mjs';
 import { buildChrome } from './package.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -58,7 +59,7 @@ function get(port, pathname, timeout = 800) {
 async function waitRelay(port, timeoutMs = 12000) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
-    const answer = await get(port, '/room-b.html');
+    const answer = await get(port, '/');
     if (answer && answer.status === 200) return true;
     await sleep(120);
   }
@@ -170,11 +171,11 @@ async function main() {
     );
   }
 
-  // The fixture is the control. It reads the dataset to draw its own state and
-  // never writes it, so a live value can only come from the add-on.
-  const fixture = fs.readFileSync(path.join(spike, 'fixtures', 'room-b.html'), 'utf8');
-  if (/dataset\.brosr\s*=/.test(fixture)) {
-    throw new Error('the room fixture writes the bridge dataset, so a pass would prove nothing');
+  // The landing page is the control. It draws its own tiles and never writes
+  // the dataset, so a live value can only come from the add-on.
+  const landing = fs.readFileSync(path.join(here, '..', 'landing', 'index.html'), 'utf8');
+  if (/dataset\.brosr\s*=/.test(landing)) {
+    throw new Error('the landing page writes the bridge dataset, so a pass would prove nothing');
   }
 
   const profile = path.join(runtime, `chrome-profile-${browser.id}`);
@@ -188,7 +189,12 @@ async function main() {
   // The page reads its relay port from this parameter and falls back to 8787.
   // Without it, a room that already holds 8787 collects this lane's peers and
   // the lane reads an empty table on the port it started.
-  const url = `http://127.0.0.1:${relayPort}/room-b.html?role=host&room=${room}&peer=host&name=Host&relay=${relayPort}`;
+  // A room opens on the landing page, so the lane reads the same URL the host
+  // writes. The panel adds page furniture and no socket, so it stays off here.
+  const url = roomUrl({ port: relayPort, room, key: newRoomKey(), name: 'Host', panel: false });
+  if (new URL(url).pathname !== '/') {
+    throw new Error(`the room URL does not open the landing page: ${url}`);
+  }
 
   const relay = spawn(process.execPath, ['relay.js'], {
     cwd: spike,
@@ -219,7 +225,7 @@ async function main() {
 
   try {
     if (!(await waitRelay(relayPort))) throw new Error('the relay did not answer');
-    const target = await waitTarget(debugPort, 'room-b.html');
+    const target = await waitTarget(debugPort, `http://127.0.0.1:${relayPort}/`);
     if (!target) throw new Error('the room page never appeared in the target list');
     log('[chrome] target', target.url);
 

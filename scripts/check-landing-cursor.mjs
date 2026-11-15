@@ -400,8 +400,15 @@ async function checkBridge(browser, devPort, relayPort, extension) {
     }
     const frame = fromCanvas();
     assert.ok(frame, 'the shared tab sent no cursor frame through the room tab');
+    // The room tab adds the name, because the shared tab has none. A frame that
+    // carries no name would draw an unnamed dot for everyone in the room.
+    assert.equal(
+      frame.data.name,
+      'Host',
+      `the room tab sent ${JSON.stringify(frame.data.name)} as the sender name`
+    );
     console.log(
-      `  shared tab sent ${Math.round(frame.data.x * 1000) / 10}% / ${Math.round(frame.data.y * 1000) / 10}% through the room tab`
+      `  shared tab sent ${Math.round(frame.data.x * 1000) / 10}% / ${Math.round(frame.data.y * 1000) / 10}% as ${frame.data.name} through the room tab`
     );
 
     probe.socket.send(
