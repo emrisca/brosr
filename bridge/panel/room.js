@@ -4,7 +4,19 @@
 const $ = (id) => document.getElementById(id);
 // One namespace for both engines.
 const api = globalThis.browser || globalThis.chrome || null;
-const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The landing page is the room front door, and its room params mark it. A
+// fixture page is still a room page by its name.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  if (typeof href !== 'string' || !href) return false;
+  if (ROOM_FIXTURE.test(href)) return true;
+  try {
+    const url = new URL(href);
+    return url.searchParams.has('room') && url.searchParams.has('peer');
+  } catch {
+    return false;
+  }
+}
 // One guest id per panel, so two people copying the link do not collide.
 const GUEST = 'guest-' + Math.random().toString(36).slice(2, 6);
 
@@ -488,15 +500,15 @@ async function targetTab() {
     // Fall through to the tab list.
   }
   const [active] = await api.tabs.query({ active: true, currentWindow: true });
-  if (usable(active) && ROOM_PAGE.test(active.url || '')) return active;
+  if (usable(active) && isRoomPage(active.url || '')) return active;
   const tabs = (await api.tabs.query({ currentWindow: true })).filter(usable);
-  const here = tabs.find((tab) => ROOM_PAGE.test(tab.url || ''));
+  const here = tabs.find((tab) => isRoomPage(tab.url || ''));
   if (here) return here;
   // A sidebar belongs to no window in some builds, so both scans above come
   // back empty and the panel would sit blank beside a live room. Every window is
   // the last pass, and a room elsewhere beats no room at all.
   const all = (await api.tabs.query({})).filter(usable);
-  return all.find((tab) => ROOM_PAGE.test(tab.url || '')) || null;
+  return all.find((tab) => isRoomPage(tab.url || '')) || null;
 }
 
 // A sidebar can be refused the tab message channel while the page itself

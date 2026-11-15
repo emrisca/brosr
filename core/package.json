@@ -15,6 +15,7 @@
     "./seal": "./seal.mjs"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check:cursors": "node ../scripts/check-landing-cursor.mjs"
   }
 }

@@ -12,7 +12,20 @@ const session = api.storage && api.storage.session ? api.storage.session : null;
 
 // The room page names its tab. A hello message is one source and this is the
 // second, because a tab restored from the session store can miss the hello.
-const ROOM_URL = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The landing page is the front door, and its room params are what mark it, so
+// a landing page opened by hand stays a plain tab. The fixture names stay,
+// because those pages still exist.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  if (typeof href !== 'string' || !href) return false;
+  if (ROOM_FIXTURE.test(href)) return true;
+  try {
+    const url = new URL(href);
+    return url.searchParams.has('room') && url.searchParams.has('peer');
+  } catch {
+    return false;
+  }
+}
 
 // Firefox reports no tab as -1. A check for null alone would keep that
 // placeholder and send every message to it.
@@ -105,7 +118,7 @@ async function save(changes) {
 }
 
 function rememberTab(tab, seen) {
-  if (!tab || !validId(tab.id) || !ROOM_URL.test(tab.url || '')) return null;
+  if (!tab || !validId(tab.id) || !isRoomPage(tab.url || '')) return null;
   if (seen.roomTabId !== null && seen.roomTabId !== tab.id) return null;
   return tab.id;
 }
@@ -118,7 +131,7 @@ async function roomTab() {
   let id = null;
   try {
     const tabs = await api.tabs.query({});
-    const found = tabs.find((tab) => validId(tab.id) && ROOM_URL.test(tab.url || ''));
+    const found = tabs.find((tab) => validId(tab.id) && isRoomPage(tab.url || ''));
     if (found) id = found.id;
   } catch {
     // A restricted window can refuse the query.
@@ -136,7 +149,7 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
 });
 
 api.tabs.query({}).then((tabs) => {
-  const found = tabs.find((tab) => validId(tab.id) && ROOM_URL.test(tab.url || ''));
+  const found = tabs.find((tab) => validId(tab.id) && isRoomPage(tab.url || ''));
   if (found) save({ roomTabId: found.id });
 }).catch(() => {});
 
@@ -293,7 +306,7 @@ async function considerTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return;
   if (!(await mayShare())) return;
   const seen = await state();
-  if (tab.id === seen.roomTabId || ROOM_URL.test(tab.url)) return;
+  if (tab.id === seen.roomTabId || isRoomPage(tab.url)) return;
   if (remoteTabs.has(tab.id)) return;
   if (announced.get(tab.id) === tab.url) return;
   await loadPrefs();

@@ -272,11 +272,22 @@
       // room, so a person can point at the tile to open. This page holds its
       // own socket, and the meta tag above names the page as the owner, so the
       // bridge leaves the drawing to it and one cursor has one owner.
+      //
+      // A room tab is the other case. The core joins the room there, so the
+      // core draws the cursors and this page leaves its socket shut. The test
+      // below matches the one core/browser-entry.mjs makes for a room tab.
+      var cursorParams = new URLSearchParams(location.search);
+      var cursorStored = null;
+      try {
+        cursorStored = sessionStorage.getItem('brosr-room');
+      } catch (err) {
+        cursorStored = null;
+      }
+      var cursorOwned =
+        cursorParams.has('room') || cursorParams.has('peer') || Boolean(cursorStored);
       var cursorLayer = document.getElementById('cursors');
       var cursorPeer = 'landing-' + Math.random().toString(16).slice(2, 8);
-      var cursorName =
-        (new URLSearchParams(location.search).get('name') || 'Guest').trim().slice(0, 24) ||
-        'Guest';
+      var cursorName = (cursorParams.get('name') || 'Guest').trim().slice(0, 24) || 'Guest';
       // Room params name the tab, not the page, so the key drops them. This
       // stays in step with cursorKey() in core/browser-entry.mjs.
       var cursorPage = location.origin + location.pathname;
@@ -322,7 +333,7 @@
       }
 
       function openCursors() {
-        if (!cursorLayer || cursorSocket) return;
+        if (cursorOwned || !cursorLayer || cursorSocket) return;
         if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
         if (Date.now() < cursorNextAt) return;
         var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';

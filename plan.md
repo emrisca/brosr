@@ -765,6 +765,10 @@ actuator is not in v1, and the first run says both.
 
 Newest first. Each line names what changed, not what was planned.
 
+- **15 November 2026.** The room opens on the landing page. A room tab is `/` with the room
+  params, so the first page a room shows is the tile grid. The bridge and the panel read a
+  room page by its params as well as by its name, and the fixture pages stay for the harness.
+
 - **15 November 2026.** The landing page replaces Room page B. The relay serves a tile grid
   at `/`, with Canvas live and seven placeholders for the apps that come next. Canvas is a
   custom drawing surface with five brushes, a stabilizer, symmetry, two layers, undo and a
@@ -793,8 +797,10 @@ Newest first. Each line names what changed, not what was planned.
 
 ## 19. The landing page and the Brosr apps
 
-The room tab used to open a second fixture page. It now opens the Brosr landing page: one
-grid of apps built for a shared browser, with the room already running behind it.
+The room tab used to open a second fixture page. It now opens the Brosr landing page at
+`/`: one grid of apps built for a shared browser, with the room already running behind it.
+The room params on that address are what mark the tab as the room, so the landing page is
+both the front door and the room surface.
 
 ### 19.1 What the page is
 
@@ -862,10 +868,12 @@ room opens it with no build step.
 
 A person can point at a tile, so a cursor travels with the room.
 
-- The landing page holds its own socket to `/room?room=`, because it is not a room tab. A
-  pointer move goes out at most every 80 ms as a share of the viewport, so two window sizes
-  put the dot in the same place. A dot carries the person's name, and it leaves after three
-  quiet seconds.
+- A landing page opened on its own holds a socket to `/room?room=`. A pointer move goes
+  out at most every 80 ms as a share of the viewport, so two window sizes put the dot in the
+  same place. A dot carries the person's name, and it leaves after three quiet seconds.
+- The same page opened as the room tab joins the room through the core. The core draws the
+  cursors there, and the page leaves its own socket shut, so the room tab and a plain
+  landing page never draw the same dot twice.
 - A dot shows only on the page it belongs to. The page key drops the room params, so two
   people in one room share one key while a tab on a different page draws nothing.
 - The meta tag `brosr-cursors` with content `page` names the landing page as the owner of its

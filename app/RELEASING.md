@@ -36,6 +36,18 @@ runs. The app runs `host/cli.mjs` from that copy, and room state goes to the
 user data folder, never into the sealed bundle. The build generates the staged
 folder, and `.gitignore` keeps it out of the repository.
 
+A local build signs with the key in `../.secrets` when the environment holds
+none:
+
+```sh
+cd app
+npm run build:local
+```
+
+That key is the one the release workflow reads from the repository secrets.
+Without `build:local`, `npm run tauri build` stops at
+`createUpdaterArtifacts` and leaves a bundle that no install can take.
+
 Check a published bundle with the call the setup screen makes first:
 
 ```sh

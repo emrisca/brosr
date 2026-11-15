@@ -94,7 +94,7 @@ export async function freePort(start = 8787, host = '127.0.0.1') {
 function relayReady(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const request = http.get(
-      { host, port, path: '/room-b.html', timeout: 800 },
+      { host, port, path: '/', timeout: 800 },
       (response) => {
         response.resume();
         resolve(response.statusCode === 200);
@@ -207,7 +207,9 @@ export function roomUrl({
   peer = 'host',
   panel = true,
 }) {
-  const url = new URL(`http://${formatAddress(host, port)}/room-b.html`);
+  // The landing page is the front door of a room. The room params below are
+  // what mark it as the room tab, so no second fixture page is needed.
+  const url = new URL(`http://${formatAddress(host, port)}/`);
   url.searchParams.set('role', role);
   url.searchParams.set('room', room);
   url.searchParams.set('peer', peer);

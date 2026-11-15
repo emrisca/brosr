@@ -21,9 +21,19 @@ import { ActionNotice, mediaAction } from './overlay.mjs';
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
 
-// The panel button stays off unrelated pages. A room page is a fixture whose
-// name starts with one of the room words, which is what the panel looks for.
-const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The panel button stays off unrelated pages. A room page is the landing page
+// opened with room params, or a fixture whose name starts with one of the room
+// words. This stays in step with isRoomPage() in bridge/background.js.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  try {
+    const url = new URL(href);
+    if (url.searchParams.has('room') && url.searchParams.has('peer')) return true;
+  } catch {
+    return false;
+  }
+  return ROOM_FIXTURE.test(href);
+}
 
 // A viewer report rides the room's app channel. Each one says where this
 // browser's own tab has the film, so every panel can show who is in sync.
@@ -298,7 +308,7 @@ export async function start() {
   }
   // A tab with no room of its own is a plain tab. It carries a film to the room
   // and nothing else, so the mouse never follows anyone to another tab.
-  if (!fresh && !stored && !ROOM_PAGE.test(location.href)) return startPageMedia();
+  if (!fresh && !stored && !isRoomPage(location.href)) return startPageMedia();
   const role = config.role === 'host' ? 'host' : 'peer';
   const room = config.room || 'spike';
   const peerId = config.peerId;
@@ -835,7 +845,7 @@ export async function start() {
   // A room page cannot reach the browser chrome. One small button asks for the
   // panel, and the reply says whether the popup opened, so a harness can read
   // the outcome.
-  if (source === 'content-script' && ROOM_PAGE.test(location.href)) {
+  if (source === 'content-script' && isRoomPage(location.href)) {
     const style = document.createElement('style');
     style.textContent = `
       #brosr-panel-button {
