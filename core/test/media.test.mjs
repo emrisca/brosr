@@ -65,6 +65,8 @@ test('a state read reports what the room needs', () => {
     playing: true,
     rate: 1,
     volume: 1,
+    seeking: false,
+    readyState: 4,
   });
 });
 

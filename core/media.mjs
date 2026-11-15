@@ -3,6 +3,18 @@
 // and it never wraps the element in a node of its own.
 
 export const MEDIA_SELECTOR = 'video, audio';
+// A seek that lands within this margin of buffered data still fetches in the
+// middle of the seek, which is where the long clip wedges here.
+export const SEEK_BUFFER_MARGIN_S = 0.5;
+
+export function bufferedAround(element, seconds, margin = SEEK_BUFFER_MARGIN_S) {
+  const ranges = element && element.buffered;
+  if (!ranges || typeof ranges.length !== 'number') return true;
+  for (let i = 0; i < ranges.length; i += 1) {
+    if (seconds >= ranges.start(i) && seconds <= ranges.end(i) - margin) return true;
+  }
+  return false;
+}
 
 export function mediaKey(element) {
   if (!element) return '';
@@ -65,7 +77,17 @@ export class MediaAdapter {
       playing: !element.paused,
       rate: Number(element.playbackRate || 1),
       volume: Number(element.volume ?? 1),
+      // The peer path reads these, so the adapter is the only place that
+      // touches the element.
+      seeking: Boolean(element.seeking),
+      readyState: Number(element.readyState ?? 0),
     };
+  }
+
+  // The room asks before it seeks, because a seek into data the element has not
+  // fetched is what wedges this player.
+  bufferedAround(element, seconds, margin = SEEK_BUFFER_MARGIN_S) {
+    return bufferedAround(element, seconds, margin);
   }
 
   apply(element, { action, position, rate, volume } = {}) {
