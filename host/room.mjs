@@ -203,6 +203,19 @@ export function roomUrl({ port, room, key, name, role = 'host', peer = 'host', p
   return url.toString();
 }
 
+// A guest link needs its own peer id. The room keys its member map by peer id,
+// so a guest that reuses 'host' replaces the host entry and the panel never
+// shows a second person.
+export function guestId() {
+  const bytes = new Uint8Array(2);
+  crypto.getRandomValues(bytes);
+  return `guest-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export function guestInvite({ port, room, key, name = 'Guest' }) {
+  return roomUrl({ port, room, key, name, role: 'peer', peer: guestId(), panel: false });
+}
+
 // A Chromium room loads the bridge as an unpacked folder, so the build is a
 // directory and not an XPI.
 function ensureChromeBridge() {
@@ -332,7 +345,7 @@ export async function start(options = {}) {
     name,
     port,
     url,
-    invite: url,
+    invite: guestInvite({ port, room, key }),
     profile: prepared.profile,
     relayPid: relay.pid,
     browserPid: child.pid,

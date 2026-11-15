@@ -24,7 +24,9 @@ const CORE = [
   'seal.mjs',
   'browser-entry.mjs',
   'page-entry.mjs',
+  'tabs.mjs',
   'youtube.mjs',
+  'media-relay.mjs',
 ];
 const PANEL = ['room.html', 'room.css', 'room.js'];
 const ICONS = [16, 32, 48, 96, 128];
@@ -40,6 +42,7 @@ function bridgeEntries(manifest = MANIFEST) {
   return [
     { name: 'manifest.json', data: read(manifest) },
     { name: 'content.js', data: read(path.join(bridge, 'content.js')) },
+    { name: 'bridge-youtube.js', data: read(path.join(bridge, 'bridge-youtube.js')) },
     { name: 'background.js', data: read(path.join(bridge, 'background.js')) },
     ...CORE.map((name) => ({ name: `core/${name}`, data: read(path.join(core, name)) })),
     ...PANEL.map((name) => ({ name: `panel/${name}`, data: read(path.join(bridge, 'panel', name)) })),

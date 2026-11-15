@@ -30,7 +30,9 @@ const CORE = [
   'input.mjs',
   'sync.mjs',
   'browser-entry.mjs',
+  'tabs.mjs',
   'youtube.mjs',
+  'media-relay.mjs',
 ];
 
 function buildXpi() {

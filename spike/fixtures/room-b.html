@@ -22,11 +22,20 @@
       const raw = document.documentElement.dataset.brosr;
       if (!raw) return;
       const data = JSON.parse(raw);
+      const other = (data.peerList || []).filter((peer) => !peer.self);
+      const pointer = other
+        .map((peer) => {
+          const stats = (data.presenceByPeer || {})[peer.id];
+          if (!stats || !Number.isFinite(stats.p95)) return peer.name + ': -';
+          return peer.name + ': ' + Math.round(stats.p95) + ' ms p95';
+        })
+        .join(', ');
       state.textContent =
         'role: ' + data.role + '\n' +
         'url: ' + data.url + '\n' +
         'scroll: ' + data.scroll + '\n' +
         'cursors: ' + data.cursors + '\n' +
+        'pointer: ' + (pointer || '-') + '\n' +
         'latency samples: ' + data.latencies.length;
     }, 200);
   </script>
