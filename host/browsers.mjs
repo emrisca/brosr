@@ -1,6 +1,7 @@
 // Finds the browsers on this machine. A room runs in its own profile, so any
 // Firefox build can carry the bridge. This module holds the paths, the version
 // read and the launch arguments.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -412,11 +413,16 @@ export function launchArgs(browser, { profile, url, headless = false, handoff = 
   // it refuses no-remote, so the Gecko flags would stop it from starting.
   if (browser && browser.family === 'chromium') {
     const args = [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'];
-    // The bridge is an unpacked folder here. Both flags name it, so the build
-    // starts with the bridge and with nothing else from the daily profile.
-    if (extension) {
-      args.push(`--disable-extensions-except=${extension}`, `--load-extension=${extension}`);
+    // The bridge and the blocker are unpacked folders here. Both flags take a
+    // comma separated list, so the build starts with those two and with nothing
+    // else from the daily profile.
+    const packs = (Array.isArray(extension) ? extension : [extension]).filter(Boolean);
+    if (packs.length) {
+      const list = packs.join(',');
+      args.push(`--disable-extensions-except=${list}`, `--load-extension=${list}`);
     }
+    // A room launch never asks about a session it did not restore.
+    args.push('--disable-session-crashed-bubble');
     if (headless) args.push('--headless=new');
     if (url) args.push(url);
     return args;
@@ -426,6 +432,76 @@ export function launchArgs(browser, { profile, url, headless = false, handoff = 
   if (headless) args.push('-headless');
   if (url) args.push(url);
   return args;
+}
+
+// A command-line extension is installed but never pinned, so the toolbar shows
+// no icon and the room panel is hard to find. Chrome derives the id from the
+// unpacked folder path and reads the pin from the profile at startup.
+export function chromeExtensionId(dir) {
+  let target = path.resolve(dir);
+  try {
+    target = fs.realpathSync(target);
+  } catch {
+    // A folder that does not exist yet keeps its plain path.
+  }
+  const hash = createHash('sha256').update(target).digest('hex').slice(0, 32);
+  return hash.replace(/[0-9a-f]/g, (digit) =>
+    String.fromCharCode(97 + parseInt(digit, 16))
+  );
+}
+
+// A room profile starts with no settings file, so the room writes one before
+// the first window opens. Two unpacked add-ons are pinned here, because a
+// command-line extension shows no toolbar icon of its own.
+// Google refuses a sign-in from a browser that blocks its cross-site cookies,
+// and Brave blocks them by default. The room profile allows them, which is the
+// setting Google reads when it asks whether the browser is secure.
+export function pinChromeExtension(profile, extensionDir) {
+  const dirs = (Array.isArray(extensionDir) ? extensionDir : [extensionDir]).filter(Boolean);
+  const prefsPath = path.join(profile, 'Default', 'Preferences');
+  fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+  let prefs = {};
+  try {
+    prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+  } catch {
+    prefs = {};
+  }
+  if (!prefs.extensions || typeof prefs.extensions !== 'object') prefs.extensions = {};
+  if (!prefs.profile || typeof prefs.profile !== 'object') prefs.profile = {};
+  // Zero is allow everything, and the per-site map keeps the cookie default on.
+  prefs.profile.cookie_controls_mode = 0;
+  prefs.profile.block_third_party_cookies = false;
+  // A room stops its browser, and Chromium then treats that as a crash and
+  // reopens every tab from the last run. Each stale room tab holds a socket
+  // into an old room and hears every announcement again, which is how one
+  // shared tab became several copies. The exit marker, a cleared session and a
+  // start page of its own keep the next launch to the tab the room asks for.
+  // This runs on every prepare, because Chromium writes the marker again when
+  // the room stops the build.
+  prefs.profile.exit_type = 'Normal';
+  prefs.profile.exited_cleanly = true;
+  delete prefs.profile.exited_cleaned;
+  if (!prefs.session || typeof prefs.session !== 'object') prefs.session = {};
+  // Five is the new tab page, so no launch restores a window of its own.
+  prefs.session.restore_on_startup = 5;
+  prefs.session.startup_urls = [];
+  for (const name of ['Sessions', 'Last Session', 'Last Tabs', 'Current Session', 'Current Tabs']) {
+    try {
+      fs.rmSync(path.join(profile, 'Default', name), { recursive: true, force: true });
+    } catch {
+      // A profile with no saved session has nothing to remove.
+    }
+  }
+  if (!prefs.profile.default_content_setting_values) prefs.profile.default_content_setting_values = {};
+  prefs.profile.default_content_setting_values.cookies = 1;
+  const pinned = new Set(
+    Array.isArray(prefs.extensions.pinned_extensions) ? prefs.extensions.pinned_extensions : []
+  );
+  const ids = dirs.map((dir) => chromeExtensionId(dir));
+  for (const id of ids) pinned.add(id);
+  prefs.extensions.pinned_extensions = [...pinned];
+  fs.writeFileSync(prefsPath, JSON.stringify(prefs));
+  return { id: ids[0] || null, ids, pinned: [...pinned] };
 }
 
 export { PLATFORM };

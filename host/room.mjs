@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { newRoomKey } from '../core/seal.mjs';
 import { prepareProfile } from '../zen/profile.mjs';
 import { buildChrome, buildXpi } from '../zen/package.mjs';
-import { find, launchArgs, rememberStart } from './browsers.mjs';
+import { find, launchArgs, pinChromeExtension, rememberStart } from './browsers.mjs';
+import { blockerCopy, stageBlocker } from './blockers.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(here, '..');
@@ -223,6 +224,20 @@ function ensureChromeBridge() {
   return { dir: buildChrome(CHROME_BRIDGE).dir, built: true };
 }
 
+// The Chromium blocker is a release zip, not an add-on file. A cold start
+// fetches and unpacks it once, and a later start reads the folder beside the
+// bridge. A failed fetch leaves the room without a blocker and says so, so a
+// network problem never stops the room.
+async function ensureChromeBlocker() {
+  ensureDir(RUNTIME);
+  try {
+    const hit = await stageBlocker(RUNTIME);
+    return { dir: hit.dir, staged: Boolean(hit.staged), tag: hit.tag || null, error: null };
+  } catch (error) {
+    return { dir: blockerCopy(RUNTIME), staged: false, tag: null, error: error.message };
+  }
+}
+
 // A prepared profile is the slow step. The app shows the result line by line,
 // so this returns a report instead of only a path.
 export async function prepare({ browser: browserId, bridge = true, onProgress } = {}) {
@@ -234,20 +249,31 @@ export async function prepare({ browser: browserId, bridge = true, onProgress } 
   }
   if (browser.family === 'chromium') {
     const existed = fs.existsSync(PROFILE_CHROME);
-    const extension = ensureChromeBridge();
-    ensureDir(PROFILE_CHROME);
     if (typeof onProgress === 'function') {
-      onProgress({ step: 1, total: 1, label: 'Room profile ready' });
+      onProgress({ step: 1, total: 2, label: 'Building the bridge' });
     }
+    const bridge = ensureChromeBridge();
+    if (typeof onProgress === 'function') {
+      onProgress({ step: 2, total: 2, label: 'Loading the blocker' });
+    }
+    const blocker = await ensureChromeBlocker();
+    // The bridge goes first, because the room panel lives in it. The blocker
+    // follows when its folder is there.
+    const dirs = [bridge.dir, blocker.dir].filter(Boolean);
+    ensureDir(PROFILE_CHROME);
+    const pins = pinChromeExtension(PROFILE_CHROME, dirs);
     return {
       browser,
       profile: PROFILE_CHROME,
-      bridge: { file: extension.dir, built: extension.built, version: bridgeVersion() },
-      extension: extension.dir,
-      extensions: 1,
+      bridge: { file: bridge.dir, built: bridge.built, version: bridgeVersion() },
+      extension: bridge.dir,
+      extensionDirs: dirs,
+      pinned: pins.ids,
+      extensions: dirs.length,
       reused: existed,
-      blocker: false,
-      staged: null,
+      blocker: Boolean(blocker.dir),
+      blockerError: blocker.error,
+      staged: blocker.staged ? { tag: blocker.tag, dir: blocker.dir } : null,
     };
   }
   const bridgeInfo = bridge ? ensureBridge() : { file: BRIDGE, built: false };
@@ -331,7 +357,7 @@ export async function start(options = {}) {
     profile: prepared.profile,
     url,
     headless: Boolean(options.headless),
-    extension: prepared.extension || null,
+    extension: prepared.extensionDirs || prepared.extension || null,
   });
   const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
   child.unref();

@@ -6,10 +6,12 @@
 //   node host/cli.mjs start --browser=zen --room=demo --name=Host
 //   node host/cli.mjs status
 //   node host/cli.mjs stop
+//   node host/cli.mjs session --domain=youtube.com --from-firefox=<profile> --to=<cdp url>
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detect } from './browsers.mjs';
 import { freePort, prepare, start, status, stop } from './room.mjs';
+import { shareSession } from './session.mjs';
 
 const arg = (name, fallback = '') => {
   const hit = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -73,6 +75,24 @@ const COMMANDS = {
 
   async stop() {
     return stop();
+  },
+
+  // A login is a credential, so this copies cookies between two local profiles
+  // and never puts one on the room socket. The answer lists cookie names only.
+  async session() {
+    const domain = arg('domain');
+    if (!domain) throw new Error('pass --domain=youtube.com');
+    const firefox = arg('from-firefox');
+    const cdp = arg('from');
+    const to = arg('to');
+    if (!to) throw new Error('pass --to=http://127.0.0.1:9482');
+    if (!firefox && !cdp) throw new Error('pass --from-firefox=<profile> or --from=<cdp url>');
+    return shareSession({
+      from: firefox ? { kind: 'firefox', profile: firefox } : { kind: 'chromium', cdp },
+      to: { kind: 'chromium', cdp: to },
+      domain,
+      reload: !flag('no-reload'),
+    });
   },
 
   // The app asks for a port before it opens the setup screen, so the room
