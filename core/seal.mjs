@@ -287,7 +287,14 @@ export async function roomKey(inviteKey) {
     material,
     SUBKEY_BYTES * 8
   );
-  return new Uint8Array(bits);
+  // Copy through a buffer this module allocates. A browser can resolve
+  // deriveBits with an ArrayBuffer from another realm, and the view made
+  // straight from it keeps that realm's prototype, so the cipher's own
+  // instanceof check would reject a key that is otherwise the right bytes.
+  const view = new Uint8Array(bits);
+  const key = new Uint8Array(SUBKEY_BYTES);
+  key.set(view);
+  return key;
 }
 
 // base64url without padding. btoa and atob exist in Node and in Firefox, so an
