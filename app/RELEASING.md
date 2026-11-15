@@ -49,6 +49,25 @@ The tag and `src-tauri/tauri.conf.json` must name the same version. The workflow
 builds `v__VERSION__` from the config. Drift publishes a release that no
 installed app offers.
 
+## The macOS signature
+
+`bundle.macOS.signingIdentity` is `"-"`. That gives the bundle an ad hoc seal.
+The seal is what lets macOS launch the app at all. With the field unset the
+bundler skips signing, the bundle holds no `Contents/_CodeSignature`, and macOS
+answers `is damaged and can't be opened` with no way for the user to continue.
+
+Check the artifact rather than the source:
+
+```sh
+hdiutil attach Brosr_0.3.1_aarch64.dmg -nobrowse -readonly -mountpoint /tmp/brosr
+codesign --verify --deep --strict --verbose=2 /tmp/brosr/Brosr.app
+ls /tmp/brosr/Brosr.app/Contents/_CodeSignature
+```
+
+A seal prints `valid on disk` and the folder exists. An ad hoc seal still shows
+one prompt on first launch, which the user clears with Open Anyway. Notarisation
+needs a paid Apple account and removes that prompt.
+
 ## Check the result
 
 ```sh
@@ -77,4 +96,6 @@ answer the same way, and the app continues without a dialog.
 | The workflow fails at signing | A secret is missing or someone pasted the key without its full contents |
 | The app offers an old version | The tag and the config disagree |
 | Install refuses the bundle | The public key in the config does not match the signing key |
-| Gatekeeper or SmartScreen warns | Expected until macOS notarisation and Windows signing. This is separate from the updater signature |
+| Gatekeeper refuses the app as damaged | The bundle carries no seal. Check `signingIdentity`, then run the artifact check above |
+| Gatekeeper says the developer cannot be verified | Expected. The ad hoc seal is intact and the user picks Open Anyway |
+| SmartScreen warns | Expected until the Windows build carries a signature. This is separate from the updater signature |

@@ -54,7 +54,26 @@ jobs:
           args: --target ${{ matrix.target }}
           tagName: v__VERSION__
           releaseName: Brosr v__VERSION__
-          releaseBody: Download the installer for your platform. The app updates itself from the signed manifest attached to this release.
+          releaseBody: |
+            Pick the installer for your platform. macOS uses the `.dmg`, Windows
+            uses the `.msi` or the `.exe` setup.
+
+            ## First launch on macOS
+
+            This build carries an ad hoc signature and no notarisation, so macOS
+            asks once. Move Brosr to Applications, try to open it, then allow it
+            in System Settings, Privacy and Security, Open Anyway.
+
+            ## First launch on Windows
+
+            SmartScreen asks once. Choose More info, then Run anyway.
+
+            ## Updates
+
+            An installed app reads this release's `latest.json` on launch and
+            again every six hours. Install downloads in place and restarts the
+            app. The app checks each update against a signing key that ships
+            inside it, and refuses a release signed with another key.
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
