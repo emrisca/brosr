@@ -369,6 +369,47 @@ body {
   display: none;
 }
 
+/* The page draws the room's cursors here, so the layer sits above the tiles
+   and never takes a click. */
+.cursors {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.cursor {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transform: translate(-50%, -50%);
+  transition: left 80ms linear, top 80ms linear;
+  will-change: left, top;
+}
+
+.cursor-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--card) 80%, transparent);
+}
+
+.cursor-name {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in oklch, var(--fg) 82%, transparent);
+  color: var(--bg);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.cursor-name:empty {
+  display: none;
+}
+
 .foot {
   max-width: 1180px;
   width: 100%;
@@ -402,7 +443,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tile {
+  .tile,
+  .cursor {
     transition: none;
   }
 

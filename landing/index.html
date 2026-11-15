@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Brosr</title>
+  <meta name="brosr-cursors" content="page">
   <link rel="stylesheet" href="./landing.css">
 </head>
 <body>
@@ -186,6 +187,8 @@
     <p>A room stays on your own network. The relay forwards frames and keeps nothing.</p>
   </footer>
 
+  <div class="cursors" id="cursors" aria-hidden="true"></div>
+
   <script>
     // The relay already answers /status, so the page reads the live count with
     // no new transport. A room with nobody in it is a normal state, not an
@@ -264,6 +267,141 @@
         opened.opener = null;
         field.value = '';
       });
+
+      // The landing page draws a cursor for every other landing page in the
+      // room, so a person can point at the tile to open. This page holds its
+      // own socket, and the meta tag above names the page as the owner, so the
+      // bridge leaves the drawing to it and one cursor has one owner.
+      var cursorLayer = document.getElementById('cursors');
+      var cursorPeer = 'landing-' + Math.random().toString(16).slice(2, 8);
+      var cursorName =
+        (new URLSearchParams(location.search).get('name') || 'Guest').trim().slice(0, 24) ||
+        'Guest';
+      // Room params name the tab, not the page, so the key drops them. This
+      // stays in step with cursorKey() in core/browser-entry.mjs.
+      var cursorPage = location.origin + location.pathname;
+      var cursorDots = new Map();
+      var cursorLast = 0;
+      var cursorSocket = null;
+      var cursorNextAt = 0;
+
+      function cursorColour(id) {
+        var sum = 0;
+        for (var i = 0; i < id.length; i += 1) sum = (sum * 31 + id.charCodeAt(i)) % 360;
+        return 'hsl(' + sum + ' 62% 46%)';
+      }
+
+      function drawCursor(from, x, y, name) {
+        var dot = cursorDots.get(from);
+        if (!dot) {
+          var box = document.createElement('div');
+          box.className = 'cursor';
+          var mark = document.createElement('span');
+          mark.className = 'cursor-dot';
+          mark.style.background = cursorColour(from);
+          var label = document.createElement('span');
+          label.className = 'cursor-name';
+          box.append(mark, label);
+          cursorLayer.append(box);
+          dot = { box: box, label: label, at: 0 };
+          cursorDots.set(from, dot);
+        }
+        dot.at = Date.now();
+        dot.label.textContent = name;
+        dot.box.style.left = Math.round(x * 1000) / 10 + '%';
+        dot.box.style.top = Math.round(y * 1000) / 10 + '%';
+      }
+
+      function pruneCursors() {
+        var now = Date.now();
+        cursorDots.forEach(function (dot, from) {
+          if (now - dot.at <= 3000) return;
+          dot.box.remove();
+          cursorDots.delete(from);
+        });
+      }
+
+      function openCursors() {
+        if (!cursorLayer || cursorSocket) return;
+        if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+        if (Date.now() < cursorNextAt) return;
+        var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var socket;
+        try {
+          socket = new WebSocket(scheme + location.host + '/room?room=' + encodeURIComponent(room));
+        } catch (err) {
+          cursorNextAt = Date.now() + 2000;
+          return;
+        }
+        cursorSocket = socket;
+        socket.addEventListener('open', function () {
+          cursorNextAt = 0;
+        });
+        socket.addEventListener('message', function (event) {
+          if (typeof event.data !== 'string') return;
+          var frame;
+          try {
+            frame = JSON.parse(event.data);
+          } catch (err) {
+            return;
+          }
+          if (!frame || frame.type !== 'app' || frame.name !== 'cursor') return;
+          if (frame.peerId === cursorPeer) return;
+          var data = frame.data;
+          if (!data || data.page !== cursorPage) return;
+          var x = Number(data.x);
+          var y = Number(data.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          drawCursor(
+            String(frame.peerId || 'landing'),
+            Math.min(1, Math.max(0, x)),
+            Math.min(1, Math.max(0, y)),
+            String(data.name || 'Guest').slice(0, 24)
+          );
+        });
+        socket.addEventListener('close', function () {
+          if (cursorSocket === socket) cursorSocket = null;
+          cursorNextAt = Date.now() + 2000;
+        });
+        socket.addEventListener('error', function () {
+          if (cursorSocket === socket) cursorSocket = null;
+          cursorNextAt = Date.now() + 2000;
+        });
+      }
+
+      function sendCursor(x, y) {
+        if (!cursorSocket || cursorSocket.readyState !== 1) return;
+        cursorSocket.send(
+          JSON.stringify({
+            v: 1,
+            type: 'app',
+            peerId: cursorPeer,
+            name: 'cursor',
+            data: { page: cursorPage, x: x, y: y, name: cursorName },
+          })
+        );
+      }
+
+      window.addEventListener(
+        'pointermove',
+        function (event) {
+          if (!document.hasFocus() || document.visibilityState !== 'visible') return;
+          var now = Date.now();
+          if (now - cursorLast < 80) return;
+          cursorLast = now;
+          sendCursor(
+            event.clientX / Math.max(1, window.innerWidth),
+            event.clientY / Math.max(1, window.innerHeight)
+          );
+        },
+        { passive: true }
+      );
+
+      openCursors();
+      setInterval(function () {
+        openCursors();
+        pruneCursors();
+      }, 1000);
     })();
   </script>
 </body>

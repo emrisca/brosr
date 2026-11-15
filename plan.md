@@ -858,10 +858,20 @@ Cmd Shift Z redoes.
 The app is one HTML file, one stylesheet and one script. The relay serves it as bytes, so a
 room opens it with no build step.
 
-### 19.4 What comes next on the page
+### 19.4 Shared cursors
 
-1. A shared cursor on the landing page, so a person can point at the tile to open.
+A person can point at a tile, so a cursor travels with the room.
+
+- The landing page holds its own socket to `/room?room=`, because it is not a room tab. A
+  pointer move goes out at most every 80 ms as a share of the viewport, so two window sizes
+  put the dot in the same place. A dot carries the person's name, and it leaves after three
+  quiet seconds.
+- A dot shows only on the page it belongs to. The page key drops the room params, so two
+  people in one room share one key while a tab on a different page draws nothing.
+- The meta tag `brosr-cursors` with content `page` names the landing page as the owner of its
+  cursors. The bridge reads it and leaves that page alone, so one cursor has one owner.
+- A shared tab has no socket, so the room tab carries its pointer. The browser sends a point
+  only to tabs on that same page, and input sync stays on the room tab.
 
 The URL tile opens the address in a tab and the bridge shares that tab, so the site keeps its
-own page and its own scripts. Cursor and input sync stay on the room tab, not on the shared
-site.
+own page and its own scripts.
