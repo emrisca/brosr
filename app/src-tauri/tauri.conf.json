@@ -39,6 +39,7 @@
       "resources/core",
       "resources/zen",
       "resources/spike",
+      "resources/landing",
       "resources/bridge",
       "resources/assets"
     ],
