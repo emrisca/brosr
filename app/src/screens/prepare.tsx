@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,16 +15,30 @@ type Props = {
 
 type Phase = 'working' | 'ready' | 'starting' | 'error';
 
+// The development build mounts every screen twice. One build is shared by both
+// mounts, so the answer reaches the screen that is still showing instead of
+// landing on the copy that was already gone.
+const builds = new Map<string, Promise<Prepared>>();
+
+function build(browser: string) {
+  let pending = builds.get(browser);
+  if (!pending) {
+    pending = prepare(browser).catch((cause) => {
+      builds.delete(browser);
+      throw cause;
+    });
+    builds.set(browser, pending);
+  }
+  return pending;
+}
+
 export function Prepare({ browser, name, onReady, onBack }: Props) {
   const [phase, setPhase] = useState<Phase>('working');
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [error, setError] = useState('');
-  const ran = useRef(false);
 
   useEffect(() => {
-    if (ran.current) return;
-    ran.current = true;
     let live = true;
     let stop: (() => void) | undefined;
 
@@ -37,7 +51,7 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
       else off();
     });
 
-    prepare(browser.id)
+    build(browser.id)
       .then((result) => {
         if (!live) return;
         setPrepared(result);
@@ -72,13 +86,7 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
 
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-xl font-medium tracking-tight">Setting up your room</h1>
-        <p className="max-w-[46ch] text-sm text-muted-foreground">
-          Brosr builds a separate profile for {browser.name}, adds the blockers and the
-          bridge, then opens the room.
-        </p>
-      </div>
+      <h1 className="text-xl font-medium tracking-tight">Setting up your room</h1>
 
       <div className="flex flex-col gap-2 rounded-md bg-muted p-2">
         {phase === 'working' ? (
@@ -98,12 +106,9 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
 
         {prepared ? (
           <>
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-sm">
-                <Check className="size-4 text-brand" aria-hidden="true" />
-                Room profile
-              </span>
-              <span className="truncate text-xs text-muted-foreground">{prepared.profile}</span>
+            <div className="flex items-center gap-1.5 text-sm">
+              <Check className="size-4 text-brand" aria-hidden="true" />
+              Room profile
             </div>
             <Separator />
             <div className="flex items-center justify-between gap-2">

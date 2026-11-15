@@ -56,6 +56,7 @@
   },
   "browser_action": {
     "default_title": "Brosr room",
+    "default_area": "navbar",
     "default_popup": "panel/room.html?surface=popup",
     "default_icon": {
       "16": "assets/action-16.png",

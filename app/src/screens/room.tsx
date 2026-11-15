@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { AppWindow, Check, Copy, DoorOpen } from 'lucide-react';
+import { Check, Copy, DoorOpen } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { showPanel, status, stop, type Run, type Status } from '@/lib/host';
+import { status, stop, type Run, type Status } from '@/lib/host';
 
 type Props = {
   run: Run;
@@ -25,7 +25,6 @@ export function Room({ run, onLeave }: Props) {
   const [live, setLive] = useState<Status | null>(null);
   const [copied, setCopied] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [showing, setShowing] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -60,20 +59,6 @@ export function Room({ run, onLeave }: Props) {
     }
   }
 
-  // The window belongs to the bridge, so the host opens one tab that asks the
-  // bridge to show it again. The tab closes itself once the window is there.
-  async function open() {
-    setShowing(true);
-    setError('');
-    try {
-      await showPanel();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      window.setTimeout(() => setShowing(false), 1200);
-    }
-  }
-
   async function leave() {
     setLeaving(true);
     setError('');
@@ -89,13 +74,7 @@ export function Room({ run, onLeave }: Props) {
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-xl font-medium tracking-tight">Your room is open</h1>
-          <p className="max-w-[46ch] text-sm text-muted-foreground">
-            Send the link to anyone you want in the room. They install Brosr, open the
-            link, and land on the same page.
-          </p>
-        </div>
+        <h1 className="text-xl font-medium tracking-tight">Your room is open</h1>
         <Badge variant={relayReady ? 'default' : 'secondary'} className="shrink-0">
           <Dot on={relayReady} />
           {relayReady ? 'Live' : 'Starting'}
@@ -162,31 +141,10 @@ export function Room({ run, onLeave }: Props) {
         </div>
       </div>
 
-      {run.timings ? (
-        <p className="text-xs text-muted-foreground">
-          Ready in {(run.timings.totalMs / 1000).toFixed(1)} s. Profile{' '}
-          {run.timings.prepareMs} ms{run.timings.reused ? ', cached' : ''}. Relay{' '}
-          {run.timings.relayMs} ms. Browser {run.timings.launchMs} ms.
-        </p>
-      ) : null}
-
-      <div className="flex flex-col gap-1.5 rounded-md bg-muted p-2">
-        <p className="text-sm font-medium">The room window lives in the browser</p>
-        <p className="text-xs text-muted-foreground">
-          Press {run.browser.family === 'chromium' ? 'Control, Shift and B' : 'Control, Option and B'} to
-          show it again. The toolbar button does the same.
-        </p>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={open}
-          disabled={!browserOpen || showing}
-          className="self-start"
-        >
-          <AppWindow />
-          {showing ? 'Opening' : 'Show window'}
-        </Button>
-      </div>
+      <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+        Panel: toolbar icon or{' '}
+        {run.browser.family === 'chromium' ? 'Control, Shift and B' : 'Control, Option and B'}
+      </p>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 

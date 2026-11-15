@@ -52,25 +52,33 @@ npm run tauri dev
 
 The app finds the Firefox builds on the machine. Pick one. The app builds a separate room
 profile, installs the blockers and the bridge, then starts the relay and opens the browser
-on the room. The room window is a small window the extension owns, so it looks the same in
-every build. The toolbar button and the room shortcut open it again.
+on the room. The panel is the extension's own popup, so it draws inside the browser window
+and never in one of its own. The toolbar icon and the room shortcut open it.
 
 ### Panel check, 14 November 2026
 
-Each engine opened the room window from the page button, and the Zen lane also reached it from
-the chord.
+Both lanes passed on this machine. The Chromium lane ran on Brave, because Chrome 137 and later
+refuse `--load-extension`.
 
 | Build | Result |
 | --- | --- |
-| Brave 156.1.98.63 | The button opened a panel target at `chrome-extension://.../panel/room.html`, titled `Brosr room`, with `Connected`, one peer and the host role. |
-| Zen 1.24.1b | The chord reached the bridge, and the panel reported live at 400 by 608 pixels, sealed, with the invite link. The page button set `dataset.brosrPanel` to `window` and a `moz-extension://.../panel/room.html` context appeared. |
+| Brave 156.1.98.63 | The lane loaded the unpacked build and read a live dataset with `socket: 1` from the room page. The relay counted one peer. |
+| Zen 1.24.1b | The lane installed the XPI and read a live dataset, then read the panel in a tab. The panel reported `live`, a 14.13 contrast, the invite link and the grant history. |
 
 The toolbar opens the panel as an anchored popup in both engines, declared as `default_popup` in
-the manifest. The panel page names its surface in the URL, so one stylesheet shapes the popup and
-the window. The bridge declares no `sidebar_action`, and a build that refuses the popup gets a
-tab. The chord and the page button still open a window, because neither can show a popup from a
-message. A probe of a host alone on 14 November 2026 read `0` in the header and `Brosr room · 0`
-in the title. It also read `No peers in this room yet.` in the list.
+the Gecko manifest and in the Chromium one. The panel page names its surface in the URL, so one
+stylesheet sizes the popup and fills a tab. No code opens a window outside the browser. A popup
+needs a click, so the host and the app name the toolbar icon and the chord instead of offering a
+button.
+
+The Chromium lane needs no extra package, because Node ships a WebSocket client:
+
+```bash
+node zen/check-chrome.mjs
+```
+
+A host alone on 14 November 2026 read `0` in the header and `Brosr room · 0` in the title. It
+also read `No peers in this room yet.` in the list.
 
 The host answers one JSON line per command, so the same steps run without the app:
 
@@ -78,7 +86,6 @@ The host answers one JSON line per command, so the same steps run without the ap
 node host/cli.mjs detect
 node host/cli.mjs start --browser=zen --name=Host
 node host/cli.mjs status
-node host/cli.mjs panel
 node host/cli.mjs stop
 ```
 

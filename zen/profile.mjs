@@ -11,6 +11,7 @@ import {
   cachedCopy,
   installExtensions,
   prepareSafeBrowsing,
+  stageExtensions,
 } from './safe-browsing.mjs';
 import { zipEntry } from '../spike/unzip.mjs';
 
@@ -32,7 +33,8 @@ export const BRIDGE_ID = 'bridge@brosr.app';
 // The bridge is the second extension, and a room has no cursors without it. The
 // profile gets it as a file, the same way the blockers arrive, so no run needs a
 // prompt. A profile with signature checking on takes only the signed file, so
-// the resolver prefers that one and names what it found.
+// the resolver prefers that one until the current build is newer. It names the
+// file it picked either way.
 const BRIDGE_SIGNED = 'bridge-signed.xpi';
 const BRIDGE_BUILT = 'bridge.xpi';
 const SOURCE_MANIFEST = path.join(here, '..', 'bridge', 'manifest.json');
@@ -58,8 +60,9 @@ function inspect(file) {
 }
 
 // The signed file wins, because the alternative is a profile that refuses the
-// add-on. Its version can lag the source after a fix, and a lagging copy still
-// runs, so the report carries the mismatch instead of hiding it.
+// add-on. A signed copy that is older than the current build would install a
+// panel without this tree's fix, so the newer file wins and the signature pref
+// follows the file that lands. The report names the file and any version gap.
 export function bridgeSource(dir = RUNTIME) {
   const want = sourceVersion();
   const errors = [];
@@ -76,7 +79,8 @@ export function bridgeSource(dir = RUNTIME) {
       return false;
     }
   })();
-  for (const name of [BRIDGE_SIGNED, BRIDGE_BUILT]) {
+  const order = signedBehind ? [BRIDGE_BUILT, BRIDGE_SIGNED] : [BRIDGE_SIGNED, BRIDGE_BUILT];
+  for (const name of order) {
     const file = path.join(dir, name);
     if (!fs.existsSync(file)) continue;
     const found = inspect(file);
@@ -214,6 +218,10 @@ const PREFS = [
   // A new profile imports bookmarks.html once at first start, then clears this
   // pref itself, so the import does not run a second time.
   ['browser.places.importBookmarksHTML', true],
+  // The essentials strip at the column top reads this list. The profile seeds
+  // the two pages a room opens first, so the strip is filled on the first
+  // start and a reused profile keeps whatever the room put there.
+  ['brosr.sites', JSON.stringify(['https://www.youtube.com/', 'https://fmhy.net/'])],
 ];
 
 function userJs(signaturesRequired, native) {
@@ -236,10 +244,14 @@ function userJs(signaturesRequired, native) {
 
 
 // Zen restores the sidebar width from xulstore.json, and its own default on
-// macOS is 230 pixels. The room panel needs a wider floor, because the room
-// menu, the join link and a peer row with a Grant button share that column.
+// macOS is 230 pixels. The room panel shares that column, so it starts a little
+// wider than Zen and no wider than the panel needs.
 const XULSTORE_DOC = 'chrome://browser/content/browser.xhtml';
-const SIDEBAR_WIDTH = '420px';
+const SIDEBAR_WIDTH = '320px';
+// A room is the whole job of this window, so it opens zoomed to the screen
+// instead of at the size Zen stored. The window manager reads that mode from
+// the same store as the width.
+const WINDOW_MODE = 'maximized';
 
 // Two bookmarks ship with every profile, because a room starts with the sites a
 // viewer opens first. The toolbar folder is the place a first run looks.
@@ -276,6 +288,7 @@ function writeXulstore(profile) {
   }
   const doc = store[XULSTORE_DOC] || {};
   doc['navigator-toolbox'] = { ...(doc['navigator-toolbox'] || {}), width: SIDEBAR_WIDTH };
+  doc['main-window'] = { ...(doc['main-window'] || {}), sizemode: WINDOW_MODE };
   store[XULSTORE_DOC] = doc;
   fs.writeFileSync(file, JSON.stringify(store));
 }
@@ -322,9 +335,14 @@ export function writeProfile(dir, options = {}) {
 const STAMP = 'brosr-profile.json';
 
 function inputStamp(options) {
+  const runtime = options.runtime || RUNTIME;
   const parts = [options.native === false ? 'native:0' : 'native:1'];
   // A pref or bookmark edit changes the stamp, so the profile is written again.
-  parts.push(createHash('sha256').update(JSON.stringify(PREFS) + JSON.stringify(BOOKMARKS)).digest('hex'));
+  parts.push(
+    createHash('sha256')
+      .update(JSON.stringify(PREFS) + JSON.stringify(BOOKMARKS) + SIDEBAR_WIDTH + WINDOW_MODE)
+      .digest('hex')
+  );
   if (options.bridge) {
     try {
       const stat = fs.statSync(options.bridge);
@@ -336,7 +354,7 @@ function inputStamp(options) {
     parts.push('bridge:default');
   }
   for (const entry of EXTENSIONS) {
-    const file = cachedCopy(entry);
+    const file = cachedCopy(entry, runtime);
     if (!file) {
       parts.push(`${entry.id}:missing`);
       continue;
@@ -374,15 +392,24 @@ function writeStamp(profile, stamp) {
 // copies land in the same pass as the prefs that enable them. The optional
 // configure pass runs the one headless setup for the list.
 export async function prepareProfile(dir, options = {}) {
-  // Four stages, each reported on the way in. The app turns them into a bar,
+  // Three stages, each reported on the way in. The app turns them into a bar,
   // so a slow fetch looks like work and not a stall.
-  const total = 4;
+  const total = 3;
   const report = (step, label) => {
     if (typeof options.onProgress === 'function') options.onProgress({ step, total, label });
   };
   const profile = path.resolve(dir);
+  const runtime = options.runtime || RUNTIME;
   pruneExtensions(profile);
-  const input = inputStamp(options);
+  // The add-ons land before the stamp is read. A stamp taken before the first
+  // download names four missing files, so the run after it could never match
+  // and every start rewrote the profile for nothing.
+  const cold = EXTENSIONS.some((entry) => !cachedCopy(entry, runtime));
+  report(1, cold ? 'Fetching add-ons' : 'Checking add-ons');
+  const staged = await stageExtensions(runtime, {
+    onEach: cold ? (done) => report(1, `Fetching add-ons, ${done} of ${EXTENSIONS.length}`) : null,
+  });
+  const input = inputStamp({ ...options, runtime });
   const seen = reusable(profile, options, input);
   if (seen) {
     report(total, 'Room profile ready');
@@ -399,7 +426,7 @@ export async function prepareProfile(dir, options = {}) {
       staged: { ready: seen.extensions, missing: [] },
     };
   }
-  report(1, 'Writing the profile');
+  report(2, 'Writing the profile');
   writeProfile(profile, { bridge: options.bridge, native: options.native });
   const safeBrowsing = await prepareSafeBrowsing(profile, {
     configure: Boolean(options.configure),
@@ -408,10 +435,11 @@ export async function prepareProfile(dir, options = {}) {
     port: options.port,
     log: options.log,
     report,
+    staged,
+    dir: runtime,
   });
   report(total, 'Room profile ready');
   const blocker = safeBrowsing.installed.includes(BLOCKER.id);
-  const staged = safeBrowsing.staged;
   if (!staged.missing.length && safeBrowsing.installed.length === EXTENSIONS.length) {
     writeStamp(profile, {
       when: new Date().toISOString(),

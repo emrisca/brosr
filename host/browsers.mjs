@@ -23,7 +23,6 @@ const CATALOGUE = [
     name: 'Zen',
     vendor: 'Zen',
     native: true,
-    note: 'Vertical tabs and a calm surface. The build the room started on.',
     bins: {
       darwin: ['/Applications/Zen.app/Contents/MacOS/zen'],
       win32: [
@@ -44,7 +43,6 @@ const CATALOGUE = [
     name: 'Firefox',
     vendor: 'Mozilla',
     native: false,
-    note: 'The stock build. Manifest V2 and full uBlock Origin still run here.',
     bins: {
       darwin: ['/Applications/Firefox.app/Contents/MacOS/firefox'],
       win32: [
@@ -65,7 +63,6 @@ const CATALOGUE = [
     name: 'Firefox Developer Edition',
     vendor: 'Mozilla',
     native: false,
-    note: 'A second stable channel. Useful when the stock build is busy.',
     bins: {
       darwin: ['/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox'],
       win32: ['C:\\Program Files\\Firefox Developer Edition\\firefox.exe'],
@@ -82,7 +79,6 @@ const CATALOGUE = [
     name: 'LibreWolf',
     vendor: 'LibreWolf',
     native: false,
-    note: 'Firefox with the telemetry removed and the tracking guard on.',
     bins: {
       darwin: ['/Applications/LibreWolf.app/Contents/MacOS/librewolf'],
       win32: ['C:\\Program Files\\LibreWolf\\librewolf.exe'],
@@ -99,7 +95,6 @@ const CATALOGUE = [
     name: 'Floorp',
     vendor: 'Floorp',
     native: false,
-    note: 'A Firefox fork from Japan with its own workspace layout.',
     bins: {
       darwin: ['/Applications/Floorp.app/Contents/MacOS/floorp'],
       win32: ['C:\\Program Files\\Floorp\\floorp.exe'],
@@ -116,7 +111,6 @@ const CATALOGUE = [
     name: 'Waterfox',
     vendor: 'Waterfox',
     native: false,
-    note: 'A long lived Firefox fork with its own build pipeline.',
     bins: {
       darwin: ['/Applications/Waterfox.app/Contents/MacOS/waterfox'],
       win32: ['C:\\Program Files\\Waterfox\\waterfox.exe'],
@@ -138,7 +132,6 @@ const CHROMIUM = [
     id: 'chrome',
     name: 'Google Chrome',
     vendor: 'Google',
-    note: 'The everyday Chromium build. Chrome drops the flag that loads a local add-on.',
     supported: false,
     reason: 'Chrome ignores --load-extension from version 137',
     bins: {
@@ -163,7 +156,6 @@ const CHROMIUM = [
     id: 'brave',
     name: 'Brave',
     vendor: 'Brave Software',
-    note: 'Chromium with the tracker guard on. It still loads the local bridge.',
     supported: true,
     reason: null,
     bins: {
@@ -187,7 +179,6 @@ const CHROMIUM = [
     id: 'edge',
     name: 'Microsoft Edge',
     vendor: 'Microsoft',
-    note: 'The Windows default. It still loads the local bridge.',
     supported: true,
     reason: null,
     bins: {
@@ -208,7 +199,6 @@ const CHROMIUM = [
     id: 'chrome-for-testing',
     name: 'Chrome for Testing',
     vendor: 'Google',
-    note: 'The Chrome build for automation. It still loads the local bridge.',
     supported: true,
     reason: null,
     bins: {
@@ -234,7 +224,6 @@ const CHROMIUM = [
     id: 'chromium',
     name: 'Chromium',
     vendor: 'Chromium',
-    note: 'The open build. It still loads the local bridge.',
     supported: true,
     reason: null,
     bins: {
@@ -307,7 +296,6 @@ function inspect(entry) {
     vendor: entry.vendor,
     native: entry.native,
     family: 'gecko',
-    note: entry.note,
     path: bin,
     version,
     gecko: build || null,
@@ -348,7 +336,6 @@ function inspectChromium(entry) {
     vendor: entry.vendor,
     native: false,
     family: 'chromium',
-    note: entry.note,
     path: bin,
     version,
     gecko: null,

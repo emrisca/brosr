@@ -39,13 +39,7 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
 
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-xl font-medium tracking-tight">Choose a browser</h1>
-        <p className="max-w-[46ch] text-sm text-muted-foreground">
-          The room runs in its own profile, so your daily browsing stays as it is. A
-          build with a ready badge can carry the bridge.
-        </p>
-      </div>
+      <h1 className="text-xl font-medium tracking-tight">Choose a browser</h1>
 
       {phase === 'loading' ? (
         <div className="flex flex-col gap-2" aria-busy="true" aria-live="polite">
@@ -55,10 +49,7 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
               key={row}
               className="flex items-center justify-between gap-2 rounded-md border border-border p-2"
             >
-              <div className="flex w-full flex-col gap-1.5">
-                <Skeleton className="h-4 w-[9rem]" />
-                <Skeleton className="h-3 w-[15rem]" />
-              </div>
+              <Skeleton className="h-4 w-[9rem]" />
               <Skeleton className="h-5 w-[3rem] rounded-full" />
             </div>
           ))}
@@ -106,14 +97,9 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
                     !entry.supported && 'opacity-60'
                   )}
                 >
-                  <span className="flex min-w-0 flex-col gap-1.5">
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
-                      <span className="truncate">{entry.name}</span>
-                      {active ? <Check className="size-4" aria-hidden="true" /> : null}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {entry.note}
-                    </span>
+                  <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+                    <span className="truncate">{entry.name}</span>
+                    {active ? <Check className="size-4" aria-hidden="true" /> : null}
                   </span>
                   <Badge variant={entry.supported ? 'secondary' : 'outline'} className="shrink-0">
                     {entry.supported

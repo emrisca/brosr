@@ -9,10 +9,10 @@ const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]
 const GUEST = 'guest-' + Math.random().toString(36).slice(2, 6);
 
 // The toolbar opens this page as an anchored popup, which takes its size from
-// the document. The window path passes no surface, so the page names the
-// container it runs in and the stylesheet shapes each one.
-const SURFACE =
-  new URLSearchParams(location.search).get('surface') === 'popup' ? 'popup' : 'window';
+// the document. A page opened in a tab names itself so the stylesheet can fill
+// it, and anything else reads as the popup.
+const asked = new URLSearchParams(location.search).get('surface') || '';
+const SURFACE = asked === 'tab' ? 'tab' : 'popup';
 document.documentElement.dataset.surface = SURFACE;
 
 // The panel is a content page, so prefers-color-scheme reports the system and
@@ -586,15 +586,21 @@ async function copyInvite(button) {
 
 $('invite-copy').addEventListener('click', (event) => copyInvite(event.currentTarget));
 $('copy').addEventListener('click', () => copyInvite($('invite-copy')));
-// Close removes this window. The room page button, the toolbar button and the
-// chord open it again, so the state has one restore path.
+// The browser owns the popup frame, so the page closes itself. A page in a tab
+// closes that tab instead, and a bare page closes itself the same way.
 $('hide').addEventListener('click', async () => {
-  try {
-    const win = await api.windows.getCurrent();
-    await api.windows.remove(win.id);
-  } catch {
-    window.close();
+  if (SURFACE === 'tab' && api && api.tabs && api.tabs.getCurrent) {
+    try {
+      const tab = await api.tabs.getCurrent();
+      if (tab && tab.id >= 0) {
+        await api.tabs.remove(tab.id);
+        return;
+      }
+    } catch {
+      // A refused tab close falls through to the page path.
+    }
   }
+  window.close();
 });
 
 // Leave closes the room tab's socket and clears its stored identity, then the

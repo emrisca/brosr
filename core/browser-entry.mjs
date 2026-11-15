@@ -19,14 +19,6 @@ export async function start() {
   window.__brosrStarted = true;
 
   const params = new URLSearchParams(location.search);
-  // A summon is a tab whose only job is to ask the bridge for the room window.
-  // No client starts here, so the room gains no extra peer from it.
-  if (params.get('summon') === '1') {
-    if (api && api.runtime && api.runtime.sendMessage) {
-      api.runtime.sendMessage({ type: 'brosr:open-panel', summon: true }).catch(() => {});
-    }
-    return { started: false, reason: 'summon' };
-  }
   // The invite key rides in the fragment, so the search params alone would
   // drop it on the first navigation and turn a sealed room back into text.
   const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -403,9 +395,9 @@ export async function start() {
     }, 1000);
   }
 
-  // A room page cannot reach the browser chrome. One small button keeps the
-  // room window findable. The reply says whether a window or a tab opened, so
-  // a harness can read the outcome.
+  // A room page cannot reach the browser chrome. One small button asks for the
+  // panel, and the reply says whether the popup opened, so a harness can read
+  // the outcome.
   if (source === 'content-script' && ROOM_PAGE.test(location.href)) {
     const style = document.createElement('style');
     style.textContent = `
@@ -436,12 +428,12 @@ export async function start() {
     button.id = 'brosr-panel-button';
     button.type = 'button';
     button.textContent = 'Room panel';
-    button.setAttribute('aria-label', 'Open the Brosr room window');
+    button.setAttribute('aria-label', 'Open the Brosr room panel');
     button.addEventListener('click', async () => {
       try {
         const reply = await api.runtime.sendMessage({ type: 'brosr:open-panel' });
         document.documentElement.dataset.brosrPanel =
-          reply && reply.windowId ? 'window' : reply && reply.tabId ? 'tab' : 'failed';
+          reply && reply.ok && reply.surface ? reply.surface : 'failed';
       } catch {
         document.documentElement.dataset.brosrPanel = 'failed';
       }

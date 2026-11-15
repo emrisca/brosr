@@ -457,7 +457,7 @@ const INJECT = `(() => {
     }
   };
 
-  // The sites bar replaces the spaces strip. Two pages ship as defaults, and
+  // The essentials bar replaces the spaces strip. Two pages ship as defaults, and
   // the list lives in a pref so a drag survives a reload. A drop on the room
   // panel hands the page to the panel list, and a drop off the bar removes it.
   const SITE_DEFAULTS = ['https://www.youtube.com/', 'https://fmhy.net/'];
@@ -492,15 +492,15 @@ const INJECT = `(() => {
     sitesBar = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
     sitesBar.id = 'brosr-sites';
     sitesBar.setAttribute('role', 'toolbar');
-    sitesBar.setAttribute('aria-label', 'Bookmarks');
+    sitesBar.setAttribute('aria-label', 'Essentials');
   }
-  // The tiles are the bookmark row, so a heading names the strip and the space
-  // name that used to sit here goes.
+  // The tiles are the essentials row, so a heading names the strip and the
+  // space name that used to sit here goes.
   let sitesLabel = doc.getElementById('brosr-sites-label');
   if (!sitesLabel) {
     sitesLabel = doc.createElementNS('http://www.w3.org/1999/xhtml', 'div');
     sitesLabel.id = 'brosr-sites-label';
-    sitesLabel.textContent = 'Bookmarks';
+    sitesLabel.textContent = 'Essentials';
   }
   // The tiles sit at the very top of the left column, above the tabs.
   if (sitesBar.parentElement !== column) column.insertBefore(sitesBar, column.firstChild);

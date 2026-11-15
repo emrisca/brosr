@@ -1,6 +1,7 @@
-// The bridge background script. The toolbar opens the room UI as an anchored
-// popup, and the chord or the page button opens it as a window. This script
-// owns that window, the room tab id, and the last status the room published.
+// The bridge background script. The toolbar opens the room panel as a popup
+// inside the browser window. The chord and the page button ask for that same
+// popup, and no path here opens a window of its own. This script owns the room
+// tab id and the last status the room published.
 //
 // The same file runs as a Gecko background page and as a Chrome service
 // worker. A worker stops when it is idle, so the small state below is also kept
@@ -8,9 +9,6 @@
 
 const api = globalThis.browser || globalThis.chrome;
 const session = api.storage && api.storage.session ? api.storage.session : null;
-
-const PANEL_WIDTH = 400;
-const PANEL_HEIGHT = 640;
 
 // The room page names its tab. A hello message is one source and this is the
 // second, because a tab restored from the session store can miss the hello.
@@ -26,8 +24,6 @@ const text = (error) => String((error && error.message) || error);
 // restart, and a session store that throws leaves the fast path in place.
 const memory = {
   roomTabId: null,
-  panelWindowId: null,
-  panelSurface: null,
   lastPanel: null,
   lastSelftest: null,
   lastRoomStatus: null,
@@ -96,58 +92,20 @@ api.tabs.onRemoved.addListener((id) => {
   });
 });
 
-api.windows.onRemoved.addListener((id) => {
-  state().then((seen) => {
-    if (id !== seen.panelWindowId) return;
-    save({ panelWindowId: null, panelSurface: null, lastPanel: null, lastSelftest: null });
-  });
-});
-
-// Focus an open room window before making another one. A second copy of the
-// panel would fight the first over the same room.
-async function focusPanel() {
-  const seen = await state();
-  if (!validId(seen.panelWindowId)) return false;
-  try {
-    await api.windows.update(seen.panelWindowId, { focused: true });
-    return true;
-  } catch {
-    await save({ panelWindowId: null });
-    return false;
+// The toolbar declares the popup, so the browser owns that click and anchors the
+// panel under the toolbar. The chord and the page button reach the same popup
+// through openPopup, which both engines expose from a user action. A build that
+// refuses it leaves the panel to the toolbar click, and no path opens a window.
+async function openPanel() {
+  const toolbar = api.action || api.browserAction;
+  if (!toolbar || typeof toolbar.openPopup !== 'function') {
+    return { ok: false, surface: null, reason: 'no-open-popup' };
   }
-}
-
-// The window keeps its own size and stays open beside the room, which the chord
-// and the page button both need. A build that refuses the window gets a tab,
-// which still works.
-async function openPanelWindow(selftest) {
-  const seen = await state();
-  if (await focusPanel()) {
-    return {
-      ok: true,
-      windowId: seen.panelWindowId,
-      reused: true,
-      surface: seen.panelSurface || 'window',
-    };
-  }
-  const suffix = selftest ? '?selftest=1' : '';
-  const url = api.runtime.getURL(`panel/room.html${suffix}`);
   try {
-    const win = await api.windows.create({
-      url,
-      type: 'popup',
-      width: PANEL_WIDTH,
-      height: PANEL_HEIGHT,
-    });
-    await save({ panelWindowId: win.id, panelSurface: 'window' });
-    return { ok: true, windowId: win.id, surface: 'window' };
+    await toolbar.openPopup();
+    return { ok: true, surface: 'popup' };
   } catch (error) {
-    const tab = await api.tabs.create({ url }).catch(() => null);
-    if (tab) {
-      await save({ panelSurface: 'tab' });
-      return { ok: true, tabId: tab.id, surface: 'tab' };
-    }
-    return { ok: false, error: text(error) };
+    return { ok: false, surface: null, reason: 'popup-refused', detail: text(error) };
   }
 }
 
@@ -198,13 +156,7 @@ async function handle(message, sender) {
     return { ok: Boolean(seen.lastRoomStatus), status: seen.lastRoomStatus };
   }
   if (message.type === 'brosr:panel-report') {
-    const fromWindow =
-      sender && sender.tab && validId(sender.tab.windowId) ? sender.tab.windowId : null;
-    const seen = await state();
     const changes = { lastPanel: message.state || null };
-    // One panel owns the state. The first window to report is adopted, so a
-    // panel opened by the room page still lands here.
-    if (seen.panelWindowId === null && fromWindow !== null) changes.panelWindowId = fromWindow;
     if (message.state && message.state.selftest === '1') changes.lastSelftest = message.state;
     await save(changes);
     return { ok: true };
@@ -212,11 +164,9 @@ async function handle(message, sender) {
   if (message.type === 'brosr:panel-state') {
     const seen = await state();
     const last = seen.lastSelftest || seen.lastPanel;
-    // The panel cannot see the container it sits in, so the opener names it.
-    // A harness reads this instead of guessing a surface from the width.
-    // The panel names its own container when the toolbar opens it as a popup.
-    // The opener names it when it made a window. The panel's report wins.
-    return { ok: true, state: last ? { ...last, surface: last.surface || seen.panelSurface } : null };
+    // The panel names its own container in its URL. A page opened by hand reads
+    // as the popup, because that is where a room shows it.
+    return { ok: true, state: last ? { ...last, surface: last.surface || 'popup' } : null };
   }
   // The panel can be refused the room tab channel. It asks here instead, and
   // this script repeats the question with the id it already holds.
@@ -228,13 +178,13 @@ async function handle(message, sender) {
       .then((reply) => ({ ok: true, reply }))
       .catch((error) => ({ ok: false, reason: 'send-failed', error: text(error) }));
   }
-  // One name for the window, kept for a content script from an older build.
-  // A summon tab exists only to carry this message, so it goes once the window
-  // is there. The reply still reaches the tab before it closes.
+  // One name for the panel, kept for a content script from an older build. A
+  // summon tab exists only to carry this message, so it goes once the panel is
+  // asked for. The reply still reaches the tab before it closes.
   if (message.type === 'brosr:open-sidebar' || message.type === 'brosr:open-panel') {
     const summon =
       message.summon && sender && sender.tab && validId(sender.tab.id) ? sender.tab.id : null;
-    const reply = await openPanelWindow(Boolean(message.selftest));
+    const reply = await openPanel();
     if (summon !== null) api.tabs.remove(summon).catch(() => {});
     return reply;
   }
@@ -251,13 +201,13 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // The toolbar declares a popup, so the browser owns that click and this script
-// never sees it. The chord and the page button still open a window, because
-// Gecko has no call that shows a popup from a message.
+// never sees it. The chord runs inside a user action, which is the one place a
+// popup can be opened from a script.
 api.commands.onCommand.addListener(async (command) => {
   if (command !== 'open-room-panel') return;
   // The room tab records the command, so a headless run can prove the key
-  // chord reached the bridge even when the window opens without a new tab.
+  // chord reached the bridge even when the sidebar opens without a new tab.
   const id = await roomTab();
   if (validId(id)) api.tabs.sendMessage(id, { type: 'brosr:command', command }).catch(() => {});
-  openPanelWindow(false);
+  await openPanel();
 });

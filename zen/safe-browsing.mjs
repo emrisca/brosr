@@ -84,13 +84,27 @@ export function cachedCopy(entry, dir = RUNTIME) {
   }
 }
 
+// A request that stalls must not hold the setup. Four downloads with no limit
+// can sit on one dead host for minutes, so each one gets a deadline.
+const FETCH_MS = 30000;
+
+function why(error) {
+  if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return `no answer in ${FETCH_MS / 1000} s`;
+  }
+  return String((error && error.message) || error);
+}
+
 // The XPI is fetched at setup, not shipped in the repository. A machine without
 // network access keeps its old copy, and a room still starts.
 async function download(entry, dir) {
   const hit = cachedCopy(entry, dir);
   if (hit) return hit;
   fs.mkdirSync(dir, { recursive: true });
-  const res = await fetch(entry.url, { redirect: 'follow' });
+  const res = await fetch(entry.url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(FETCH_MS),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = Buffer.from(await res.arrayBuffer());
   if (body.length < entry.minBytes) throw new Error(`${body.length} bytes is too small`);
@@ -98,18 +112,27 @@ async function download(entry, dir) {
   return cachePath(entry, dir);
 }
 
-export async function stageExtensions(dir = RUNTIME) {
-  const ready = [];
-  const missing = [];
-  for (const entry of EXTENSIONS) {
-    try {
-      await download(entry, dir);
-      ready.push(entry.id);
-    } catch (error) {
-      missing.push({ id: entry.id, name: entry.name, why: error.message });
-    }
-  }
-  return { ready, missing };
+// All four requests go out together, so a cold setup waits for the slowest file
+// and not for the sum of them. A cached file answers at once and adds no wait.
+export async function stageExtensions(dir = RUNTIME, options = {}) {
+  const onEach = typeof options.onEach === 'function' ? options.onEach : null;
+  let done = 0;
+  const rows = await Promise.all(
+    EXTENSIONS.map(async (entry) => {
+      try {
+        await download(entry, dir);
+        done += 1;
+        if (onEach) onEach(done, entry);
+        return { id: entry.id };
+      } catch (error) {
+        return { id: entry.id, name: entry.name, why: why(error) };
+      }
+    })
+  );
+  return {
+    ready: rows.filter((row) => !row.why).map((row) => row.id),
+    missing: rows.filter((row) => row.why),
+  };
 }
 
 export function installExtensions(profile, dir = RUNTIME) {
@@ -552,12 +575,12 @@ async function activeExtensions(bidi, profile, log) {
 // the headless pass unless a marker says the work is done.
 export async function prepareSafeBrowsing(profile, options = {}) {
   // The setup screen follows these steps. Each number is the stage the work is
-  // about to do, so a long fetch still shows movement.
+  // about to do, so a long fetch still shows movement. A caller that staged the
+  // files already passes them in, and the fetch is not repeated.
   const stage = typeof options.report === 'function' ? options.report : () => {};
-  stage(2, 'Fetching the add-ons');
-  const staged = await stageExtensions();
-  stage(3, 'Installing the add-ons');
-  const installed = installExtensions(profile);
+  const dir = options.dir || RUNTIME;
+  const staged = options.staged || (await stageExtensions(dir));
+  const installed = installExtensions(profile, dir);
   const report = { staged, installed, configured: false, marker: readMarker(profile) };
   if (!options.configure) return report;
   if (staged.missing.length) return report;
@@ -565,6 +588,9 @@ export async function prepareSafeBrowsing(profile, options = {}) {
     report.configured = true;
     return report;
   }
+  // The headless pass writes the list, so it names its own stage. A room skips
+  // this pass, and the bar never shows a step it does not run.
+  stage(3, 'Writing the filter list');
   try {
     report.marker = await configure(profile, options);
     report.configured = true;

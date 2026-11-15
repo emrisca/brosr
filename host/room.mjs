@@ -32,9 +32,26 @@ function ensureDir(dir) {
 }
 
 // The relay serves the fixtures, so the bridge has to be in the build the relay
-// hands to the page. A missing file is built on the spot.
+// hands to the page. The build is refreshed when it is missing or older than a
+// source file. Without the second check a room could install a panel from an
+// earlier tree, which is how the toolbar once kept an older surface.
+const SOURCE_DIRS = ['bridge', 'core', 'assets'].map((name) => path.join(ROOT, name));
+
+function newestMtime(dir) {
+  let newest = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    newest = Math.max(newest, entry.isDirectory() ? newestMtime(file) : fs.statSync(file).mtimeMs);
+  }
+  return newest;
+}
+
 export function ensureBridge() {
-  const built = !fs.existsSync(BRIDGE);
+  let built = !fs.existsSync(BRIDGE);
+  if (!built) {
+    const builtAt = fs.statSync(BRIDGE).mtimeMs;
+    built = SOURCE_DIRS.some((dir) => newestMtime(dir) > builtAt);
+  }
   if (built) buildXpi(BRIDGE);
   return { file: BRIDGE, built };
 }
@@ -356,34 +373,6 @@ export async function status() {
     relayReady: ready,
     peers,
   };
-}
-
-// The room window belongs to the extension, so the app cannot open it. It can
-// open one short lived tab, which the bridge turns into a request for the
-// window and then closes.
-export function showPanel() {
-  const run = readRun();
-  if (!run) throw new Error('no room is running');
-  if (!alive(run.browserPid)) throw new Error(`the browser is closed. Start the room again`);
-  const browser = find(run.browser.id);
-  const url = new URL(run.url);
-  for (const key of ['role', 'room', 'peer', 'name', 'host', 'bias', 'relay', 'panel', 'capture', 'selftest']) {
-    url.searchParams.delete(key);
-  }
-  url.searchParams.set('summon', '1');
-  url.hash = '';
-  const child = spawn(
-    browser.path,
-    launchArgs(browser, {
-      profile: run.profile,
-      url: url.toString(),
-      handoff: true,
-      extension: browser.family === 'chromium' ? run.bridge.file : null,
-    }),
-    { detached: true, stdio: 'ignore' }
-  );
-  child.unref();
-  return { ok: true, pid: child.pid, url: url.toString() };
 }
 
 export { RUN_FILE, PROFILE };

@@ -11,13 +11,7 @@ type Props = {
 export function Welcome({ name, onName, onNext }: Props) {
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-xl font-medium tracking-tight">A room is a page you share.</h1>
-        <p className="max-w-[46ch] text-sm text-muted-foreground">
-          Brosr opens the same page in every window. Cursors, scroll and playback stay
-          together. Nothing leaves this Mac.
-        </p>
-      </div>
+      <h1 className="text-xl font-medium tracking-tight">A room is a page you share.</h1>
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="room-name" className="text-xs text-muted-foreground">
@@ -33,8 +27,7 @@ export function Welcome({ name, onName, onNext }: Props) {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">Takes about a minute.</p>
+      <div className="flex items-center justify-end gap-2">
         <Button onClick={onNext} disabled={!name.trim()}>
           Find my browsers
           <ArrowRight />

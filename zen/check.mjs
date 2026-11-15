@@ -456,16 +456,16 @@ async function probeDock(zen) {
       dock.error = `the top bar spans ${g.barRow.left} to ${g.barRow.right} in a ${g.windowWidth} window`;
     } else if (g.controlsBox.count > 0 && g.controlsBox.right > g.controlsBox.backLeft) {
       dock.error = `the window controls end at ${g.controlsBox.right}, over the back button at ${g.controlsBox.backLeft}`;
-    } else if (!g.bookmarks || g.bookmarks.text !== 'Bookmarks') {
-      dock.error = `the bookmark heading reads ${g.bookmarks ? g.bookmarks.text : 'missing'}`;
+    } else if (!g.bookmarks || g.bookmarks.text !== 'Essentials') {
+      dock.error = `the essentials heading reads ${g.bookmarks ? g.bookmarks.text : 'missing'}`;
     } else if (g.bookmarks.top < g.barTop + 1) {
-      dock.error = `the bookmark heading starts at ${g.bookmarks.top}`;
+      dock.error = `the essentials heading starts at ${g.bookmarks.top}`;
     } else if (g.bookmarks.top + 8 > g.sitesTop) {
-      dock.error = 'the bookmark heading sits under the tiles';
+      dock.error = 'the essentials heading sits under the tiles';
     } else if (String(g.splitter) === 'none') dock.error = 'the column splitter is hidden';
-    // The profile seeds a 420 pixel column, and Zen can restore a smaller one.
+    // The profile seeds a 320 pixel column, and Zen can restore a smaller one.
     // A column past that seed means the dock widened it.
-    else if (g.column > 440) dock.error = `the column is ${g.column} wide`;
+    else if (g.column > 340) dock.error = `the column is ${g.column} wide`;
     else if (g.x + g.panelWidth + g.inset > g.column) {
       dock.error = `the panel runs ${g.x + g.panelWidth + g.inset - g.column} past the column`;
     } else if (g.x + g.panelWidth > g.pageEdge) {
@@ -592,7 +592,7 @@ async function probeDock(zen) {
         dock.error = `the floor bookmarks end at ${floor.sitesRight} of ${floor.column}`;
       } else if (floor.siteWidth < 56) dock.error = `the floor tile is ${floor.siteWidth} wide`;
     }
-    if (!dock.error && (!dock.floorBack || dock.floorBack.column < 400)) {
+    if (!dock.error && (!dock.floorBack || dock.floorBack.column < 316)) {
       dock.error = 'the column width did not come back';
     }
     if (!dock.error) {
@@ -702,8 +702,8 @@ async function main() {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(bridge, 'manifest.json'), 'utf8')
   );
-  // The panel is its own window. The manifest declares no sidebar_action, so a
-  // toolbar action without a popup is the entry point that reaches it.
+  // The panel is an anchored popup inside the browser window. The manifest
+  // declares no sidebar, and no code opens a window of its own.
   if (manifest.sidebar_action) {
     throw new Error('the manifest declares a sidebar the panel does not use');
   }
@@ -713,6 +713,11 @@ async function main() {
     throw new Error(
       `the toolbar popup points at ${manifest.browser_action.default_popup || 'nothing'}`
     );
+  }
+  // The toolbar button is pinned by default, so a new room shows it without a
+  // trip to the extensions panel.
+  if (manifest.browser_action.default_area !== 'navbar') {
+    throw new Error('the toolbar action is not pinned to the navbar by default');
   }
   if (!manifest.icons || !manifest.icons['128']) throw new Error('the manifest declares no icons');
   if (!manifest.browser_action || !manifest.browser_action.default_icon) {
@@ -735,8 +740,13 @@ async function main() {
   if (/toolbar\.onClicked\.addListener/.test(background)) {
     throw new Error('the background still answers a toolbar click that the popup owns');
   }
-  if (!/commands\.onCommand\.addListener\([\s\S]{0,800}?openPanelWindow\(/.test(background)) {
-    throw new Error('the shortcut does not open the shared panel window');
+  // The panel is a popup inside the browser window. A window of its own is the
+  // one surface this build never opens.
+  if (/windows\.create/.test(background)) {
+    throw new Error('the background still opens a window outside the browser');
+  }
+  if (!/commands\.onCommand\.addListener\([\s\S]{0,800}?openPanel\(/.test(background)) {
+    throw new Error('the shortcut does not ask for the panel popup');
   }
   if (!manifest.commands || !manifest.commands['open-room-panel']) {
     throw new Error('the manifest does not declare the panel shortcut');
@@ -787,7 +797,7 @@ async function main() {
     const created = await bidi.cmd('browsingContext.create', { type: 'tab' });
     const context = created.context;
     const room = arg('room', 'zen');
-    const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${room}&peer=host&name=Host&panel=1`;
+    const url = `http://127.0.0.1:${RELAY}/room-b.html?role=host&room=${room}&peer=host&name=Host`;
     await bidi.cmd('browsingContext.navigate', { context, url, wait: 'complete' });
 
     const data = await waitForDataset(bidi, context, (d) => d.socket === 1);
@@ -796,8 +806,19 @@ async function main() {
     if (data.socket !== 1) throw new Error(`socket was ${data.socket}`);
     if (!data.panelUrl) throw new Error('the content script did not publish a panel URL');
 
-    // The panel opens on connect. While the host is alone it must read zero, so
-    // a blank cell never looks like a panel that has not answered yet.
+    // A headless engine draws no toolbar popup, so the lane opens the same
+    // document in a tab. The page under test is the panel either way.
+    const panelTab = (await bidi.cmd('browsingContext.create', { type: 'tab' })).context;
+    const panelUrl = `${data.panelUrl}${data.panelUrl.includes('?') ? '&' : '?'}surface=tab`;
+    await bidi.cmd('browsingContext.navigate', {
+      context: panelTab,
+      url: panelUrl,
+      wait: 'complete',
+    });
+    log('[zen] panel tab', panelTab);
+
+    // A host alone must read zero, so a blank cell never looks like a panel
+    // that has not answered yet.
     const alone = await waitPanelAlone(bidi);
     if (!alone) throw new Error('the panel never stated zero peers for a host alone');
     if (alone.count !== '0') throw new Error(`the panel count reads ${alone.count} while alone`);

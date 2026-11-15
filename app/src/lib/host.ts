@@ -6,7 +6,6 @@ export type Browser = {
   vendor: string;
   native: boolean;
   family: 'gecko' | 'chromium';
-  note: string;
   path: string;
   version: string | null;
   gecko: string | null;
@@ -98,5 +97,3 @@ export const start = (browser: string, name: string) =>
 export const status = () => host<Status | { ok: true; running: false }>(['status']);
 
 export const stop = () => host<{ ok: true; stopped: boolean }>(['stop']);
-
-export const showPanel = () => host<{ ok: true; pid: number; url: string }>(['panel']);

@@ -5,12 +5,11 @@
 //   node host/cli.mjs prepare --browser=zen
 //   node host/cli.mjs start --browser=zen --room=demo --name=Host
 //   node host/cli.mjs status
-//   node host/cli.mjs panel
 //   node host/cli.mjs stop
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detect } from './browsers.mjs';
-import { freePort, prepare, showPanel, start, status, stop } from './room.mjs';
+import { freePort, prepare, start, status, stop } from './room.mjs';
 
 const arg = (name, fallback = '') => {
   const hit = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -74,11 +73,6 @@ const COMMANDS = {
 
   async stop() {
     return stop();
-  },
-
-  // Show the room window again in a browser that is already open.
-  async panel() {
-    return showPanel();
   },
 
   // The app asks for a port before it opens the setup screen, so the room

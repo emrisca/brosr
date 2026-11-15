@@ -61,6 +61,12 @@ body {
   animation: none;
 }
 
+/* A tab is the one container that needs the page to fill it. */
+:root[data-surface="tab"] body {
+  width: 100%;
+  min-width: 0;
+}
+
 p,
 h1 {
   margin: 0;

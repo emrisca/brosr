@@ -34,35 +34,37 @@ because Chromium loads an unpacked folder and not an XPI.
 ## The experience
 
 1. **A room profile.** `profile.mjs` makes a Zen profile with vertical tabs, an expanded sidebar
-   and telemetry off. It seeds `xulstore.json` with a 420 pixel sidebar width, because Zen
-   restores the width from there and its own macOS default is 230. Then it prints the command
-   that starts Zen on that profile. The room gets the window, not the toolbar.
-2. **A room window.** The bridge gains a window at `bridge/panel/room.html`. It shows the room id, each peer by name, who holds
+   and telemetry off. It seeds `xulstore.json` with a 320 pixel sidebar width, because Zen
+   restores the width from there and its own macOS default is 230. The same store marks the
+   window `maximized`, so a room opens zoomed to the screen instead of at Zen's stored size.
+   Then it prints the command that starts Zen on that profile. The room gets the window, not the
+   toolbar.
+2. **A room panel.** The bridge gains a panel at `bridge/panel/room.html`. It shows the room id, each peer by name, who holds
    control, the socket state and the latency. It asks the active tab for the same numbers the
    harness reads from `dataset.brosr`, so one renderer serves both. On the host each peer row has a
    Grant or Revoke button, and the panel lists the last three control changes.
-3. **Two entry points.** The bridge owns a small room window. The toolbar button and the
-   Ctrl+Alt+B command both call the same window opener. A Windows console run proved the
-   chord from a foreground window, and the Mac run posted it to the Zen process. If a build
-   refuses the popup, the background page opens the panel as a tab instead.
+3. **One entry point.** The toolbar opens the panel as an anchored popup, and the Ctrl+Alt+B
+   command asks for that same popup. Both need a click, so nothing else offers to show one.
+   The panel keeps the same page as a tab, which the check lane opens to read it headlessly.
 4. **Spaces stay manual.** Zen stores spaces in its session store. A start path cannot write that
    store safely, so the profile does not fake one. A room per space is the natural next step, and
    it belongs with the M5 sidebar work.
 
 ## The panel
 
-`bridge/panel/room.html` is the room window. It asks the room tab for `brosr:status`, so the
-window and a plain tab share one renderer. The window can be denied the tab channel, and a tab
+`bridge/panel/room.html` is the room panel. It asks the room tab for `brosr:status`, so the
+popup and a plain tab share one renderer. The popup can be denied the tab channel, and a tab
 id can arrive as the placeholder -1. The room tab also publishes its status to the background
 each second, and the panel reads that copy when the tab call fails.
 
-**Surface.** The toolbar opens the panel as an anchored popup, declared as `default_popup` on
-`browser_action`, so one click reaches the room. The page names its container in the URL, and the
-stylesheet gives the popup a 360 pixel column with a 560 pixel height cap. The chord and the page
-button call `openPanelWindow`, because Gecko has no call that shows a popup from a message. A
-build that refuses that window gets a tab. A run on 14 November 2026 read that window live at 400
-by 608 pixels with the room sealed. The page button reported `dataset.brosrPanel` as `window`. A
-host alone in that run read `0` in the header and `Brosr room · 0` in the title.
+**Surface.** The toolbar opens the panel as an anchored popup inside the browser window. The
+Gecko manifest declares it as `default_popup`, and the Chromium manifest declares it the same
+way. One click reaches the room, and no code opens a window outside the browser. The popup takes
+its 360 pixel width and its 560 pixel height cap from the panel stylesheet, and the browser draws
+the frame. Closing the panel from its menu closes the popup, and a tab that hosts the panel
+closes itself. The check lane opens that page in a tab, because a message cannot press the
+toolbar. That run on 14 November 2026 read the panel live with a 14.13 contrast, the invite link
+and the grant history. A host alone read `0` in the header and `Brosr room · 0` in the title.
 
 **Theme.** The panel asks the theme API for the toolbar and text colours. It resolves both to
 plain rgb triples and mixes its own surface from them, so every computed colour is readable.
@@ -70,7 +72,7 @@ The panel rejects a pair under 4.5 to 1 and moves the text to near black or near
 whichever the surface can carry. A theme without colours falls back to the system canvas pair.
 
 **Spacing.** Gaps and pads use 6, 8 or 10 pixels only. The docked panel fills the expanded
-sidebar, which starts at 420 pixels and follows the splitter between 240 and 640. The panel keeps a 240
+sidebar, which starts at 320 pixels and follows the splitter between 240 and 640. The panel keeps a 240
 pixel floor, so the menu and a peer row keep their place. The footer sits at the bottom edge,
 and a peer row keeps its control on one line.
 
@@ -106,7 +108,7 @@ end. The field itself takes the free width, so it grows with the window instead 
 62rem cap. The compact mode toggle moves out of the tab strip and into this row. Zen hides that
 button, so the dock shows it.
 
-**Bookmarks.** A Bookmarks heading names the strip, and the tiles are the bookmark row. The
+**Essentials.** An Essentials heading names the strip, and the tiles are the essentials row. The
 heading takes the same place the space name had. YouTube and fmhy.net ship as the defaults.
 The strip keeps its own row, so a tile never sits under the window controls. The tabs share the row evenly. Each one is a 32 pixel row with a 16
 pixel favicon and the page title beside it. A page with no title keeps its host name. The star in
@@ -121,7 +123,7 @@ hands the page to the panel hand off list, and a drop anywhere else removes it. 
 Edit and Remove. Edit swaps the link in the same one row form. Ctrl+Alt+A opens the add form from
 anywhere in the window. A first run writes the shipped pair before the first read.
 
-**Foot row.** The space name is hidden, so the bookmark row sits alone above the tab list. The
+**Foot row.** The space name is hidden, so the essentials row sits alone above the tab list. The
 foot row holds the library button, one dot per space and the new tab button. It pins just above
 the room panel, so the panel never covers it, and it drops to the window edge when the panel is
 shut. Zen hides the dots in this layout, so the dock turns the strip back on.
@@ -131,12 +133,12 @@ it appears. This build does not create one on a fresh profile, so the rule is a 
 
 **Column.** The tab column starts under the top bar and owns the left edge down to the window
 bottom. The bar drags the window, and the tabs, the tiles and the panel keep the pointer.
-Whatever Zen keeps at the column top keeps its room, so the Bookmarks heading never sits under a
-control. A compact window lays the compact mode buttons under the bookmark row, so the heading
+Whatever Zen keeps at the column top keeps its room, so the Essentials heading never sits under a
+control. A compact window lays the compact mode buttons under the essentials row, so the heading
 keeps to the bar there. macOS keeps its lights on the left, and Windows
 and Linux keep their buttons on the right. The platform draws their shape too, so the box only
 reads `data-brosr-os` and takes its side from it. The column keeps a 315 pixel floor, starts at
-420 pixels and Zen's own splitter resizes it up to 640. The dock reads the column width on every
+320 pixels and Zen's own splitter resizes it up to 640. The dock reads the column width on every
 pass and never writes it, so a drag stays put.
 
 **Docked split.** The dock places the panel under the tab column. A 12 pixel bar above the
@@ -208,8 +210,8 @@ through `window.__brosrSites`. The add form opens on Ctrl+Alt+A and closes on Es
 select the tab it already has, not add a copy, and that tab marks its tile as current. The room pass checks the join link, the copy row, the watch card,
 the peer count, the playback label and the relay label.
 
-**Entry points.** A room page shows a small Room panel button at its bottom edge. A click opens
-the sidebar, and the bridge falls back to a tab when the sidebar is unavailable.
+**Entry points.** A room page shows a small Room panel button at its bottom edge. A click asks
+the browser for the popup, so it never opens a window of its own.
 
 ## Run it
 
@@ -251,7 +253,7 @@ no proof from a frontmost window.
 `live.mjs` does that hand setup in one step. It starts the relay and a headful Zen window on a
 persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. It then docks
 the panel through Marionette, which is why Zen starts with `--marionette`. The panel reports its
-own width, so the run records `mode` as `sidebar` or `tab`. It falls back to a panel tab
+own width, so the run records `mode` as `popup` or `tab`. It falls back to a panel tab
 when no report arrives. It leaves both processes running and writes `zen/.runtime/live.json`.
 
 `node assets/icons.mjs` rebuilds the 16 to 256 pixel copies and `brosr.ico` from
@@ -264,21 +266,23 @@ writer copies the bridge in, so a new profile needs no step in `about:debugging`
 
 AMO signs each new bridge version. `node zen/package.mjs` writes `zen/.runtime/bridge.xpi`, and an
 upload of that file to the add-on's page at AMO returns a signed copy. Name the signed copy
-`zen/.runtime/bridge-signed.xpi` and run `profile.mjs` again. The resolver prefers the signed
-file, so a gap between its version and the source reads as `stale` in the log.
+`zen/.runtime/bridge-signed.xpi` and run `profile.mjs` again. The newer file wins, so a build made
+after the last signature lands with `xpinstall.signatures.required` off. A signed copy that lags
+the source reads as `stale` in the log.
 `node zen/profile.mjs --guard` reads the shipped files and exits nonzero when the signed copy is
 missing, unsigned, or behind the source manifest. A release can refuse the gap that way.
 
 ## Limits
 
-- AMO signs the bridge. `zen/package.mjs` builds the file, and `profile.mjs` copies signed 0.1.3
-  into the profile with `xpinstall.signatures.required` on, so a new profile takes it with no
-  prompt. A build with no signature runs only through the BiDi path in `check.mjs`, which asks
-  for that with `{ bridge: false }`.
+- AMO signs the bridge. `zen/package.mjs` builds the file, and `profile.mjs` copies the newer of
+  the two bridge files into the profile. A signed copy turns
+  `xpinstall.signatures.required` on, and an unsigned build turns it off, so a new profile takes
+  either one with no prompt. `check.mjs` still asks for `{ bridge: false }` on its BiDi path.
 - A signed bridge whose version lags the source still runs, and `bridgeSource()` reports the
-  mismatch. Upload the new version to AMO before a room shows the new code.
+  mismatch. A build newer than the signed copy wins, so upload the new version to AMO when a
+  room should carry the signature.
 - The check opens the panel in a tab inside Zen and drives its Grant and Revoke buttons against
-  a second peer tab. It cannot draw Zen's sidebar or the toolbar button. A separate headless
+  a second peer tab. It cannot draw the toolbar popup. A separate headless
   window measures the dock with the bookmarks sidebar, so the room panel's own geometry is
   untested there. Zen may host the sidebar panel differently from Firefox.
 - The check reads the panel page through BiDi, which needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` when
@@ -298,7 +302,8 @@ missing, unsigned, or behind the source manifest. A release can refuse the gap t
 - The room profile carries a safe browsing set: uBlock Origin, SponsorBlock, AdGuard Extra and
   P-Stream. `zen/safe-browsing.mjs` stages the four signed XPIs and copies them into the
   profile, so a new room starts blocked. Every profile also starts with an FMHY bookmark and a
-  YouTube bookmark.
+  YouTube bookmark. The `brosr.sites` pref carries the same two pages, and the dock fills the
+  essentials strip with them on the first start.
 - A headless pass writes the FMHY list into uBlock Origin. A second window reads the list back
   and counts blocked probe requests. The marker holds those counters.
 - Setup needs network once. The XPIs and the list text stay in `zen/.runtime/`, so they are never

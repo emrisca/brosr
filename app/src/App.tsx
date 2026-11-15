@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { Brand } from '@/components/brand';
 import { StepRail } from '@/components/step-rail';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -9,6 +9,7 @@ import { Prepare } from '@/screens/prepare';
 import { Room } from '@/screens/room';
 import { Welcome } from '@/screens/welcome';
 import { useTheme } from '@/lib/theme';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { status, type Browser, type Run } from '@/lib/host';
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
 
@@ -92,6 +93,18 @@ export default function App() {
     setUpdateOpen(false);
   };
 
+  // The window has no title bar, so the strip at the top is the handle. A
+  // declared drag region reaches only the element under the press, and every
+  // child of this strip sits under one. The handler runs on the header itself
+  // and moves the window for any press that misses a control.
+  function drag(event: MouseEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button, a, input, select, textarea')) return;
+    event.preventDefault();
+    getCurrentWindow().startDragging().catch(() => {});
+  }
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       <div className="brosr-aurora" aria-hidden="true" />
@@ -99,7 +112,7 @@ export default function App() {
       {/* The window has no title bar. The top strip is the drag area, and the
           inset keeps the mark and the controls clear of the traffic lights. */}
       <header
-        data-tauri-drag-region
+        onMouseDown={drag}
         className="relative flex items-center justify-between gap-2 px-2.5 pt-8 pb-2.5"
       >
         <div className="flex items-center gap-1.5">
