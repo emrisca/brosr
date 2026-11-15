@@ -301,7 +301,6 @@ export async function start() {
         name: params.get('name') || params.get('peer') || 'peer',
         bias: Number(params.get('bias') || 0),
         relayPort: params.get('relay') || '8787',
-        capture: params.get('capture') === '1',
         grant: params.get('grant') || null,
         // The key travels in the fragment. sessionStorage keeps it across the
         // navigation a peer follows, so the next page stays sealed.
@@ -555,7 +554,9 @@ export async function start() {
       return true;
     },
     input: {
-      capture: Boolean(config.capture),
+      // A grant arrives on the socket long after this page loaded, so the
+      // listeners are installed now and every record waits for the grant.
+      capture: true,
       grantTo: config.grant || null,
       tabId: peerId,
       origin: location.origin,

@@ -809,6 +809,55 @@ test('presence carries the last trusted pointer position', () => {
   assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
 });
 
+test('a granted peer types into a field, and no text leaves without the grant', () => {
+  const listeners = new Map();
+  const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500 },
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    input: { capture: true, tabId: 'peer', origin: 'https://example.com' },
+    send: (frame) => sent.push(decode(frame)),
+  });
+  // A field the page owns, named the way cssPath() walks it.
+  const field = {
+    tagName: 'INPUT',
+    type: 'text',
+    value: 'hello',
+    getAttribute: () => '',
+    closest: () => null,
+  };
+
+  // Without a grant the field stays local.
+  doc.dispatch('input', { isTrusted: true, target: field });
+  client.tick(1000);
+  assert.equal(
+    sent.filter((message) => message.type === 'input').length,
+    0,
+    'no text leaves before the grant'
+  );
+
+  client.receive(encode({ type: 'control', peerId: 'peer', allowed: true }), 0);
+  doc.dispatch('input', { isTrusted: true, target: field });
+  client.tick(1100);
+  const frame = sent.find((message) => message.type === 'input');
+  assert.ok(frame, 'the text record left the page');
+  assert.deepEqual(frame.records.at(-1), { kind: 'text', path: 'html', value: 'hello' });
+});
+
 test('the peer path reads and writes only through the adapter', () => {
   // No currentTime, paused or seeking fields. A player object looks like this,
   // and the peer path must not need any of them.

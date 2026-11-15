@@ -361,6 +361,27 @@ export function createRoomClient({
       },
       { passive: true, capture: true }
     );
+
+    // A synthetic key event inserts no character, so typing travels as the
+    // field value instead. The receiver writes it through the native setter,
+    // which is what React and Vue read. A password or credential field never
+    // reaches this record.
+    doc.addEventListener(
+      'input',
+      (event) => {
+        if (skip(event) || !remoteGrant) return;
+        const target = event.target;
+        const tag = String((target && target.tagName) || '').toLowerCase();
+        if (!['input', 'textarea', 'select'].includes(tag)) return;
+        if (isSensitiveField(target)) return;
+        batcher.push({
+          kind: 'text',
+          path: cssPath(target),
+          value: String(target.value ?? ''),
+        });
+      },
+      true
+    );
   }
 
   // Presence travels as a share of the viewport, so two window sizes put a
