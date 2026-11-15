@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CursorOverlay, CURSOR_WIDTH } from '../overlay.mjs';
+import {
+  ActionNotice,
+  CursorOverlay,
+  CURSOR_WIDTH,
+  actionText,
+  mediaAction,
+} from '../overlay.mjs';
 
 function fakeElement() {
   const node = {
@@ -56,6 +62,65 @@ function animatedDocument() {
   };
   return doc;
 }
+
+test('the notice words an action with the person behind it', () => {
+  assert.equal(actionText({ name: 'Bob', action: 'pause' }), 'Bob paused the video');
+  assert.equal(actionText({ name: 'Carol', action: 'play' }), 'Carol played the video');
+  assert.equal(actionText({ name: 'Bob', action: 'seek', position: 65 }), 'Bob jumped to 1:05');
+  assert.equal(actionText({ name: 'Bob', action: 'seek', position: 3725 }), 'Bob jumped to 1:02:05');
+  assert.equal(actionText({ name: 'Bob', action: 'rate', rate: 1.5 }), 'Bob set the speed to 1.5x');
+  assert.equal(actionText({ name: '', action: 'pause' }), '');
+  assert.equal(actionText({ name: 'Bob', action: 'tick' }), '');
+});
+
+test('a frame names an action only when a person changed something', () => {
+  const prev = { key: 'youtube:x', position: 10, playing: true, rate: 1, at: 1000 };
+  const tick = { key: 'youtube:x', position: 10.25, playing: true, rate: 1 };
+  assert.equal(mediaAction(null, tick, 1000), null);
+  assert.equal(mediaAction(prev, tick, 1000), null);
+  assert.equal(mediaAction(prev, { ...tick, playing: false }, 1000), 'pause');
+  assert.equal(mediaAction({ ...prev, playing: false }, { ...tick, playing: true }, 1000), 'play');
+  assert.equal(mediaAction(prev, { ...tick, rate: 1.5 }, 1000), 'rate');
+  assert.equal(mediaAction(prev, { ...tick, position: 40 }, 1000), 'seek');
+  assert.equal(mediaAction(prev, { ...tick, key: 'youtube:other' }, 1000), null);
+  // A paused tab does not advance, so a small gap there is still a seek.
+  const paused = { ...prev, playing: false };
+  assert.equal(mediaAction(paused, { ...tick, playing: false, position: 8.5 }, 1000), 'seek');
+});
+
+test('the notice mounts one closed shadow root and hides itself', () => {
+  const doc = fakeDocument();
+  const timers = [];
+  const notice = new ActionNotice({
+    document: doc,
+    setTimer: (fn) => {
+      timers.push(fn);
+      return timers.length;
+    },
+    clearTimer: () => {},
+  });
+  assert.equal(notice.show({ name: 'Bob', action: 'tick' }), false);
+  assert.equal(doc.documentElement.children.length, 0, 'a tick mounts nothing');
+
+  assert.equal(notice.show({ name: 'Bob', action: 'pause' }), true);
+  const host = doc.documentElement.children[0];
+  assert.equal(host.shadowMode, 'closed');
+  assert.equal(host.attributes['data-brosr-notice'], '');
+  assert.equal(host.style.pointerEvents, 'none');
+  assert.equal(host.style.position, 'fixed');
+  assert.equal(host.style.inset, '0');
+  const [node] = notice.shadow.children;
+  assert.equal(node.style.top, '16px');
+  assert.equal(node.style.left, '50%');
+  assert.equal(node.attributes.role, 'status');
+  assert.equal(node.attributes['aria-live'], 'polite');
+  assert.equal(notice.stats().text, 'Bob paused the video');
+  assert.equal(node.style.opacity, '1');
+
+  timers[0]();
+  assert.equal(node.style.opacity, '0');
+  assert.equal(notice.stats().showing, false);
+});
 
 test('the overlay mounts one host inside a closed shadow root', () => {
   const doc = fakeDocument();

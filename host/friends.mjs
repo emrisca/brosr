@@ -121,7 +121,11 @@ export function addFriend({ address, name = '' } = {}) {
     name: cleanName(name, existing ? existing.name : host),
     addedAt: existing ? existing.addedAt : Date.now(),
   };
-  const next = [friend, ...list.filter((entry) => entry.address !== normalized)];
+  // A new friend goes to the top. A rename keeps the row where it is, so the
+  // list does not jump under the person who just edited a name.
+  const next = existing
+    ? list.map((entry) => (entry.address === normalized ? friend : entry))
+    : [friend, ...list];
   writeJson(FRIENDS_FILE, next);
   return friend;
 }

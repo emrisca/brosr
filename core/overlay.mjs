@@ -21,6 +21,168 @@ const ARROW = 'M0 0 L0 19 L5 14.5 L8 21 L11 19.5 L8 13.5 L15 13.5 Z';
 
 const px = (value) => Math.round(value * 10) / 10;
 
+// A room action has a person behind it. The film tab says who paused it for a
+// few seconds, in the same closed shadow root style as the cursor.
+export const NOTICE_MS = 4000;
+// A smaller gap is the tick drift, not a person moving the playhead.
+export const SEEK_NOTICE_SECONDS = 1;
+
+const clock = (seconds) => {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const mins = Math.floor(total / 60);
+  const secs = String(total % 60).padStart(2, '0');
+  const hours = Math.floor(mins / 60);
+  if (hours > 0) return `${hours}:${String(mins % 60).padStart(2, '0')}:${secs}`;
+  return `${mins}:${secs}`;
+};
+
+// The words the notice shows. An unknown action says nothing, so a tick never
+// turns into noise.
+export function actionText({ name, action, position, rate } = {}) {
+  const who = String(name || '').trim();
+  if (!who) return '';
+  if (action === 'play') return `${who} played the video`;
+  if (action === 'pause') return `${who} paused the video`;
+  if (action === 'seek') return `${who} jumped to ${clock(position)}`;
+  if (action === 'rate') return `${who} set the speed to ${Number(rate || 1)}x`;
+  return '';
+}
+
+// The room sends a frame on every tick. Only a change names an action: play or
+// pause when that flag moves, a speed change when the rate moves, and a seek
+// when the playhead lands somewhere the previous frame did not predict.
+export function mediaAction(previous, frame, now = Date.now()) {
+  if (!previous || !frame) return null;
+  if (previous.key && frame.key && previous.key !== frame.key) return null;
+  if (Boolean(previous.playing) !== Boolean(frame.playing)) {
+    return frame.playing ? 'play' : 'pause';
+  }
+  if (Math.abs(Number(previous.rate || 1) - Number(frame.rate || 1)) > 0.01) return 'rate';
+  const age = Math.max(0, Number(now) - Number(previous.at || now)) / 1000;
+  const projected =
+    Number(previous.position || 0) +
+    (previous.playing ? age * Number(previous.rate || 1) : 0);
+  if (Math.abs(Number(frame.position || 0) - projected) > SEEK_NOTICE_SECONDS) return 'seek';
+  return null;
+}
+
+export class ActionNotice {
+  constructor({
+    document,
+    host = null,
+    holdMs = NOTICE_MS,
+    setTimer = (fn, ms) => setTimeout(fn, ms),
+    clearTimer = (id) => clearTimeout(id),
+  } = {}) {
+    if (!document) throw new Error('ActionNotice needs a document');
+    this.document = document;
+    this.host = host;
+    this.holdMs = holdMs;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    this.mounted = false;
+    this.visible = false;
+    this.hostNode = null;
+    this.shadow = null;
+    this.node = null;
+    this.text = null;
+    this.timer = null;
+  }
+
+  attach() {
+    if (this.mounted) return this;
+    const host = this.host || this.document.createElement('div');
+    host.setAttribute('data-brosr-notice', '');
+    Object.assign(host.style, {
+      position: 'fixed',
+      inset: '0',
+      pointerEvents: 'none',
+      zIndex: '2147483647',
+      contain: 'layout style',
+    });
+    this.shadow = host.attachShadow({ mode: 'closed' });
+    const view = this.document.defaultView || null;
+    const reduce = Boolean(
+      view &&
+        typeof view.matchMedia === 'function' &&
+        view.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+    const node = this.document.createElement('div');
+    node.setAttribute('role', 'status');
+    node.setAttribute('aria-live', 'polite');
+    Object.assign(node.style, {
+      position: 'absolute',
+      top: '16px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      maxWidth: '90vw',
+      boxSizing: 'border-box',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      font: "500 13px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      color: '#fff',
+      background: 'rgba(22, 22, 24, 0.9)',
+      padding: '8px 14px',
+      borderRadius: '999px',
+      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.28)',
+      whiteSpace: 'nowrap',
+      opacity: '0',
+      transition: reduce ? 'none' : 'opacity 160ms ease',
+    });
+    const text = this.document.createElement('span');
+    node.appendChild(text);
+    this.shadow.appendChild(node);
+    if (!this.host) this.document.documentElement.appendChild(host);
+    this.hostNode = host;
+    this.node = node;
+    this.text = text;
+    this.mounted = true;
+    return this;
+  }
+
+  show(entry = {}) {
+    const text = actionText(entry);
+    if (!text) return false;
+    this.attach();
+    this.text.textContent = text;
+    this.node.style.opacity = '1';
+    this.visible = true;
+    if (this.timer !== null) this.clearTimer(this.timer);
+    this.timer = this.setTimer(() => this.hide(), this.holdMs);
+    return true;
+  }
+
+  hide() {
+    if (this.timer !== null) {
+      this.clearTimer(this.timer);
+      this.timer = null;
+    }
+    this.visible = false;
+    if (this.node) this.node.style.opacity = '0';
+    return this;
+  }
+
+  destroy() {
+    this.hide();
+    if (this.hostNode && this.hostNode.parentNode) {
+      this.hostNode.parentNode.removeChild(this.hostNode);
+    }
+    this.mounted = false;
+    this.hostNode = null;
+    this.node = null;
+    this.text = null;
+    return this;
+  }
+
+  stats() {
+    return {
+      mounted: this.mounted,
+      showing: this.visible,
+      text: this.text ? this.text.textContent : '',
+    };
+  }
+}
+
 export class CursorOverlay {
   constructor({ document, host = null, smoothing = SMOOTHING_MS } = {}) {
     if (!document) throw new Error('CursorOverlay needs a document');

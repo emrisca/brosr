@@ -16,6 +16,7 @@ import {
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
+import { ActionNotice, mediaAction } from './overlay.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
@@ -92,11 +93,38 @@ async function startPageMedia() {
   const publishRelay = () => {
     document.documentElement.dataset.brosrRelay = JSON.stringify(relay);
   };
+  // A frame that reaches this tab is remote by contract: the room tab drops
+  // this browser's own report before it relays anything. The notice names the
+  // person behind the change, and a skipped frame resets the baseline so the
+  // end of an ad never reads as a person seeking.
+  const notice = new ActionNotice({ document });
+  let lastApplied = null;
   runtime.onMessage.addListener((message) => {
     if (!message || message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
-    relay.last = remote.handle(message);
+    const result = remote.handle(message);
+    relay.last = result;
     publishRelay();
+    if (!result || !result.ok || result.skipped) {
+      lastApplied = null;
+      return undefined;
+    }
+    const action = mediaAction(lastApplied, message);
+    if (action) {
+      notice.show({
+        action,
+        name: message.name || message.from,
+        position: message.position,
+        rate: message.rate,
+      });
+    }
+    lastApplied = {
+      key: message.key,
+      position: Number(message.position || 0),
+      playing: Boolean(message.playing),
+      rate: Number(message.rate || 1),
+      at: Date.now(),
+    };
     return undefined;
   });
 
@@ -371,6 +399,8 @@ export async function start() {
       api.runtime
         .sendMessage({
           type: 'brosr:media-apply',
+          from: message.peerId || null,
+          name: message.name || null,
           key: message.key,
           position: message.expected,
           playing: Boolean(message.playing),

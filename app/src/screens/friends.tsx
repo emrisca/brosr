@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Check, Copy, Send, Trash2, UserPlus } from 'lucide-react';
+import { Check, Copy, Pencil, Send, Trash2, UserPlus, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -41,6 +41,8 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState('');
+  const [draft, setDraft] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -83,6 +85,31 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
       setState(next);
       setAddress('');
       setNotice('Friend added.');
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function rename(friend: FriendsState['friends'][number]) {
+    setEditing(friend.address);
+    setDraft(friend.name);
+    setError('');
+    setNotice('');
+  }
+
+  async function saveName(friend: FriendsState['friends'][number]) {
+    const next = draft.trim();
+    if (!next) return;
+    setBusy(friend.address);
+    setError('');
+    setNotice('');
+    try {
+      setState(await addFriend(friend.address, next));
+      setEditing('');
+      setDraft('');
+      setNotice('Name updated.');
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -245,8 +272,54 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
                 key={friend.address}
                 className="flex items-center justify-between gap-2 rounded-md bg-muted p-1.5"
               >
-                <div className="min-w-0">
-                  <p className="truncate text-sm">{friend.name}</p>
+                <div className="min-w-0 flex-1">
+                  {editing === friend.address ? (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        aria-label={`Name for ${friend.address}`}
+                        maxLength={64}
+                        autoFocus
+                        className="h-7 text-sm"
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') saveName(friend);
+                          if (event.key === 'Escape') setEditing('');
+                        }}
+                      />
+                      <Button
+                        size="xs"
+                        variant="secondary"
+                        onClick={() => saveName(friend)}
+                        disabled={busy === friend.address || !draft.trim()}
+                      >
+                        <Check />
+                        Save
+                      </Button>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label="Cancel the name change"
+                        onClick={() => setEditing('')}
+                        disabled={busy === friend.address}
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <p className="truncate text-sm">{friend.name}</p>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label={`Rename ${friend.name}`}
+                        onClick={() => rename(friend)}
+                        disabled={busy === friend.address}
+                      >
+                        <Pencil />
+                      </Button>
+                    </div>
+                  )}
                   <p className="truncate font-mono text-xs text-muted-foreground">
                     {friend.address}
                   </p>

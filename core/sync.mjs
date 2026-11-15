@@ -427,12 +427,16 @@ export function createRoomClient({
     }
     const expected =
       message.position + (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+    // The notice names a person, not a socket id. The room knows the name the
+    // peer chose when it joined.
+    const actor =
+      (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
     // The host's room tab holds no player. A granted peer drives the film
     // through the tab that does, and the host keeps sending its own anchor.
     if (isHost()) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
@@ -447,7 +451,7 @@ export function createRoomClient({
     if (!read) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;

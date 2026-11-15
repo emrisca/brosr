@@ -101,11 +101,15 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   const peer = createRoomClient({
     role: 'peer',
     peerId: 'brave',
+    name: 'Bob',
     hostId: 'host',
     now: () => local,
     send: (text) => host.receive(text, local),
     overlay: false,
   });
+
+  // The notice names a person, so the host needs the name the peer chose.
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
 
   // The host sees the same film, so only the sender can tell the two apart.
   host.setGrant('brave', true);
@@ -119,6 +123,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   assert.equal(relayed[0].key, KEY);
   assert.equal(relayed[0].playing, true);
   assert.equal(relayed[0].expected, 12);
+  assert.equal(relayed[0].name, 'Bob');
 
   // A host frame for its own film is an echo and never reaches the handler.
   const echo = host.receive(
