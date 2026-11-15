@@ -6,7 +6,7 @@ import { decode, encode } from './protocol.mjs';
 import { ClockEstimator } from './clock.mjs';
 import { DriftController } from './drift.mjs';
 import { MediaAdapter, bufferedAround } from './media.mjs';
-import { CursorOverlay } from './overlay.mjs';
+import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
 import { Room } from './room.mjs';
 import {
   GrantBook,
@@ -118,6 +118,7 @@ export function createRoomClient({
     appReceived: 0,
     appDropped: 0,
     lastApp: null,
+    lastMediaAction: null,
     hostId,
     hostMigrations: 0,
   };
@@ -138,6 +139,8 @@ export function createRoomClient({
   let lastPointer = null;
   // The page that point belongs to. A cursor shows only on that page.
   let lastPointerUrl = null;
+  // The last frame that reached this tab, so a change can be named once.
+  let lastMediaFrame = null;
 
   // The host can change. A room elects a successor when the host leaves, so
   // both the role and the host id stay mutable inside the client.
@@ -431,12 +434,31 @@ export function createRoomClient({
     // peer chose when it joined.
     const actor =
       (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
+    // The panel and the film tab share one reading of the change. The expected
+    // position is what this tab assumes the frame means, so a seek is measured
+    // against the frame that came before it.
+    const action = mediaAction(lastMediaFrame, { ...message, position: expected }, local);
+    lastMediaFrame = {
+      key: message.key,
+      position: expected,
+      playing: Boolean(message.playing),
+      rate: Number(message.rate || 1),
+      at: local,
+    };
+    if (action) {
+      stats.lastMediaAction = {
+        name: actor,
+        action,
+        text: actionText({ name: actor, action, position: expected, rate: message.rate }),
+        at: Math.round(local),
+      };
+    }
     // The host's room tab holds no player. A granted peer drives the film
     // through the tab that does, and the host keeps sending its own anchor.
     if (isHost()) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, name: actor, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
@@ -451,7 +473,7 @@ export function createRoomClient({
     if (!read) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, name: actor, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
@@ -867,6 +889,7 @@ export function createRoomClient({
       lastControl: stats.lastControl,
       controls: stats.controls,
       controlHistory: stats.sentControls,
+      lastMediaAction: stats.lastMediaAction,
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,

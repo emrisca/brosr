@@ -65,6 +65,24 @@ const ytKey = 'youtube:abc123';
 const adRoot = { classList: { contains: (name) => name === 'ad-showing' } };
 const cleanRoot = { classList: { contains: () => false } };
 
+test('a playing room starts a paused film even when the seek cannot land', () => {
+  const video = fakeVideo({ currentTime: 0, paused: true });
+  const now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+  // The anchor is 120 s away, so this tick takes the seek branch. The play has
+  // to land first, or a seek that never settles keeps the film paused and the
+  // room never hears from it again.
+  const result = sync.handle({ key: ytKey, position: 120, playing: true, rate: 1, at: now });
+  assert.equal(result.action, 'seek');
+  assert.equal(video.paused, false);
+  assert.equal(video.plays, 1);
+});
+
 test('a YouTube tab reads its own player and names the film', () => {
   const video = fakeVideo({ currentTime: 12.5, paused: false, volume: 0.8 });
   const state = mediaStateFromDocument(fakeDoc(video, cleanRoot), ytHref, ytHost);
@@ -179,6 +197,21 @@ test('a small gap gets a rate nudge instead of a seek', () => {
   assert.equal(result.action, 'tick');
   assert.ok(Math.abs(video.playbackRate - 1 / 1.05) < 1e-9);
   assert.equal(sync.stats.seeks, 0);
+});
+
+test('a paused room stops a moving video before a drift seek', () => {
+  const video = fakeVideo({ currentTime: 100, paused: false });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+  const result = sync.handle({ key: ytKey, position: 50, playing: false, rate: 1, at: 10000 });
+  assert.equal(video.paused, true);
+  assert.equal(video.pauses, 1);
+  assert.equal(video.currentTime, 50);
+  assert.equal(result.action, 'seek');
 });
 
 test('a tab near the anchor keeps the room rate and follows play and pause', () => {

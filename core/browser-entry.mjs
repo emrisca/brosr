@@ -109,8 +109,8 @@ async function startPageMedia() {
       lastApplied = null;
       return undefined;
     }
-    const action = mediaAction(lastApplied, message);
-    if (action) {
+    const action = message.action || mediaAction(lastApplied, message);
+    if (action && message.notices !== false) {
       notice.show({
         action,
         name: message.name || message.from,
@@ -401,6 +401,7 @@ export async function start() {
           type: 'brosr:media-apply',
           from: message.peerId || null,
           name: message.name || null,
+          action: message.action || null,
           key: message.key,
           position: message.expected,
           playing: Boolean(message.playing),

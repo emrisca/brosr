@@ -125,6 +125,14 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   assert.equal(relayed[0].expected, 12);
   assert.equal(relayed[0].name, 'Bob');
 
+  // A second frame that stops the film names the person and the action, and
+  // the panel reads the same sentence as the film tab.
+  assert.equal(host.publish().lastMediaAction, null);
+  assert.equal(peer.sendMedia({ key: KEY, position: 12, playing: false, rate: 1 }), true);
+  assert.equal(relayed[1].action, 'pause');
+  assert.equal(host.publish().lastMediaAction.name, 'Bob');
+  assert.equal(host.publish().lastMediaAction.text, 'Bob paused the video');
+
   // A host frame for its own film is an echo and never reaches the handler.
   const echo = host.receive(
     encode({ type: 'media', peerId: 'host', key: KEY, action: 'tick', position: 12, playing: true, roomTime: local }),
@@ -132,7 +140,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   );
   assert.equal(echo.ignored, 'self');
   assert.equal(host.stats.mediaEcho, 1);
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 
   // A revoked peer keeps its own playhead.
   host.setGrant('brave', false);
@@ -142,7 +150,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   );
   assert.equal(peer.isGranted(), false);
   assert.equal(peer.sendMedia({ key: KEY, position: 40, playing: false }), false);
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 
   // A late frame from that peer is ignored even if it reaches the host.
   const stale = host.receive(
@@ -150,7 +158,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
     local
   );
   assert.equal(stale.ignored, 'no-grant');
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 });
 
 test('one large drift causes one seek, and the next message does not stack another', () => {

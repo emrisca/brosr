@@ -122,7 +122,7 @@ api.tabs.onRemoved.addListener((id) => {
 // Sharing is host-led. A guest opens what the host announces and never sends
 // its own tabs, so one person's browsing stays private by default.
 const local = api.storage && api.storage.local ? api.storage.local : null;
-const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, granted: false };
+const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, notices: true, granted: false };
 let roomRole = null;
 let prefsLoaded = false;
 
@@ -131,12 +131,13 @@ async function loadPrefs() {
   prefsLoaded = true;
   if (!local) return prefs;
   try {
-    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'granted']);
+    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'notices', 'granted']);
     if (saved) {
       prefs.autoShare = saved.autoShare !== false;
       prefs.muted = saved.muted || {};
       prefs.shared = saved.shared || {};
       prefs.sync = saved.sync !== false;
+      prefs.notices = saved.notices !== false;
       prefs.granted = saved.granted === true;
     }
   } catch {
@@ -363,6 +364,7 @@ async function handle(message, sender) {
       canShare,
       auto: prefs.autoShare,
       sync: prefs.sync,
+      notices: prefs.notices,
       granted: prefs.granted,
       tabs,
     };
@@ -377,6 +379,12 @@ async function handle(message, sender) {
   if (message.type === 'brosr:sync-toggle') {
     await savePrefs({ sync: Boolean(message.on) });
     return { ok: true, sync: prefs.sync };
+  }
+  // The action notice is a choice too. Playback still syncs when it is off;
+  // only the name card in the film tab stays away.
+  if (message.type === 'brosr:notice-toggle') {
+    await savePrefs({ notices: Boolean(message.on) });
+    return { ok: true, notices: prefs.notices };
   }
   if (message.type === 'brosr:tab-share') {
     const tabId = Number(message.tabId);
@@ -553,6 +561,10 @@ async function handle(message, sender) {
         api.tabs
           .sendMessage(id, {
             type: 'brosr:media-apply',
+            from: message.from || null,
+            name: message.name || null,
+            action: message.action || null,
+            notices: prefs.notices,
             key,
             position: message.position,
             playing: Boolean(message.playing),

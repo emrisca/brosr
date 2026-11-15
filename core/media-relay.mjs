@@ -356,6 +356,28 @@ export class RemoteMediaSync {
     const actual = Number(video.currentTime || 0);
     const drift = actual - expected;
 
+    // The room's play or pause comes before any correction. A seek branch that
+    // returns first skips this on every tick, and that is two failures in one:
+    // a paused room left the video moving, and a seek that never landed left
+    // the film paused for the whole room, because the drift stayed large and
+    // every tick returned from the seek. So the room change lands first, and
+    // the seek follows it.
+    if (!frame.playing) {
+      if (!video.paused) video.pause();
+    } else if (video.paused) {
+      const started = video.play();
+      if (started && typeof started.catch === 'function') {
+        // A tab the room opened has no gesture of its own, so the browser can
+        // refuse an unmuted start. Muting is the retry that works, and the
+        // viewer can raise the volume again.
+        started.catch(() => {
+          video.muted = true;
+          const retry = video.play();
+          if (retry && typeof retry.catch === 'function') retry.catch(() => {});
+        });
+      }
+    }
+
     // A paused room has no clock to nudge against. A small gap there is a seek,
     // because a rate change on a paused video only leaves a slow rate behind
     // for the moment the room resumes.
@@ -380,21 +402,6 @@ export class RemoteMediaSync {
 
     // The room leaves the viewer volume alone. A shared playhead does not need
     // a shared volume, and one viewer's headphones are not another's.
-    if (frame.playing && video.paused) {
-      const started = video.play();
-      if (started && typeof started.catch === 'function') {
-        // A tab the room opened has no gesture of its own, so the browser can
-        // refuse an unmuted start. Muting is the retry that works, and the
-        // viewer can raise the volume again.
-        started.catch(() => {
-          video.muted = true;
-          const retry = video.play();
-          if (retry && typeof retry.catch === 'function') retry.catch(() => {});
-        });
-      }
-    }
-    if (!frame.playing && !video.paused) video.pause();
-
     this.stats.applied += 1;
     this.stats.last = 'tick';
     return { ok: true, action: 'tick', drift: Math.round(drift * 1000) / 1000 };

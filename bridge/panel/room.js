@@ -289,6 +289,11 @@ function renderWatch(reply) {
   if (!list) return;
   list.replaceChildren();
   delete copy.title;
+  const action = $('watch-action');
+  if (action) {
+    action.hidden = true;
+    action.textContent = '';
+  }
   if (!media) {
     state.textContent = 'No media';
     delete state.dataset.state;
@@ -319,6 +324,12 @@ function renderWatch(reply) {
   button.title = media.open
     ? 'Bring the film tab to the front'
     : 'Open the film in a new tab';
+
+  const last = data.lastMediaAction;
+  if (action && last && last.text) {
+    action.textContent = last.text;
+    action.hidden = false;
+  }
 
   const peers = Array.isArray(data.peerList) ? data.peerList : [];
   const reports = Array.isArray(data.viewers) ? data.viewers : [];
@@ -690,6 +701,11 @@ function renderTabs() {
   auto.disabled = !canShare;
   auto.checked = Boolean(state && state.auto);
   auto.title = canShare ? 'Send every new tab to the room.' : 'Ask the host for control first.';
+  const noticeBox = $('notice-media');
+  if (noticeBox) {
+    noticeBox.checked = !state || state.notices !== false;
+    noticeBox.disabled = !state;
+  }
   note.hidden = !guest;
   note.textContent = guest ? 'Ask the host for control, then tick a tab.' : '';
   renderSync();
@@ -751,6 +767,7 @@ async function loadTabs() {
         canShare: Boolean(reply.canShare || reply.role === 'host'),
         auto: Boolean(reply.auto),
         sync: reply.sync !== false,
+        notices: reply.notices !== false,
         tabs: Array.isArray(reply.tabs) ? reply.tabs : [],
       };
       renderTabs();
@@ -815,6 +832,29 @@ if (syncBox) {
       const reply = await tabMessage({ type: 'brosr:sync-toggle', on: wanted });
       if (reply && reply.ok) {
         notice(wanted ? 'Playback follows the room.' : 'Playback stays on this browser.');
+        await loadTabs();
+        return;
+      }
+      box.checked = !wanted;
+      notice('The browser did not answer.', true);
+    } catch {
+      box.checked = !wanted;
+      notice('The background page did not answer.', true);
+    }
+    box.disabled = false;
+  });
+}
+
+const noticeToggle = $('notice-media');
+if (noticeToggle) {
+  noticeToggle.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    const wanted = box.checked;
+    box.disabled = true;
+    try {
+      const reply = await tabMessage({ type: 'brosr:notice-toggle', on: wanted });
+      if (reply && reply.ok) {
+        notice(wanted ? 'Action notices are on.' : 'Action notices are off.');
         await loadTabs();
         return;
       }
