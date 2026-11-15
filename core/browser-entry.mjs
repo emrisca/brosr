@@ -124,6 +124,19 @@ function startCursorBridge(send) {
     entry.box.style.top = Math.round(message.y * 1000) / 10 + '%';
   };
 
+  // The point is kept in client pixels, so a resize changes its share even
+  // when the pointer has not moved.
+  let lastAt = null;
+  const publish = () => {
+    if (!lastAt) return;
+    send({
+      type: 'brosr:cursor-out',
+      page: cursorKey(location.href),
+      x: Math.min(1, Math.max(0, lastAt.x / Math.max(1, window.innerWidth))),
+      y: Math.min(1, Math.max(0, lastAt.y / Math.max(1, window.innerHeight))),
+    }).catch(() => {});
+  };
+
   window.addEventListener(
     'pointermove',
     (event) => {
@@ -132,15 +145,13 @@ function startCursorBridge(send) {
       const now = Date.now();
       if (now - last < CURSOR_TICK_MS) return;
       last = now;
-      send({
-        type: 'brosr:cursor-out',
-        page: cursorKey(location.href),
-        x: event.clientX / Math.max(1, window.innerWidth),
-        y: event.clientY / Math.max(1, window.innerHeight),
-      }).catch(() => {});
+      lastAt = { x: event.clientX, y: event.clientY };
+      publish();
     },
     { passive: true }
   );
+
+  window.addEventListener('resize', publish);
 
   setInterval(() => {
     const now = Date.now();

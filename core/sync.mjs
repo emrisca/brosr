@@ -137,6 +137,13 @@ export function createRoomClient({
   // The last trusted pointer position as a share of the viewport. Presence
   // reuses it so a peer sees the mouse, not a placeholder at the origin.
   let lastPointer = null;
+  // The same pointer in raw client pixels. A share of an old window goes stale
+  // the moment that window changes size, so the pixels are kept to work the
+  // share out again.
+  let lastPointerClient = null;
+  // The last point of every peer on this page, as a share. A resize places each
+  // cursor again from these, because the pixels it drew at are gone.
+  const peerPoints = new Map();
   // The page that point belongs to. A cursor shows only on that page.
   let lastPointerUrl = null;
   // The last frame that reached this tab, so a change can be named once.
@@ -427,8 +434,10 @@ export function createRoomClient({
     // that same page, so a pointer never lands on an unrelated tab.
     const here = pageUrl ? pageUrl() : '';
     if (!message.url || !here || message.url !== here) {
+      peerPoints.delete(message.peerId);
       cursor.removePeer(message.peerId);
     } else {
+      peerPoints.set(message.peerId, position);
       cursor.setPeer({ ...position, point: pointPixels(point) });
     }
     stats.cursors = cursor.stats().peers;
@@ -781,6 +790,32 @@ export function createRoomClient({
     });
   }
 
+  // A resize changes what a share means in pixels. This page's pointer keeps
+  // its place in the window, so its share is worked out again, and every peer
+  // cursor is placed again from the share that peer last sent. Without this a
+  // cursor sits where the old window size put it.
+  function resizePointers() {
+    if (lastPointerClient) {
+      const size = viewSize();
+      lastPointer = sharePoint({
+        x: lastPointerClient.x / size.width,
+        y: lastPointerClient.y / size.height,
+      });
+    }
+    if (!cursor) return;
+    const here = pageUrl ? pageUrl() : '';
+    for (const [id, entry] of peerPoints) {
+      if (entry.url && here && entry.url !== here) continue;
+      cursor.setPeer({ ...entry, id, point: pointPixels(entry.point) });
+    }
+  }
+
+  function setupResize() {
+    const view = doc && doc.defaultView;
+    if (!view || typeof view.addEventListener !== 'function') return;
+    view.addEventListener('resize', resizePointers, { passive: true });
+  }
+
   function setupPointer() {
     if (!doc || typeof doc.addEventListener !== 'function') return;
     doc.addEventListener(
@@ -792,10 +827,8 @@ export function createRoomClient({
         const y = Number(event.clientY);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         const size = viewSize();
-        lastPointer = {
-          x: Math.round((x / size.width) * 10000) / 10000,
-          y: Math.round((y / size.height) * 10000) / 10000,
-        };
+        lastPointerClient = { x, y };
+        lastPointer = sharePoint({ x: x / size.width, y: y / size.height });
         lastPointerUrl = pageUrl ? pageUrl() : null;
       },
       { passive: true, capture: true }
@@ -939,6 +972,7 @@ export function createRoomClient({
   }
 
   setupPointer();
+  setupResize();
   setupInput();
 
   if (isHost() && input && input.grantTo) {

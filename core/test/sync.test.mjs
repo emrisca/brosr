@@ -711,6 +711,70 @@ test('a presence share lands the cursor at the same place in any window', () => 
   );
 });
 
+test('a resize moves the cursor with the window instead of leaving it behind', () => {
+  const events = new Map();
+  const on = (type, fn) => {
+    const list = events.get(type) || [];
+    list.push(fn);
+    events.set(type, list);
+  };
+  const fire = (type, event) => {
+    for (const fn of events.get(type) || []) fn(event);
+  };
+  const view = { innerWidth: 1000, innerHeight: 500, addEventListener: on };
+  const document = cursorDocument();
+  document.defaultView = view;
+  document.addEventListener = on;
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document,
+    pageUrl: () => 'https://example.com/',
+    send: (frame) => sent.push(decode(frame)),
+  });
+
+  // The peer sits 40% across and 35% down, which is 400 by 175 here.
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.4, y: 0.35 },
+      url: 'https://example.com/',
+      roomTime: 0,
+    }),
+    0
+  );
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(400px, 175px, 0)'
+  );
+
+  // The window grows. The peer has not moved, so the cursor keeps the same
+  // share of the new window instead of staying at the old pixels.
+  view.innerWidth = 1500;
+  view.innerHeight = 700;
+  fire('resize', {});
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(600px, 245px, 0)'
+  );
+
+  // A local pointer keeps its client pixels, so the share it publishes
+  // follows the window it sits in, even when the mouse has not moved.
+  fire('pointermove', { isTrusted: true, clientX: 500, clientY: 350 });
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 0.3333, y: 0.5 });
+
+  view.innerWidth = 2000;
+  fire('resize', {});
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 0.25, y: 0.5 });
+});
+
 test('presence carries the last trusted pointer position', () => {
   const listeners = new Map();
   const doc = {
