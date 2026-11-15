@@ -192,7 +192,16 @@ async function waitPanelAlone(bidi, timeoutMs = 30000) {
         })`
       ).catch(() => null);
       const state = raw ? JSON.parse(raw) : null;
-      if (state && state.count === '0') return state;
+      if (state && state.count === '0') {
+        // The engine resolves the manifest popup, so this proves a toolbar
+        // click reaches the panel page instead of a URL the build refused.
+        const popup = await evaluate(
+          bidi,
+          panel.context,
+          '(async () => { try { return await browser.browserAction.getPopup({}); } catch (error) { return String((error && error.message) || error); } })()'
+        ).catch(() => null);
+        return { ...state, popup };
+      }
     }
     await sleep(300);
   }
@@ -797,6 +806,9 @@ async function main() {
     }
     if (!String(alone.empty).includes('No peers in this room yet.')) {
       throw new Error(`the empty list reads ${alone.empty}`);
+    }
+    if (!String(alone.popup || '').endsWith('panel/room.html?surface=popup')) {
+      throw new Error(`the toolbar popup resolves to ${alone.popup}`);
     }
 
 
