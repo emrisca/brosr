@@ -770,6 +770,10 @@ Newest first. Each line names what changed, not what was planned.
   custom drawing surface with five brushes, a stabilizer, symmetry, two layers, undo and a
   PNG export. No page loads a font or a script from the network.
 
+- **15 November 2026.** Landing page and Canvas on the wire. The room tab opens a tile grid for
+  the apps built for Brosr. Canvas shares its strokes, its undo and its clear as app frames on
+  the room, and the landing page reads the live count from /status.
+
 - **15 November 2026.** Other-site media. A blob, an HLS manifest or a cross-origin player now
   names a film by its page, and the bridge runs in every frame so an embedded player reaches the
   room. A host command copies one site's login into the guest browser over the local debug port,
@@ -797,6 +801,8 @@ grid of apps built for a shared browser, with the room already running behind it
 A static page served by the relay at `/`. It loads no font and no script from the network,
 so it opens on a loopback room with no internet. It is a grid of tiles, one per app. Each
 tile names the app, says what it does in one line, and shows a state: Live, Soon or Slot.
+The room line reads `/status` every five seconds and names how many pages are open, so the
+header shows a live room rather than a claim about one.
 
 A tile is a link when the app exists and a plain card when it does not, so the page never
 offers a door that goes nowhere. The page follows the app tokens: the same warm clay accent,
@@ -838,6 +844,9 @@ Brosr, with no embed and no dependency.
   empty.
 - Export. PNG at twice the sheet size.
 - Navigation. Space drags the sheet, the wheel zooms at the pointer, and Fit frames the page.
+- Room. Strokes reach every page over one WebSocket. Undo, redo and clear travel as stroke ids,
+  so every copy ends in the same state. A page that joins late asks for the sheet and receives
+  the strokes it missed.
 
 Keys: B, I, M, A, E, L, R and O pick a tool. Bracket keys change the width. Cmd Z undoes and
 Cmd Shift Z redoes.
@@ -847,8 +856,5 @@ room opens it with no build step.
 
 ### 19.4 What comes next on the page
 
-1. A room line with the live peer count from /status, instead of the static state.
-2. A tile that turns any URL into a room page, so the grid covers a site we did not build.
-3. A shared cursor on the landing page, so a person can point at the tile to open.
-4. Canvas strokes on the wire. The drawing model is a list of strokes with a tool and a
-   layer, which is the shape the input layer already relays.
+1. A tile that turns any URL into a room page, so the grid covers a site we did not build.
+2. A shared cursor on the landing page, so a person can point at the tile to open.

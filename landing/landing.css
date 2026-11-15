@@ -130,6 +130,11 @@ body {
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 22%, transparent);
 }
 
+.room-state.is-offline .dot {
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--muted) 22%, transparent);
+}
+
 .page {
   width: 100%;
   max-width: 1180px;

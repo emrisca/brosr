@@ -19,7 +19,10 @@
       </svg>
       <span class="brand-name">Brosr</span>
     </div>
-    <p class="room-state"><span class="dot" aria-hidden="true"></span>Room open on this device</p>
+    <p class="room-state" id="room-state">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="room-state-text">Room open on this device</span>
+    </p>
   </header>
 
   <main class="page">
@@ -160,5 +163,45 @@
   <footer class="foot">
     <p>A room stays on your own network. The relay forwards frames and keeps nothing.</p>
   </footer>
+
+  <script>
+    // The relay already answers /status, so the page reads the live count with
+    // no new transport. A room with nobody in it is a normal state, not an
+    // error, and a failed read only means the page is on its own.
+    (function () {
+      var text = document.getElementById('room-state-text');
+      var box = document.getElementById('room-state');
+      var room = new URLSearchParams(location.search).get('room') || 'default';
+
+      function render(peers) {
+        box.classList.toggle('is-offline', peers === null);
+        if (peers === null) {
+          text.textContent = 'Room status is offline';
+        } else if (peers === 0) {
+          text.textContent = 'No app is open in this room yet';
+        } else if (peers === 1) {
+          text.textContent = '1 app open in this room';
+        } else {
+          text.textContent = peers + ' apps open in this room';
+        }
+      }
+
+      function read() {
+        fetch('/status?room=' + encodeURIComponent(room), { cache: 'no-store' })
+          .then(function (res) {
+            return res.ok ? res.json() : Promise.reject(new Error('status'));
+          })
+          .then(function (body) {
+            render(Number(body.peers) || 0);
+          })
+          .catch(function () {
+            render(null);
+          });
+      }
+
+      read();
+      setInterval(read, 5000);
+    })();
+  </script>
 </body>
 </html>

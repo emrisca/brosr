@@ -1,6 +1,6 @@
 'use strict';
 // Canvas. A paper sheet drawn on one canvas, with a small stroke model so undo,
-// symmetry, layers and a PNG export all read from the same record.
+// symmetry, layers, the room and a PNG export all read from the same record.
 
 const PAPER = { width: 2400, height: 1600 };
 const PAPER_COLOUR = '#faf7f2';
@@ -39,6 +39,26 @@ let dpr = 1;
 let drawing = null;
 let panning = null;
 let spaceDown = false;
+
+// The room. One WebSocket to the relay, app frames only, JSON like the rest of
+// the wire. A stroke is a list of points, so it travels as one message.
+const ROOM = new URLSearchParams(location.search).get('room') || 'default';
+const PEER = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 8);
+const PART_POINTS = 300;
+const MAX_POINTS = 20000;
+const room = {
+  socket: null,
+  peers: 0,
+  retry: null,
+  received: new Map(),
+  seen: new Set(),
+};
+let strokeCount = 0;
+
+function nextStrokeId() {
+  strokeCount += 1;
+  return PEER + '-' + strokeCount;
+}
 
 const viewport = document.getElementById('viewport');
 const canvas = document.getElementById('sheet');
@@ -255,24 +275,28 @@ function toWorld(event) {
 // ---------------------------------------------------------------------------
 // History
 
-function removeStroke(stroke) {
-  const list = state.layers[stroke.layer].strokes;
-  const index = list.lastIndexOf(stroke);
-  if (index >= 0) list.splice(index, 1);
+function addStroke(stroke) {
+  state.layers[stroke.layer].strokes.push(stroke);
+  room.seen.add(stroke.id);
 }
 
-function swapLayers(snapshot) {
-  const current = state.layers.map((layer) => layer.strokes.slice());
-  state.layers.forEach((layer, index) => {
-    layer.strokes = snapshot[index].slice();
-  });
-  return current;
+function removeById(id) {
+  let removed = false;
+  for (const layer of state.layers) {
+    const index = layer.strokes.findIndex((stroke) => stroke.id === id);
+    if (index >= 0) {
+      layer.strokes.splice(index, 1);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 function commit(stroke) {
-  state.layers[stroke.layer].strokes.push(stroke);
+  addStroke(stroke);
   state.history.push({ kind: 'add', stroke });
   state.redo.length = 0;
+  sendStroke(stroke);
   showHistory();
 }
 
@@ -280,10 +304,15 @@ function undo() {
   const op = state.history.pop();
   if (!op) return;
   if (op.kind === 'add') {
-    removeStroke(op.stroke);
+    removeById(op.stroke.id);
+    sendRemove(op.stroke);
     state.redo.push(op);
   } else {
-    state.redo.push({ kind: 'swap', snapshot: swapLayers(op.snapshot) });
+    for (const stroke of op.strokes) {
+      addStroke(stroke);
+      sendStroke(stroke);
+    }
+    state.redo.push({ kind: 'clear', strokes: op.strokes.slice() });
   }
   redraw();
   showHistory();
@@ -293,10 +322,15 @@ function redo() {
   const op = state.redo.pop();
   if (!op) return;
   if (op.kind === 'add') {
-    state.layers[op.stroke.layer].strokes.push(op.stroke);
+    addStroke(op.stroke);
+    sendStroke(op.stroke);
     state.history.push(op);
   } else {
-    state.history.push({ kind: 'swap', snapshot: swapLayers(op.snapshot) });
+    for (const stroke of op.strokes) {
+      removeById(stroke.id);
+      sendRemove(stroke);
+    }
+    state.history.push({ kind: 'clear', strokes: op.strokes.slice() });
   }
   redraw();
   showHistory();
@@ -308,11 +342,173 @@ function showHistory() {
 }
 
 // ---------------------------------------------------------------------------
+// Room
+
+function setRoomState(text, bad) {
+  const node = document.getElementById('room-state');
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle('is-offline', Boolean(bad));
+}
+
+function send(data) {
+  if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
+  room.socket.send(JSON.stringify({ v: 1, type: 'app', peerId: PEER, name: 'canvas', data }));
+}
+
+function wirePoint(point) {
+  return { x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 };
+}
+
+function sendStroke(stroke) {
+  const parts = Math.max(1, Math.ceil(stroke.points.length / PART_POINTS));
+  for (let part = 0; part < parts; part++) {
+    send({
+      op: 'stroke',
+      id: stroke.id,
+      layer: stroke.layer,
+      tool: stroke.tool,
+      colour: stroke.colour,
+      size: stroke.size,
+      opacity: stroke.opacity,
+      symmetry: stroke.symmetry,
+      part,
+      parts,
+      points: stroke.points.slice(part * PART_POINTS, (part + 1) * PART_POINTS).map(wirePoint),
+    });
+  }
+}
+
+function sendRemove(stroke) {
+  send({ op: 'remove', id: stroke.id });
+}
+
+// A frame from the wire is untrusted. Anything that is not a stroke this app
+// can paint is dropped, not repaired.
+function cleanStroke(data) {
+  if (!data || typeof data.id !== 'string' || !data.id || data.id.length > 80) return null;
+  const layer = Number(data.layer);
+  if (!Number.isInteger(layer) || layer < 0 || layer >= state.layers.length) return null;
+  if (!PRESETS[data.tool]) return null;
+  if (typeof data.colour !== 'string' || !/^#[0-9a-f]{6}$/i.test(data.colour)) return null;
+  const size = Number(data.size);
+  const opacity = Number(data.opacity);
+  if (!Number.isFinite(size) || size <= 0 || size > 200) return null;
+  if (!Number.isFinite(opacity) || opacity <= 0 || opacity > 1) return null;
+  if (!['off', 'vertical', 'horizontal', 'quad'].includes(data.symmetry)) return null;
+  return {
+    id: data.id,
+    layer,
+    tool: data.tool,
+    colour: data.colour,
+    size,
+    opacity,
+    symmetry: data.symmetry,
+    points: [],
+  };
+}
+
+function handle(data) {
+  if (!data || typeof data !== 'object') return;
+
+  if (data.op === 'stroke') {
+    const stroke = cleanStroke(data);
+    if (!stroke) return;
+    if (room.seen.has(stroke.id)) return;
+    if (!Number.isInteger(data.part) || !Number.isInteger(data.parts) || data.parts < 1) return;
+    if (data.part < 0 || data.part >= data.parts) return;
+
+    if (data.part === 0) {
+      if (!Array.isArray(data.points)) return;
+      room.received.set(stroke.id, stroke);
+    }
+    const held = room.received.get(stroke.id);
+    if (!held) return;
+    if (Array.isArray(data.points)) {
+      for (const point of data.points) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+        if (held.points.length >= MAX_POINTS) break;
+        held.points.push({ x: point.x, y: point.y });
+      }
+    }
+    if (data.part === data.parts - 1) {
+      room.received.delete(stroke.id);
+      if (held.points.length > 1) {
+        addStroke(held);
+        redraw();
+      }
+    }
+    return;
+  }
+
+  if (data.op === 'remove' && typeof data.id === 'string') {
+    if (removeById(data.id)) redraw();
+    return;
+  }
+
+  if (data.op === 'sync') {
+    // A page that just joined asks for the sheet. Every page answers with the
+    // strokes it holds, and a stroke id already on the sheet is ignored.
+    for (const layer of state.layers) {
+      for (const stroke of layer.strokes) sendStroke(stroke);
+    }
+  }
+}
+
+function connect() {
+  if (!/^https?:$/.test(location.protocol)) return;
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const socket = new WebSocket(
+    scheme + '://' + location.host + '/room?room=' + encodeURIComponent(ROOM)
+  );
+  room.socket = socket;
+
+  socket.addEventListener('open', () => {
+    send({ op: 'sync' });
+    readPeers();
+  });
+  socket.addEventListener('message', (event) => {
+    let frame;
+    try {
+      frame = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (!frame || frame.type !== 'app' || frame.name !== 'canvas') return;
+    if (frame.peerId === PEER) return;
+    handle(frame.data);
+  });
+  socket.addEventListener('close', () => {
+    room.socket = null;
+    setRoomState('Solo', true);
+    clearTimeout(room.retry);
+    room.retry = setTimeout(connect, 2000);
+  });
+  socket.addEventListener('error', () => socket.close());
+}
+
+function readPeers() {
+  fetch('/status?room=' + encodeURIComponent(ROOM), { cache: 'no-store' })
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error('status'))))
+    .then((body) => {
+      const peers = Number(body.peers) || 0;
+      room.peers = peers;
+      setRoomState(peers + (peers === 1 ? ' page in the room' : ' pages in the room'));
+    })
+    .catch(() => setRoomState('Solo', true));
+}
+
+setInterval(() => {
+  if (room.socket) readPeers();
+}, 5000);
+
+// ---------------------------------------------------------------------------
 // Pointer
 
 function startStroke(point) {
   drawing = {
     stroke: {
+      id: nextStrokeId(),
       tool: state.preset,
       colour: state.colour,
       size: state.size,
@@ -502,14 +698,14 @@ document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
 
 document.getElementById('clear').addEventListener('click', () => {
-  const empty = state.layers.every((layer) => layer.strokes.length === 0);
-  if (empty) return;
-  const snapshot = state.layers.map((layer) => layer.strokes.slice());
+  const strokes = state.layers.flatMap((layer) => layer.strokes.slice());
+  if (!strokes.length) return;
   state.layers.forEach((layer) => {
     layer.strokes = [];
   });
-  state.history.push({ kind: 'swap', snapshot });
+  state.history.push({ kind: 'clear', strokes });
   state.redo.length = 0;
+  for (const stroke of strokes) sendRemove(stroke);
   redraw();
   showHistory();
 });
@@ -606,3 +802,4 @@ setPreset('pencil');
 setColour('#1c1a17');
 showLayerState();
 showHistory();
+connect();

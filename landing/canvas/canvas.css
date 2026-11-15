@@ -355,6 +355,14 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.status #room-state {
+  color: var(--fg);
+}
+
+.status #room-state.is-offline {
+  color: var(--muted);
+}
+
 .status .hint {
   margin-left: auto;
 }
