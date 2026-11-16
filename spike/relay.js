@@ -160,6 +160,14 @@ const server = http.createServer((req, res) => {
     serve(path.join(__dirname, '..', 'landing', 'canvas', name), res);
     return;
   }
+  if (url.pathname === '/chess' || url.pathname.startsWith('/chess/')) {
+    const name =
+      url.pathname === '/chess' || url.pathname === '/chess/'
+        ? 'index.html'
+        : path.basename(url.pathname);
+    serve(path.join(__dirname, '..', 'landing', 'chess', name), res);
+    return;
+  }
   const file = path.join(ROOT, url.pathname);
   if (!file.startsWith(ROOT)) {
     res.writeHead(403);

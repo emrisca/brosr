@@ -169,6 +169,9 @@ for (const required of [
   'spike/fixtures/sync.html',
   'landing/index.html',
   'landing/canvas/canvas.js',
+  'landing/chess/index.html',
+  'landing/chess/chess.js',
+  'landing/chess/chess-engine.mjs',
 ]) {
   if (!fs.existsSync(path.join(out, required))) stop(`staged tree lacks ${required}`);
 }

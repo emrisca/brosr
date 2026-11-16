@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chess, Brosr</title>
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+  <link rel="stylesheet" href="./chess.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" href="../">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span>Brosr</span>
+    </a>
+    <h1>Chess</h1>
+    <div class="actions">
+      <span id="room-state" class="room-state" data-state="connecting">Connecting</span>
+      <button id="open-seat" type="button" class="ghost" hidden>Open seat</button>
+      <button id="new-game" type="button" class="ghost" hidden>New game</button>
+      <button id="flip" type="button" class="ghost">Flip</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="board-column" aria-labelledby="board-title">
+      <h2 id="board-title" class="sr-only">Chess board</h2>
+      <div class="board-shell">
+        <div id="board" class="board" role="grid" aria-label="Chess board"></div>
+        <div id="promotion" class="promotion" hidden>
+          <p>Promote to</p>
+          <div class="promotion-options">
+            <button type="button" data-promotion="q" aria-label="Queen">&#9819;</button>
+            <button type="button" data-promotion="r" aria-label="Rook">&#9820;</button>
+            <button type="button" data-promotion="b" aria-label="Bishop">&#9815;</button>
+            <button type="button" data-promotion="n" aria-label="Knight">&#9816;</button>
+          </div>
+          <button id="promotion-cancel" type="button" class="promotion-cancel">Cancel</button>
+        </div>
+      </div>
+      <p id="status" class="status" aria-live="polite">Connecting to the room.</p>
+    </section>
+
+    <aside class="panel" aria-label="Game state">
+      <section class="players" aria-label="Players">
+        <div id="white-player" class="player">
+          <span class="player-piece white" aria-hidden="true">&#9818;</span>
+          <div class="player-copy">
+            <span class="player-side">White</span>
+            <span id="white-name" class="player-name">Host</span>
+          </div>
+          <span id="white-you" class="you" hidden>You</span>
+        </div>
+        <div id="black-player" class="player">
+          <span class="player-piece black" aria-hidden="true">&#9818;</span>
+          <div class="player-copy">
+            <span class="player-side">Black</span>
+            <span id="black-name" class="player-name">Open</span>
+          </div>
+          <span id="black-you" class="you" hidden>You</span>
+        </div>
+      </section>
+
+      <section class="turns" aria-labelledby="moves-title">
+        <div class="moves-head">
+          <h2 id="moves-title">Moves</h2>
+          <span id="move-count" class="move-count">0</span>
+        </div>
+        <ol id="moves" class="moves" aria-label="Move list"></ol>
+      </section>
+
+      <p id="hint" class="hint">Share the room invite. The first guest takes Black.</p>
+    </aside>
+  </main>
+
+  <script type="module" src="./chess.js"></script>
+</body>
+</html>

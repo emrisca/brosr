@@ -55,17 +55,23 @@ fn project_root() -> PathBuf {
         }
     }
 
-    let resources = std::env::current_exe()
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("..").join("Resources")));
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(resources) = &resources {
-        // The bundler keeps the path relative to src-tauri, so a staged tree
-        // lands under resources/. A mapping that strips the prefix is also
-        // accepted, and both are checked.
-        candidates.push(resources.join("resources"));
-        candidates.push(resources.clone());
+    if let Some(dir) = &exe_dir {
+        // Windows and Linux keep the staged tree beside the executable. The
+        // macOS bundle keeps it in Contents/Resources, one level above the
+        // executable in Contents/MacOS. Check the side-by-side path first,
+        // because that is the layout an installed Windows build uses.
+        candidates.push(dir.join("resources"));
+        let mac_resources = dir.join("..").join("Resources");
+        candidates.push(mac_resources.join("resources"));
+        candidates.push(mac_resources);
+        // A bundle that strips the resource prefix still resolves here.
+        candidates.push(dir.join("Resources").join("resources"));
+        candidates.push(dir.join("Resources"));
     }
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if let Some(root) = here.parent().and_then(|app| app.parent()) {
@@ -78,7 +84,7 @@ fn project_root() -> PathBuf {
         }
     }
 
-    resources.unwrap_or(here)
+    exe_dir.map(|dir| dir.join("resources")).unwrap_or(here)
 }
 
 fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {

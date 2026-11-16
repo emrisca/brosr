@@ -256,6 +256,10 @@ a {
 .tile-play {
   grid-column: 2;
   grid-row: 1;
+  justify-content: space-between;
+  background:
+    radial-gradient(80% 100% at 100% 0%, color-mix(in oklch, var(--brand) 4%, transparent), transparent 68%),
+    var(--card);
 }
 
 .tile-canvas {
@@ -365,6 +369,7 @@ a {
   transition: transform 200ms ease;
 }
 
+.tile-play:hover .tile-open svg,
 .tile-canvas:hover .tile-open svg,
 .tile-notes:hover .tile-open svg {
   transform: translate(2px, -2px);

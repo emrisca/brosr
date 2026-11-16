@@ -122,7 +122,7 @@
         </div>
       </article>
 
-      <article class="tile tile-play" aria-labelledby="play-title">
+      <a class="tile tile-play" href="./chess/" target="_blank" rel="noopener" aria-labelledby="play-title">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -132,24 +132,17 @@
             </span>
             <div class="tile-copy">
               <h2 class="tile-name" id="play-title">Play</h2>
-              <p class="tile-note">Chess, then more board games.</p>
+              <p class="tile-note">Chess with both players at one board.</p>
             </div>
           </div>
-          <span class="tile-state">Soon</span>
         </div>
-        <div class="site-list">
-          <a class="site" href="https://www.chess.com/play/online" target="_blank" rel="noopener noreferrer">
-            <span class="site-copy">
-              <span class="site-name">Chess</span>
-              <span class="site-host">chess.com</span>
-            </span>
-            <span class="site-status">Soon</span>
-            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-              <path d="M7 17 17 7M8 7h9v9"></path>
-            </svg>
-          </a>
-        </div>
-      </article>
+        <span class="tile-open">
+          Open chess
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M7 17 17 7M8 7h9v9"></path>
+          </svg>
+        </span>
+      </a>
 
       <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title">
         <div class="tile-head">
@@ -403,7 +396,7 @@
     (function () {
       var carry = location.search + location.hash;
       if (!carry) return;
-      var links = document.querySelectorAll('a.tile-canvas, a.tile-notes');
+      var links = document.querySelectorAll('a.tile-play, a.tile-canvas, a.tile-notes');
       for (var i = 0; i < links.length; i += 1) {
         links[i].href = links[i].getAttribute('href') + carry;
       }

@@ -60,10 +60,6 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
         <div className="flex flex-col gap-2 rounded-md bg-muted p-2.5">
           <p className="text-sm font-medium">The scan did not finish</p>
           <p className="text-xs text-muted-foreground">{error}</p>
-          <Button variant="secondary" size="sm" onClick={scan} className="self-start">
-            <RotateCw />
-            Scan again
-          </Button>
         </div>
       ) : null}
 
@@ -71,12 +67,8 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
         <div className="flex flex-col gap-2 rounded-md bg-muted p-2.5">
           <p className="text-sm font-medium">No browser found</p>
           <p className="max-w-[46ch] text-xs text-muted-foreground">
-            Install Firefox, Zen, Brave or Chromium, then scan again.
+            Install Firefox, Zen, Brave or Chromium, then use Rescan.
           </p>
-          <Button variant="secondary" size="sm" onClick={scan} className="self-start">
-            <RotateCw />
-            Scan again
-          </Button>
         </div>
       ) : null}
 
