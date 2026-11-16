@@ -70,117 +70,9 @@ function cursorKey(href) {
   }
 }
 
-const CURSOR_APP = 'cursor';
-const CURSOR_TICK_MS = 80;
-const CURSOR_TTL_MS = 3000;
-
-function startCursorBridge(send) {
-  const runtime = api && api.runtime;
-  if (!runtime || !runtime.onMessage || window.__brosrCursors) return;
-  // A page that draws its own cursors says so in its head. One owner per page
-  // keeps a second dot from landing beside the first.
-  if (document.querySelector('meta[name="brosr-cursors"][content="page"]')) return;
-  window.__brosrCursors = true;
-
-  let layer = null;
-  let last = 0;
-  const held = new Map();
-
-  const layerFor = () => {
-    if (layer && layer.isConnected) return layer;
-    layer = document.createElement('div');
-    layer.id = 'brosr-cursors';
-    layer.setAttribute('aria-hidden', 'true');
-    layer.style.cssText =
-      'position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:2147483646';
-    document.documentElement.append(layer);
-    return layer;
-  };
-
-  const draw = (message) => {
-    const id = String(message.from || message.name || 'peer');
-    let entry = held.get(id);
-    if (!entry) {
-      const box = document.createElement('div');
-      box.style.cssText =
-        'position:absolute;transform:translate(-50%,-50%);' +
-        'transition:left 80ms linear,top 80ms linear';
-      const dot = document.createElement('div');
-      dot.style.cssText =
-        'width:9px;height:9px;border-radius:50%;background:#3f86e2;' +
-        'box-shadow:0 0 0 2px rgb(255 255 255 / 70%)';
-      const label = document.createElement('div');
-      label.style.cssText =
-        'position:absolute;left:12px;top:-3px;padding:1px 5px;border-radius:4px;' +
-        'background:rgb(0 0 0 / 80%);color:#fff;white-space:nowrap;' +
-        'font:11px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif';
-      box.append(dot, label);
-      layerFor().append(box);
-      entry = { box, label, at: 0 };
-      held.set(id, entry);
-    }
-    entry.at = Date.now();
-    entry.label.textContent = String(message.name || '').slice(0, 24);
-    entry.box.style.left = Math.round(message.x * 1000) / 10 + '%';
-    entry.box.style.top = Math.round(message.y * 1000) / 10 + '%';
-  };
-
-  // The point is kept in client pixels, so a resize changes its share even
-  // when the pointer has not moved.
-  let lastAt = null;
-  const publish = () => {
-    if (!lastAt) return;
-    send({
-      type: 'brosr:cursor-out',
-      page: cursorKey(location.href),
-      x: Math.min(1, Math.max(0, lastAt.x / Math.max(1, window.innerWidth))),
-      y: Math.min(1, Math.max(0, lastAt.y / Math.max(1, window.innerHeight))),
-    }).catch(() => {});
-  };
-
-  window.addEventListener(
-    'pointermove',
-    (event) => {
-      if (!document.hasFocus() || document.visibilityState !== 'visible') return;
-      if (event.clientX < 0 || event.clientY < 0) return;
-      const now = Date.now();
-      if (now - last < CURSOR_TICK_MS) return;
-      last = now;
-      lastAt = { x: event.clientX, y: event.clientY };
-      publish();
-    },
-    { passive: true }
-  );
-
-  window.addEventListener('resize', publish);
-
-  setInterval(() => {
-    const now = Date.now();
-    for (const [id, entry] of held) {
-      if (now - entry.at <= CURSOR_TTL_MS) continue;
-      entry.box.remove();
-      held.delete(id);
-    }
-  }, 1000);
-
-  runtime.onMessage.addListener((message) => {
-    if (!message || message.type !== 'brosr:cursor-draw') return undefined;
-    const x = Number(message.x);
-    const y = Number(message.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
-    draw({ ...message, x, y });
-    return undefined;
-  });
-}
-
 // A tab outside the room can still hold the film, and the room tab holds the
-// socket. Media and one cursor cross that gap. A cursor on a page the room did
-// not open goes nowhere, because the background sends it only to tabs that show
-// that page.
-
-// A shared tab has no socket, so the room tab carries its pointer. The page
-// reports fractions of its viewport, so one point lands in the same place on
-// two window sizes, and an overlay draws what the room sends back.
+// socket. Only media crosses that gap. A cursor stays in the room tab, because
+// a pointer on a page the room did not open points at nothing.
 async function startPageMedia() {
   const runtime = api && api.runtime;
   if (!runtime || typeof runtime.sendMessage !== 'function' || !runtime.onMessage) {
@@ -262,10 +154,6 @@ async function startPageMedia() {
     publishRelay();
     send({ type: 'brosr:media-out', state }).catch(() => {});
   }, RELAY_TICK_MS);
-
-  // A cursor inside an embedded frame belongs to that frame, so only the top
-  // page reports one or draws one.
-  if (window.top === window) startCursorBridge(send);
 
   return { started: true, role: 'media', room: null, peerId: null };
 }
@@ -475,24 +363,6 @@ export async function start() {
           viewer: data.viewer && typeof data.viewer === 'object' ? data.viewer : null,
           at: Number(data.at || Date.now()),
         });
-        return;
-      }
-      // A cursor rides the app channel under its own name. The room tab hands
-      // it to the browser, which knows which tabs show that page.
-      if (message.name === CURSOR_APP) {
-        if (message.from === peerId) return;
-        const data = message.data && typeof message.data === 'object' ? message.data : {};
-        if (!api || !api.runtime || !api.runtime.sendMessage) return;
-        api.runtime
-          .sendMessage({
-            type: 'brosr:cursor-apply',
-            page: String(data.page || ''),
-            x: Number(data.x),
-            y: Number(data.y),
-            name: String(data.name || message.from || ''),
-            from: String(message.from || ''),
-          })
-          .catch(() => {});
         return;
       }
       // Tabs need the browser, so this side asks its own background instead of
@@ -974,17 +844,6 @@ export async function start() {
         // tab only has to put it on the socket under this peer's id.
         if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
         return reply({ ok: client.sendMedia(state), granted: true });
-      }
-      if (message.type === 'brosr:cursor-send') {
-        // A shared tab moved its pointer. The room only needs the page, the
-        // point and who it belongs to.
-        client.sendApp(CURSOR_APP, {
-          page: String(message.page || ''),
-          x: Number(message.x),
-          y: Number(message.y),
-          name,
-        });
-        return reply({ ok: true });
       }
       if (message.type === 'brosr:tabs-announce') {
         // The background saw a tab this person chose to share. It goes out on

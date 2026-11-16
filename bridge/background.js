@@ -44,44 +44,6 @@ function shareable(url) {
   }
 }
 
-// A cursor belongs to a page, and two copies of one page sit at different
-// addresses because of the room params. The key drops those, and it stays in
-// step with cursorKey() in core/browser-entry.mjs.
-const CURSOR_PARAMS = [
-  'role',
-  'peer',
-  'host',
-  'room',
-  'name',
-  'bias',
-  'relay',
-  'panel',
-  'selftest',
-  'capture',
-  'grant',
-];
-function cursorKey(href) {
-  try {
-    const url = new URL(String(href || ''));
-    for (const key of CURSOR_PARAMS) url.searchParams.delete(key);
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return '';
-  }
-}
-
-// A pointer moves far more often than a room needs. One tab can send at most
-// every 60 ms, which keeps a tab drag from flooding the worker.
-const CURSOR_MS = 60;
-const cursorAt = new Map();
-function cursorAllowed(tabId) {
-  const now = Date.now();
-  if (now - (cursorAt.get(tabId) || 0) < CURSOR_MS) return false;
-  cursorAt.set(tabId, now);
-  return true;
-}
-
 const text = (error) => String((error && error.message) || error);
 
 // The live copy is the fast path. Storage is the copy that survives a worker
@@ -545,53 +507,6 @@ async function handle(message, sender) {
     } finally {
       opening.delete(slot);
     }
-  }
-  // A shared tab reports its pointer. The room tab holds the socket, so the
-  // point goes there and the room puts it on the wire under this peer.
-  if (message.type === 'brosr:cursor-out') {
-    const from = sender && sender.tab ? sender.tab.id : null;
-    const page = cursorKey(message.page);
-    const x = Number(message.x);
-    const y = Number(message.y);
-    if (!validId(from) || !page || !Number.isFinite(x) || !Number.isFinite(y)) {
-      return { ok: false, reason: 'cursor' };
-    }
-    if (!cursorAllowed(from)) return { ok: true, skipped: 'rate' };
-    const id = await roomTab();
-    if (!validId(id) || id === from) return { ok: false, reason: 'no-room' };
-    api.tabs
-      .sendMessage(id, { type: 'brosr:cursor-send', page, x, y })
-      .catch(() => {});
-    return { ok: true };
-  }
-  // A cursor from the room reaches the tabs that show that page and no others,
-  // because a dot on a different page points at nothing.
-  if (message.type === 'brosr:cursor-apply') {
-    const page = cursorKey(message.page);
-    const x = Number(message.x);
-    const y = Number(message.y);
-    if (!page || !Number.isFinite(x) || !Number.isFinite(y)) {
-      return { ok: false, reason: 'cursor' };
-    }
-    const name = String(message.name || '').slice(0, 24);
-    const from = String(message.from || '');
-    const seen = await state();
-    const all = await api.tabs.query({}).catch(() => []);
-    for (const tab of all) {
-      if (!validId(tab.id) || tab.id === seen.roomTabId) continue;
-      if (cursorKey(tab.url) !== page) continue;
-      api.tabs
-        .sendMessage(tab.id, {
-          type: 'brosr:cursor-draw',
-          page,
-          x: Math.max(0, Math.min(1, x)),
-          y: Math.max(0, Math.min(1, y)),
-          name,
-          from,
-        })
-        .catch(() => {});
-    }
-    return { ok: true };
   }
   if (message.type === 'brosr:tab-status') {
     const id = await roomTab();

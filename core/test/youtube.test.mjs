@@ -10,7 +10,7 @@ import {
   playerKey,
   videoIdOf,
 } from '../youtube.mjs';
-import { isYouTubeHost } from '../media-relay.mjs';
+import { isYouTubeHost, mediaStateFromDocument } from '../media-relay.mjs';
 
 function fakePlayer({
   time = 0,
@@ -98,6 +98,36 @@ test('the music host is its own name, and both forms of address agree', () => {
   assert.equal(hostOf('Music.YouTube.com.'), 'music.youtube.com');
   assert.equal(isYouTubeHost('https://music.youtube.com/watch?v=abc123'), true);
   assert.equal(isYouTubeHost('https://notyoutube.com/watch?v=abc123'), false);
+});
+
+test('the music host reads a track and its ad from the page element', () => {
+  const video = {
+    currentSrc: 'blob:https://music.youtube.com/9d0f',
+    currentTime: 12.5,
+    duration: 210,
+    paused: false,
+    ended: false,
+    playbackRate: 1,
+    volume: 0.8,
+    readyState: 4,
+  };
+  const doc = {
+    querySelector(selector) {
+      if (selector === '#movie_player') return fakeRoot([AD_CLASS]);
+      if (selector === 'video.html5-main-video, video') return video;
+      return null;
+    },
+  };
+  const state = mediaStateFromDocument(
+    doc,
+    'https://music.youtube.com/watch?v=abc123&list=RDAMVMabc123',
+    'music.youtube.com'
+  );
+  assert.equal(state.key, 'youtube:abc123', 'the queue and the blob source never name the track');
+  assert.equal(state.ad, true, 'the ad class on the player container reaches the room');
+  assert.equal(state.playing, true);
+  assert.equal(state.position, 12.5);
+  assert.equal(state.duration, 210);
 });
 
 test('an ad is the player container class and nothing else', () => {

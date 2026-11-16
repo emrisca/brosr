@@ -55,6 +55,11 @@ const NAME_KEY = 'brosr.canvas.name';
 // dropped from the sheet after 15 s.
 const LIVE_MS = 60;
 const LIVE_TTL = 15000;
+// A remote pointer. Each page publishes where its pointer is on the sheet, in
+// sheet coordinates, so pan, zoom and window size never move the dot another
+// person sees. A point off the paper is cleared, so only the sheet shows one.
+const POINTER_MS = 60;
+const POINTER_ARROW = 'M0 0 L0 19 L5 14.5 L8 21 L11 19.5 L8 13.5 L15 13.5 Z';
 const room = {
   socket: null,
   // One entry per canvas page, keyed by peer id. A page that stops sending
@@ -69,6 +74,8 @@ const room = {
 };
 let strokeCount = 0;
 let live = { id: null, sent: 0, at: 0 };
+let pointer = null;
+let pointerSent = 0;
 
 function nextStrokeId() {
   strokeCount += 1;
@@ -249,7 +256,63 @@ function redraw() {
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
   paintScene(ctx, true);
+  paintPointers(ctx);
   ctx.restore();
+}
+
+// A remote dot carries the person's name and keeps one screen size at every
+// zoom, because the sheet is what zooms and not the pointer.
+function pointerColour(id) {
+  let sum = 0;
+  for (let i = 0; i < id.length; i++) sum = (sum * 31 + id.charCodeAt(i)) % 360;
+  return 'hsl(' + sum + ' 62% 46%)';
+}
+
+// The dot lives inside the paper. The clip is the sheet frame, so a pointer at
+// the paper edge is cut by the same rectangle that holds the ink.
+function paintPointers(g) {
+  let any = false;
+  for (const [id, entry] of room.here) {
+    if (id !== PEER && entry.pointer) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return;
+
+  g.save();
+  g.beginPath();
+  g.rect(0, 0, PAPER.width, PAPER.height);
+  g.clip();
+  const arrow = new Path2D(POINTER_ARROW);
+
+  for (const [id, entry] of room.here) {
+    if (id === PEER || !entry.pointer) continue;
+    g.save();
+    g.translate(entry.pointer.x, entry.pointer.y);
+    g.scale(1 / view.z, 1 / view.z);
+    g.fillStyle = pointerColour(id);
+    g.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+    g.lineWidth = 1.3;
+    g.lineJoin = 'round';
+    g.fill(arrow);
+    g.stroke(arrow);
+    const label = String(entry.name || '').slice(0, 24);
+    if (label) {
+      g.font = '500 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+      g.textBaseline = 'middle';
+      const width = g.measureText(label).width + 10;
+      g.fillStyle = 'rgba(0, 0, 0, 0.82)';
+      g.beginPath();
+      if (typeof g.roundRect === 'function') g.roundRect(15, 1, width, 16, 5);
+      else g.rect(15, 1, width, 16);
+      g.fill();
+      g.fillStyle = '#fff';
+      g.fillText(label, 20, 9.5);
+    }
+    g.restore();
+  }
+  g.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -428,14 +491,38 @@ function send(data) {
 // so the line stays honest while a page waits to connect.
 function sendHere() {
   const name = myName();
-  room.here.set(PEER, { name, at: Date.now() });
+  room.here.set(PEER, { name, pointer, at: Date.now() });
   if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
-  send({ op: 'here', name });
+  // The point rides the heartbeat too, so a page that joins late sees where
+  // each pointer rested instead of waiting for the next move.
+  send({ op: 'here', name, pointer: pointer ? wirePoint(pointer) : null });
   showRoomState();
 }
 
 function wirePoint(point) {
   return { x: Math.round(point.x * 10) / 10, y: Math.round(point.y * 10) / 10 };
+}
+
+function cleanPointer(value) {
+  if (!value || typeof value !== 'object') return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+// A pointer goes out at most every 60 ms, and a clear frame goes out at once so
+// a dot never keeps pointing at the desk after the hand left the paper.
+function sendPointer(force) {
+  if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
+  const now = Date.now();
+  if (!force && now - pointerSent < POINTER_MS) return;
+  pointerSent = now;
+  if (!pointer) {
+    send({ op: 'pointer', gone: true });
+    return;
+  }
+  send({ op: 'pointer', ...wirePoint(pointer) });
 }
 
 function sendStroke(stroke) {
@@ -551,8 +638,26 @@ function handle(from, data) {
   if (data.op === 'here') {
     const name = cleanName(data.name);
     if (!name) return;
-    room.here.set(from, { name, at: Date.now() });
+    // The heartbeat replaces the name and keeps the last point unless the
+    // frame carries one, so a move between two beats never blinks out.
+    const entry = room.here.get(from) || { pointer: null };
+    entry.name = name;
+    entry.at = Date.now();
+    if ('pointer' in data) entry.pointer = cleanPointer(data.pointer);
+    room.here.set(from, entry);
     showRoomState();
+    redraw();
+    return;
+  }
+
+  // A pointer is sheet coordinates and nothing else. The page that sends it
+  // already dropped a point off the paper, and this side draws inside the
+  // frame, so a bad point can never land on the desk.
+  if (data.op === 'pointer') {
+    const entry = room.here.get(from);
+    if (!entry) return;
+    entry.pointer = data.gone === true ? null : cleanPointer(data);
+    redraw();
     return;
   }
 
@@ -788,6 +893,17 @@ viewport.addEventListener('pointermove', (event) => {
   const coords = document.getElementById('coords');
   coords.textContent = Math.round(point.x) + ', ' + Math.round(point.y);
 
+  // Only a point on the paper travels, and leaving the paper clears the dot.
+  const onPaper =
+    point.x >= 0 && point.y >= 0 && point.x <= PAPER.width && point.y <= PAPER.height;
+  if (onPaper) {
+    pointer = point;
+    sendPointer(false);
+  } else if (pointer) {
+    pointer = null;
+    sendPointer(true);
+  }
+
   if (panning) {
     view.x = panning.vx + (event.clientX - panning.x);
     view.y = panning.vy + (event.clientY - panning.y);
@@ -825,6 +941,13 @@ function endStroke(event) {
 
 viewport.addEventListener('pointerup', endStroke);
 viewport.addEventListener('pointercancel', endStroke);
+
+// The pointer leaving the window is not a move, so the dot is cleared here.
+viewport.addEventListener('pointerleave', () => {
+  if (!pointer) return;
+  pointer = null;
+  sendPointer(true);
+});
 
 viewport.addEventListener(
   'wheel',
