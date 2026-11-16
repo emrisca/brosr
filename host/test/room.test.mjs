@@ -93,10 +93,20 @@ test('a guest reads the join file, the invite relay and its peer count', async (
   assert.equal(state.name, 'Guest');
 });
 
-test('a guest whose browser is gone is not running', async () => {
+test('a dead guest pid still runs while the relay holds a page', async () => {
   write(join({ browserPid: 999999 }));
   const state = await status();
   assert.equal(state.browserAlive, false);
+  assert.equal(state.peers, 4);
+  assert.equal(state.running, true);
+  assert.equal(state.room, 'room-1');
+});
+
+test('a dead guest pid and a silent relay is not running', async () => {
+  write(join({ browserPid: 999999, port: closed }));
+  const state = await status();
+  assert.equal(state.browserAlive, false);
+  assert.equal(state.relayReady, false);
   assert.equal(state.running, false);
   assert.equal(state.room, 'room-1');
 });

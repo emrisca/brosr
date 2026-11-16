@@ -501,14 +501,18 @@ async function guestStatus() {
   const browser = alive(join.browserPid);
   const ready = await relayReady(join.port, join.host);
   const link = ready ? await relayStatus(join.port, join.room, join.host) : null;
+  const peers = link ? link.peers : 0;
+  // On Windows the launcher that spawn returns is not the browser that stays
+  // up, so a dead pid alone does not mean the guest is gone. A page in the room
+  // is the stronger proof, and it is the state a person sees.
   return {
     ...join,
     role: 'peer',
-    running: browser,
+    running: browser || peers > 0,
     relayAlive: ready,
     browserAlive: browser,
     relayReady: ready,
-    peers: link ? link.peers : 0,
+    peers,
   };
 }
 
