@@ -18,6 +18,10 @@ const out = path.join(app, 'src-tauri', 'resources');
 const FILES = [
   'host/cli.mjs',
   'host/room.mjs',
+  // The room imports the hold helper, which imports the pipe client. A bundle
+  // without either one stops on the first Chrome start.
+  'host/chrome-hold.mjs',
+  'host/chrome-pipe.mjs',
   'host/browsers.mjs',
   'host/pstream.mjs',
   'host/friends.mjs',
