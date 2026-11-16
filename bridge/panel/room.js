@@ -31,7 +31,7 @@ document.documentElement.dataset.surface = SURFACE;
 // follows the system scheme and never borrows a page or browser accent.
 // The room tab carries the room and the transport in its URL. A join link
 // keeps the page and the room, drops the host identity and adds a guest one.
-function inviteLink(href) {
+function inviteLink(href, roomName) {
   if (!href) return '';
   try {
     const url = new URL(href);
@@ -41,6 +41,7 @@ function inviteLink(href) {
     url.searchParams.set('role', 'peer');
     url.searchParams.set('peer', GUEST);
     url.searchParams.set('name', 'Guest');
+    if (roomName) url.searchParams.set('rname', roomName);
     return url.toString();
   } catch {
     return '';
@@ -69,6 +70,314 @@ function latencyLabel(data) {
 }
 
 let lastReply = null;
+
+const FALLBACK_COLOURS = [
+  '#e2603f',
+  '#3f86e2',
+  '#d94f8a',
+  '#2f9e6b',
+  '#b07a2a',
+  '#7a5cd6',
+  '#cf3b3b',
+  '#2f8fa8',
+  '#8f6a3d',
+  '#6366f1',
+  '#c2410c',
+  '#15803d',
+];
+let cursorCards = [];
+let cursorBusy = false;
+let cursorStatusAt = 0;
+
+function setCursorStatus(message, bad) {
+  const node = $('cursor-status');
+  if (!node) return;
+  node.textContent = message;
+  cursorStatusAt = Date.now();
+  if (bad) node.dataset.bad = '1';
+  else delete node.dataset.bad;
+}
+
+async function roomMessage(payload) {
+  const tab = await targetTab();
+  if (!tab) {
+    notice('Open a room tab first.', true);
+    return null;
+  }
+  try {
+    return await api.tabs.sendMessage(tab.id, payload);
+  } catch {
+    notice('The room tab did not answer.', true);
+    return null;
+  }
+}
+
+function renderSettings(data) {
+  const nameInput = $('room-name');
+  if (nameInput && document.activeElement !== nameInput) {
+    nameInput.value = (data && data.roomName) || $('room').textContent || '';
+  }
+
+  const grid = $('colour-grid');
+  if (!grid) return;
+  const colours = [
+    ...new Set([
+      ...(Array.isArray(data && data.colours) && data.colours.length
+        ? data.colours
+        : FALLBACK_COLOURS),
+      data && data.colour,
+    ].filter(Boolean)),
+  ];
+  const custom = Boolean(data && data.cursor && data.cursor.src);
+  const signature = `${Boolean(data)}|${custom}|${data && data.colour}|${colours.join(',')}`;
+  if (grid.dataset.signature !== signature) {
+    grid.dataset.signature = signature;
+    grid.replaceChildren();
+    for (const colour of colours) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'colour-swatch';
+      button.style.background = colour;
+      button.title = colour;
+      button.setAttribute('aria-label', `Use ${colour}`);
+      button.setAttribute('aria-pressed', String(Boolean(data && data.colour === colour)));
+      button.disabled = !data || custom;
+      button.addEventListener('click', () => setRoomColour(colour, button));
+      grid.append(button);
+    }
+  }
+
+  const note = $('colour-note');
+  if (note) {
+    note.textContent = custom
+      ? `Using ${(data.cursor.name || 'a custom cursor')}. Colour is off because the image carries its own.`
+      : data
+        ? 'Pick the colour other people see.'
+        : 'Open a room to choose a colour.';
+  }
+
+  const own = $('own-cursor');
+  if (own) {
+    own.checked = !data || data.sharePointer !== false;
+    own.disabled = !data;
+  }
+  const ownNote = $('own-cursor-note');
+  if (ownNote) {
+    ownNote.textContent = own && !own.checked
+      ? 'Your pointer is hidden from every other screen.'
+      : 'Off keeps your pointer off every other screen.';
+  }
+
+  const clear = $('cursor-clear');
+  if (clear) clear.hidden = !custom;
+  if (!cursorBusy && Date.now() - cursorStatusAt > 4000) {
+    const node = $('cursor-status');
+    if (node) {
+      node.textContent = custom
+        ? `Selected: ${data.cursor.name || 'custom cursor'}.`
+        : 'No custom cursor.';
+      delete node.dataset.bad;
+    }
+  }
+}
+
+async function saveRoomName() {
+  const value = $('room-name').value.trim();
+  if (!value) return notice('Type a room name first.', true);
+  const button = $('room-name-save');
+  button.disabled = true;
+  const reply = await roomMessage({ type: 'brosr:room-name', roomName: value });
+  button.disabled = false;
+  if (reply && reply.ok) {
+    notice('Room renamed.');
+    await refresh();
+  } else {
+    notice('The room name did not change.', true);
+  }
+}
+
+async function setRoomColour(value, button) {
+  button.disabled = true;
+  const reply = await roomMessage({ type: 'brosr:colour', colour: value });
+  if (reply && reply.ok) {
+    notice('Cursor colour changed.');
+    await refresh();
+  } else {
+    button.disabled = false;
+    notice('That colour did not stick.', true);
+  }
+}
+
+function cursorSetUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || '').trim());
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol)) return null;
+  const host = url.hostname.toLowerCase();
+  if (host !== 'cursors-4u.com' && host !== 'www.cursors-4u.com' && !host.endsWith('.cursors-4u.com')) {
+    return null;
+  }
+  if (!url.pathname.startsWith('/cursor/')) return null;
+  return url;
+}
+
+function parseCursorSet(html, base) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const cards = [];
+  const seen = new Set();
+  for (const anchor of doc.querySelectorAll('a.cursor-set-link')) {
+    let href;
+    let preview;
+    try {
+      href = new URL(anchor.getAttribute('href') || '', base).toString();
+      const image = anchor.querySelector('img');
+      preview = image ? new URL(image.getAttribute('src') || '', base).toString() : '';
+    } catch {
+      continue;
+    }
+    if (!href || !preview || seen.has(href)) continue;
+    const text = (anchor.getAttribute('title') || anchor.querySelector('img')?.getAttribute('alt') || 'Cursor')
+      .replace(/\s*Cursor$/i, '')
+      .trim();
+    seen.add(href);
+    cards.push({ name: text || 'Cursor', href, preview });
+  }
+  return cards.slice(0, 40);
+}
+
+function renderCursorCards(cards) {
+  const list = $('cursor-results');
+  if (!list) return;
+  list.replaceChildren();
+  const selected = lastReply && lastReply.data && lastReply.data.cursor
+    ? lastReply.data.cursor.name || ''
+    : '';
+  for (const card of cards) {
+    const row = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'cursor-choice';
+    button.setAttribute('aria-pressed', String(Boolean(selected) && selected === card.name));
+    button.title = card.name;
+    const image = document.createElement('img');
+    image.src = card.preview;
+    image.alt = '';
+    image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
+    const label = document.createElement('span');
+    label.className = 'cursor-name';
+    label.textContent = card.name;
+    button.append(image, label);
+    button.addEventListener('click', () => chooseCursor(card, button));
+    row.append(button);
+    list.append(row);
+  }
+}
+
+async function cursorImage(preview) {
+  const response = await fetch(preview, { credentials: 'include' });
+  if (!response.ok) throw new Error('The preview did not load.');
+  const blob = await response.blob();
+  if (!blob.type.startsWith('image/')) throw new Error('The preview is not an image.');
+  if (blob.size > 500000) throw new Error('The cursor image is too large.');
+  const bitmap = await createImageBitmap(blob);
+  for (const size of [32, 28, 24, 20]) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) continue;
+    context.clearRect(0, 0, size, size);
+    context.imageSmoothingEnabled = true;
+    context.drawImage(bitmap, 0, 0, size, size);
+    let src = canvas.toDataURL('image/webp', 0.82);
+    if (!src.startsWith('data:image/webp')) src = canvas.toDataURL('image/png');
+    if (src.length <= 11800) {
+      bitmap.close?.();
+      return { src, w: size, h: size };
+    }
+  }
+  bitmap.close?.();
+  throw new Error('The cursor image is too large for the room.');
+}
+
+async function chooseCursor(card, button) {
+  cursorBusy = true;
+  button.disabled = true;
+  setCursorStatus(`Loading ${card.name}...`);
+  try {
+    const image = await cursorImage(card.preview);
+    const reply = await roomMessage({
+      type: 'brosr:cursor',
+      cursor: { ...image, name: card.name },
+    });
+    if (!reply || !reply.ok) throw new Error('The room did not accept that cursor.');
+    notice('Custom cursor set for the room.');
+    await refresh();
+  } catch (error) {
+    setCursorStatus(String((error && error.message) || error), true);
+    notice('That cursor did not load.', true);
+  } finally {
+    cursorBusy = false;
+    button.disabled = false;
+  }
+}
+
+async function loadCursorSet() {
+  const url = cursorSetUrl($('cursor-set').value);
+  if (!url) {
+    setCursorStatus('Paste a cursors-4u set link, not a cursor or another site.', true);
+    return;
+  }
+  const button = $('cursor-load');
+  button.disabled = true;
+  cursorBusy = true;
+  setCursorStatus('Loading the set...');
+  try {
+    const response = await fetch(url, { credentials: 'include', redirect: 'follow' });
+    if (!response.ok) throw new Error('The set did not load.');
+    const html = await response.text();
+    if (/Just a moment|challenge-platform|cf-chl/i.test(html)) {
+      throw new Error('cursors-4u is checking this browser. Open the set in a tab, then load it again.');
+    }
+    const cards = parseCursorSet(html, url);
+    if (!cards.length) throw new Error('That page does not list a cursor set.');
+    cursorCards = cards;
+    renderCursorCards(cards);
+    setCursorStatus(`${cards.length} pointers. Pick one for the room.`);
+    notice('Cursor set loaded.');
+  } catch (error) {
+    setCursorStatus(String((error && error.message) || error), true);
+    notice('The cursor set did not load. Paste its page link and try again.', true);
+  } finally {
+    cursorBusy = false;
+    button.disabled = false;
+  }
+}
+
+async function clearCursor() {
+  const reply = await roomMessage({ type: 'brosr:cursor', cursor: null });
+  if (reply && reply.ok) {
+    notice('Colour choice is back.');
+    await refresh();
+  } else {
+    notice('The custom cursor did not clear.', true);
+  }
+}
+
+async function setOwnCursor(on) {
+  const reply = await roomMessage({ type: 'brosr:own-cursor', on });
+  if (reply && reply.ok) {
+    notice(on ? 'Your pointer is shared.' : 'Your pointer is hidden.');
+    await refresh();
+  } else {
+    $('own-cursor').checked = !on;
+    notice('The pointer setting did not change.', true);
+  }
+}
 
 function renderHistory(data) {
   const list = $('history');
@@ -273,7 +582,8 @@ function render(reply) {
   lastReply = reply;
   delete document.body.dataset.state;
   const data = reply.data || {};
-  $('room').textContent = reply.room || 'room';
+  const roomLabel = data.roomName || reply.roomName || reply.room || 'room';
+  $('room').textContent = roomLabel;
   $('role').textContent = reply.role || '';
   // The background page learns the role from the room tab hello. When the tab
   // list lands first, this fills the gap on the next status pass.
@@ -287,7 +597,7 @@ function render(reply) {
   $('control').hidden = reply.role !== 'host';
   renderSeal(data.seal);
   renderTrust(data);
-  const invite = inviteLink(data.inviteUrl || data.location);
+  const invite = inviteLink(data.inviteUrl || data.location, roomLabel);
   $('invite-box').hidden = !invite;
   if (invite && $('invite').value !== invite) $('invite').value = invite;
 
@@ -303,7 +613,7 @@ function render(reply) {
   $('count').textContent = connected ? String(count) : '';
   // The title is the one channel the chrome layer can read from this page, so
   // it carries the count to the closed chip.
-  document.title = connected ? `Brosr room \u00b7 ${count}` : 'Brosr room';
+  document.title = connected ? `Brosr \u00b7 ${roomLabel}` : 'Brosr room';
   const list = $('peers');
   list.replaceChildren();
   if (!peers.length) {
@@ -367,6 +677,7 @@ function render(reply) {
   // The watch card states what the room plays and where this browser's own tab
   // has it. The button opens or fronts the film, so joining takes one click.
   renderWatch(reply);
+  renderSettings(data);
   $('latency').textContent = latencyLabel(data);
   const reconnects = Number(data.reconnects) || 0;
   $('relay').textContent =
@@ -388,6 +699,8 @@ function missing(reason) {
   document.title = 'Brosr room';
   $('invite-box').hidden = true;
   $('invite').value = '';
+  $('room').textContent = 'Room';
+  renderSettings(null);
   renderSeal(null);
   renderTrust(null);
   $('playback').textContent = '-';
@@ -870,11 +1183,61 @@ $('tabs-auto').addEventListener('change', async (event) => {
   box.disabled = false;
 });
 
+// The room and cursor controls share one menu. Tabs keep the shared surface
+// page clean, and a keyboard reaches both panels without opening the menu.
+const tabButtons = [...document.querySelectorAll('.panel-tab')];
+
+function selectTab(id) {
+  for (const button of tabButtons) {
+    const on = button.id === id;
+    button.setAttribute('aria-selected', String(on));
+    button.tabIndex = on ? 0 : -1;
+    const pane = document.getElementById(button.getAttribute('aria-controls'));
+    if (pane) pane.hidden = !on;
+  }
+}
+
+for (const button of tabButtons) {
+  button.addEventListener('click', () => selectTab(button.id));
+  button.addEventListener('keydown', (event) => {
+    const index = tabButtons.indexOf(button);
+    let next = index;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabButtons.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + tabButtons.length) % tabButtons.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabButtons.length - 1;
+    else return;
+    event.preventDefault();
+    selectTab(tabButtons[next].id);
+    tabButtons[next].focus();
+  });
+}
+
+selectTab('tab-room');
+
+$('room-name-save').addEventListener('click', saveRoomName);
+$('room-name').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  saveRoomName();
+});
+$('cursor-load').addEventListener('click', loadCursorSet);
+$('cursor-set').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  loadCursorSet();
+});
+$('cursor-clear').addEventListener('click', clearCursor);
+$('own-cursor').addEventListener('change', (event) => {
+  setOwnCursor(event.currentTarget.checked);
+});
+
 renderPanelSites();
 renderSkeleton();
 // One pass before the read, so the section states what it is doing instead of
 // sitting blank while a cold worker starts.
 renderTabs();
+renderSettings(null);
 loadTabs();
 $('refresh').addEventListener('click', refresh);
 

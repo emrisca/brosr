@@ -15,9 +15,10 @@ export function electHost(ids = []) {
 }
 
 export class Room {
-  constructor({ role = 'peer', peerId = 'me', now = () => Date.now() } = {}) {
+  constructor({ role = 'peer', peerId = 'me', roomName = 'Room', now = () => Date.now() } = {}) {
     this.role = role;
     this.peerId = peerId;
+    this.roomName = roomName;
     this.now = now;
     this.peers = new Map();
     this.seen = new Map();
@@ -131,6 +132,7 @@ export class Room {
     return {
       type: 'snapshot',
       sequence: this.sequence,
+      roomName: this.roomName,
       peers: [...this.peers.values()],
       url: this.url,
       scroll: this.scroll,
@@ -142,6 +144,9 @@ export class Room {
   applySnapshot(snapshot) {
     if (!snapshot) return null;
     this.sequence = Math.max(this.sequence, Number(snapshot.sequence) || 0);
+    if (typeof snapshot.roomName === 'string' && snapshot.roomName.trim()) {
+      this.roomName = snapshot.roomName;
+    }
     if (snapshot.url) this.url = snapshot.url;
     if (typeof snapshot.scroll === 'number') {
       this.scroll = Math.max(0, Math.min(1, snapshot.scroll));

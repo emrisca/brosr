@@ -11,12 +11,14 @@ import {
   RelayMediaAdapter,
   RemoteMediaSync,
   filmUrl,
+  framePageHref,
   freshState,
   mediaStateFromDocument,
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
 import { ActionNotice, mediaAction } from './overlay.mjs';
+import { cleanCursor, cleanRoomName, isColour, randomColour } from './cursor.mjs';
 import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
@@ -51,6 +53,7 @@ const TAB_PARAMS = [
   'peer',
   'host',
   'room',
+  'rname',
   'name',
   'bias',
   'relay',
@@ -87,9 +90,16 @@ async function startPageMedia() {
   };
 
   // The page that holds the player names the film when the source is a blob or
-  // a manifest. A frame passes its own address, which is the page both viewers
-  // load, so an embedded player keeps one key across both browsers.
-  const pageHref = () => location.href;
+  // a manifest. A Cinecat player frame names the title page that embedded it,
+  // because the frame URL alone names a provider and not the film. Any other
+  // frame keeps its own address, so an embedded player still works as before.
+  const embedded = window.top !== window;
+  const pageHref = () =>
+    framePageHref({
+      href: location.href,
+      referrer: document.referrer,
+      embedded,
+    });
 
   // A page with a player tells the room where the film is. The room tab has
   // the socket, so this page only relays. A page without a player takes the
@@ -98,6 +108,7 @@ async function startPageMedia() {
     document,
     href: pageHref(),
     hostname: location.hostname,
+    pageHref,
   });
   const relay = { key: '', position: 0, playing: false, ad: false, sends: 0, applies: 0, last: null };
   const publishRelay = () => {
@@ -139,7 +150,7 @@ async function startPageMedia() {
   });
 
   let relayKey = '';
-  setInterval(() => {
+  function reportMedia() {
     const state = mediaStateFromDocument(document, pageHref(), location.hostname);
     if (!state) return;
     if (state.key !== relayKey) {
@@ -153,7 +164,14 @@ async function startPageMedia() {
     relay.sends += 1;
     publishRelay();
     send({ type: 'brosr:media-out', state }).catch(() => {});
-  }, RELAY_TICK_MS);
+  }
+  setInterval(reportMedia, RELAY_TICK_MS);
+
+  // A play, pause, seek or rate change is a whole act. It goes out at once,
+  // while the interval above catches the rest of the clock.
+  for (const type of ['play', 'pause', 'seeked', 'ratechange']) {
+    document.addEventListener(type, reportMedia, true);
+  }
 
   return { started: true, role: 'media', room: null, peerId: null };
 }
@@ -188,6 +206,7 @@ export async function start() {
         peerId: params.get('peer') || (params.get('role') === 'host' ? 'host' : 'peer'),
         hostId: params.get('host') || 'host',
         name: params.get('name') || params.get('peer') || 'peer',
+        roomName: params.get('rname') || 'Room',
         bias: Number(params.get('bias') || 0),
         relayPort: params.get('relay') || '8787',
         grant: params.get('grant') || null,
@@ -217,6 +236,33 @@ export async function start() {
   const peerId = config.peerId;
   const hostId = config.hostId || 'host';
   const name = config.name || peerId;
+  const roomName = cleanRoomName(config.roomName || 'Room');
+  const readSetting = (key) => {
+    try {
+      return globalThis.localStorage ? localStorage.getItem(key) : null;
+    } catch {
+      return null;
+    }
+  };
+  const writeSetting = (key, value) => {
+    try {
+      if (!globalThis.localStorage) return;
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, String(value));
+    } catch {
+      // A refused store costs this room only.
+    }
+  };
+  const savedColour = readSetting('brosr-colour');
+  const colour = isColour(savedColour) ? savedColour : randomColour();
+  const savedCursor = cleanCursor((() => {
+    try {
+      return JSON.parse(readSetting(`brosr-cursor:${room}`) || 'null');
+    } catch {
+      return null;
+    }
+  })());
+  const sharePointer = readSetting('brosr-share-pointer') !== '0';
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
   const source =
@@ -258,7 +304,7 @@ export async function start() {
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
   // the page alone.
-  const roomParams = ['role', 'peer', 'host', 'room', 'name', 'bias', 'relay'];
+  const roomParams = ['role', 'peer', 'host', 'room', 'rname', 'name', 'bias', 'relay'];
   const cleanUrl = (href) => {
     try {
       const url = new URL(href);
@@ -346,7 +392,10 @@ export async function start() {
     peerId,
     hostId,
     name,
-    colour: role === 'host' ? '#e2603f' : '#3f86e2',
+    colour,
+    roomName,
+    customCursor: savedCursor,
+    sharePointer,
     document,
     viewport,
     // Presence names the page, so another tab draws a cursor only when it
@@ -540,27 +589,40 @@ export async function start() {
       ? api.runtime.getURL('panel/room.html')
       : null;
 
-  const status = () => ({
-    ...client.publish(),
-    source,
-    panelUrl,
-    panelState,
-    command: lastCommand,
-    bias,
-    seal: { mode: sealState, room, out: sealedOut, in: sealedIn, error: sealError },
-    // The panel builds the join link from this. It keeps the room and the relay
-    // port, so the guest lands in this room and not in the default one.
-    inviteUrl: inviteKey ? `${joinUrl(location.href)}#k=${inviteKey}` : null,
-    media: panelMedia(),
-    mediaEchoLocal: echoMedia,
-    viewers: panelViewers(),
-    socket: socket ? socket.readyState : -1,
-    trust: trust ? { url: trust.url, ...trust.stats } : null,
-    trustTarget,
-    elapsed: Math.round(performance.now() - started),
-    location: location.href,
-    reconnects,
-  });
+  const status = () => {
+    const live = client.publish();
+    let invite = null;
+    if (inviteKey) {
+      try {
+        const url = new URL(`${joinUrl(location.href)}#k=${inviteKey}`);
+        url.searchParams.set('rname', live.roomName || roomName);
+        invite = url.toString();
+      } catch {
+        invite = `${joinUrl(location.href)}#k=${inviteKey}`;
+      }
+    }
+    return {
+      ...live,
+      source,
+      panelUrl,
+      panelState,
+      command: lastCommand,
+      bias,
+      seal: { mode: sealState, room, out: sealedOut, in: sealedIn, error: sealError },
+      // The panel builds the join link from this. It keeps the room and the relay
+      // port, so the guest lands in this room and not in the default one.
+      inviteUrl: invite,
+      media: panelMedia(),
+      mediaEchoLocal: echoMedia,
+      viewers: panelViewers(),
+      socket: socket ? socket.readyState : -1,
+      trust: trust ? { url: trust.url, ...trust.stats } : null,
+      trustTarget,
+      elapsed: Math.round(performance.now() - started),
+      location: location.href,
+      reconnects,
+    };
+  };
 
   // A click that arrives across a layout mismatch is dropped. A silent drop
   // looks like a broken room, so the receiver says what happened.
@@ -803,11 +865,7 @@ export async function start() {
 
   // The core tracks the real pointer, so presence carries where the mouse is.
   setInterval(() => {
-    client.presence({
-      id: peerId,
-      name,
-      colour: role === 'host' ? '#e2603f' : '#3f86e2',
-    });
+    client.presence();
   }, PRESENCE_TICK_MS);
 
   setInterval(publish, 200);
@@ -828,6 +886,37 @@ export async function start() {
         // Firefox resolves a response only from a Promise or sendResponse.
         return reply({ ok: true, room, peerId, role, source, data: status(), panelUrl });
       }
+      if (message.type === 'brosr:room-name') {
+        const next = client.setRoomName(message.roomName);
+        publish();
+        return reply({ ok: true, roomName: next });
+      }
+      if (message.type === 'brosr:colour') {
+        if (!client.setColour(message.colour)) {
+          return reply({ ok: false, reason: 'bad-colour' });
+        }
+        writeSetting('brosr-colour', String(message.colour));
+        publish();
+        return reply({ ok: true, colour: String(message.colour) });
+      }
+      if (message.type === 'brosr:cursor') {
+        const next = client.setCursor(message.cursor);
+        if (message.cursor && !next) {
+          return reply({ ok: false, reason: 'bad-cursor' });
+        }
+        writeSetting(
+          `brosr-cursor:${room}`,
+          next ? JSON.stringify(next) : null
+        );
+        publish();
+        return reply({ ok: true, cursor: next });
+      }
+      if (message.type === 'brosr:own-cursor') {
+        const next = client.setSharePointer(Boolean(message.on));
+        writeSetting('brosr-share-pointer', next ? '1' : '0');
+        publish();
+        return reply({ ok: true, sharePointer: next });
+      }
       if (message.type === 'brosr:grant') {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
         return reply({ ok: Boolean(applied), granted: Boolean(message.allowed) });
@@ -838,7 +927,11 @@ export async function start() {
         // room's media, because a peer room forwards frames instead.
         const state = message.state;
         if (state && typeof state === 'object' && state.key) localMedia = state;
-        if (client.stats.role === 'host') return reply({ ok: relayedMedia.set(state) });
+        if (client.stats.role === 'host') {
+          const stored = relayedMedia.set(state);
+          if (stored) client.sendHostMedia(state);
+          return reply({ ok: stored });
+        }
         // A granted peer drives the room from its own film tab. The background
         // already stopped this report when playback sync is off, so the room
         // tab only has to put it on the socket under this peer's id.

@@ -294,17 +294,47 @@ export class CursorOverlay {
         pointerEvents: 'none',
         boxShadow: '0 1px 4px rgba(0, 0, 0, 0.25)',
       });
+      const image = this.document.createElement('img');
+      image.alt = '';
+      Object.assign(image.style, {
+        position: 'absolute',
+        left: '0',
+        top: '0',
+        display: 'none',
+        maxWidth: '48px',
+        maxHeight: '48px',
+        pointerEvents: 'none',
+        filter: 'drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45))',
+      });
       wrap.appendChild(pointer);
       wrap.appendChild(label);
+      wrap.appendChild(image);
       this.layer.appendChild(wrap);
-      node = { wrap, pointer, label, point: null, target: { x: 0, y: 0 } };
+      node = { wrap, pointer, label, image, imageSrc: '', point: null, target: { x: 0, y: 0 } };
       this.nodes.set(peer.id, node);
     }
 
     const colour = peer.colour || DEFAULT_COLOUR;
+    const custom = peer.cursor && peer.cursor.src ? peer.cursor : null;
     node.pointer.style.color = colour;
-    node.label.style.background = colour;
+    node.label.style.background = custom ? '#2b2b2b' : colour;
+    node.label.style.left = custom
+      ? `${Math.max(20, Math.min(48, Number(custom.w) || 32)) + 2}px`
+      : '16px';
     node.label.textContent = peer.name || peer.id;
+    if (custom) {
+      if (node.imageSrc !== custom.src) {
+        node.imageSrc = custom.src;
+        node.image.src = custom.src;
+      }
+      node.image.style.width = `${Math.max(12, Math.min(48, Number(custom.w) || 32))}px`;
+      node.image.style.height = `${Math.max(12, Math.min(48, Number(custom.h) || 32))}px`;
+      node.image.style.display = 'block';
+      node.pointer.style.display = 'none';
+    } else {
+      node.image.style.display = 'none';
+      node.pointer.style.display = 'block';
+    }
 
     const point = peer.point || { x: 0, y: 0 };
     const first = node.point === null;

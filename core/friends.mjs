@@ -182,6 +182,7 @@ export function parseInviteLink(link) {
     key,
     peer: url.searchParams.get('peer') || '',
     name: url.searchParams.get('name') || '',
+    roomName: url.searchParams.get('rname') || '',
   };
 }
 

@@ -14,6 +14,9 @@ export const TYPES = [
   'input',
   'app',
   'presence',
+  'colour',
+  'roomname',
+  'cursor',
   'control',
   'ping',
   'pong',
@@ -67,6 +70,22 @@ export function validate(message) {
     case 'presence':
       if (!message.point || !isNumber(message.point.x) || !isNumber(message.point.y)) {
         fail('presence needs a point');
+      }
+      break;
+    case 'colour':
+      if (typeof message.peerId !== 'string' || !message.peerId) fail('colour needs a peerId');
+      if (typeof message.colour !== 'string' || !message.colour) fail('colour needs a colour');
+      break;
+    case 'roomname':
+      if (typeof message.roomName !== 'string' || !message.roomName) fail('roomname needs a name');
+      if (message.peerId !== undefined && typeof message.peerId !== 'string') {
+        fail('roomname peerId must be text');
+      }
+      break;
+    case 'cursor':
+      if (typeof message.peerId !== 'string' || !message.peerId) fail('cursor needs a peerId');
+      if (message.cursor !== null && (typeof message.cursor !== 'object' || !message.cursor.src)) {
+        fail('cursor needs an image or null');
       }
       break;
     case 'control':
