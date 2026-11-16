@@ -360,6 +360,10 @@ export async function start() {
   let sealKey = null;
   let sealState = 'off';
   let sealError = null;
+  // The tab the room panel chose for trusted typing. The helper reads this
+  // from the status this page publishes, so the choice travels beside the
+  // grant without another channel.
+  let trustTarget = null;
   let sealedOut = 0;
   let sealedIn = 0;
 
@@ -682,6 +686,7 @@ export async function start() {
     viewers: panelViewers(),
     socket: socket ? socket.readyState : -1,
     trust: trust ? { url: trust.url, ...trust.stats } : null,
+    trustTarget,
     elapsed: Math.round(performance.now() - started),
     location: location.href,
     reconnects,
@@ -990,6 +995,15 @@ export async function start() {
           key: message.key === undefined || message.key === null ? null : String(message.key),
         });
         return reply({ ok: true });
+      }
+      if (message.type === 'brosr:trust-target') {
+        // The helper resolves the URL on this browser and keeps this tab when
+        // no tab shows it, so a stale choice never becomes a silent dead end.
+        if (!trust) return reply({ ok: false, reason: 'no-trust' });
+        const url = String(message.url || '');
+        trustTarget = /^https?:\/\//i.test(url) ? url : null;
+        publish();
+        return reply({ ok: true, url: trustTarget });
       }
       if (message.type === 'brosr:command') {
         lastCommand = String(message.command || '');

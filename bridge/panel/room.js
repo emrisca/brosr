@@ -364,6 +364,25 @@ function renderWatch(reply) {
   }
 }
 
+// The Control section names the tab a grant types into. A room with no trusted
+// channel has no switch to move, so the row states why it stays off.
+function renderTrust(data) {
+  const box = $('trust-target');
+  const note = $('trust-note');
+  if (!box) return;
+  const hasTrust = Boolean(data && data.trust);
+  const url = data && typeof data.trustTarget === 'string' ? data.trustTarget : '';
+  box.disabled = !hasTrust;
+  box.checked = hasTrust && Boolean(url);
+  if (note) {
+    note.textContent = !hasTrust
+      ? 'This room has no trusted channel.'
+      : url
+        ? `Typing goes to ${pageLabel(url)}.`
+        : 'Typing goes to this room tab.';
+  }
+}
+
 function render(reply) {
   lastReply = reply;
   const data = reply.data || {};
@@ -379,6 +398,7 @@ function render(reply) {
   setStatus(data.socket === 1 ? 'Connected' : 'Reconnecting...');
   $('control').hidden = reply.role !== 'host';
   renderSeal(data.seal);
+  renderTrust(data);
   const invite = inviteLink(data.inviteUrl || data.location);
   $('invite-box').hidden = !invite;
   if (invite && $('invite').value !== invite) $('invite').value = invite;
@@ -480,6 +500,7 @@ function missing(reason) {
   $('invite-box').hidden = true;
   $('invite').value = '';
   renderSeal(null);
+  renderTrust(null);
   $('playback').textContent = '-';
   $('relay').textContent = '-';
   renderWatch(null);
@@ -700,6 +721,16 @@ function hostOf(url) {
   }
 }
 
+// A target reads as the page it is, not only as the site it sits on.
+function pageLabel(url) {
+  try {
+    const parsed = new URL(String(url));
+    return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`;
+  } catch {
+    return String(url || '');
+  }
+}
+
 function renderTabs() {
   const list = $('tabs-list');
   const auto = $('tabs-auto');
@@ -875,6 +906,56 @@ if (noticeToggle) {
     } catch {
       box.checked = !wanted;
       notice('The background page did not answer.', true);
+    }
+    box.disabled = false;
+  });
+}
+
+// Trusted typing follows one tab at a time. The switch sends that tab's URL to
+// the room tab, and the helper resolves it on this browser. A room opened
+// without a trusted channel answers no-trust and the switch rolls back.
+const trustBox = $('trust-target');
+if (trustBox) {
+  trustBox.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    const wanted = box.checked;
+    const tab = await targetTab();
+    if (!tab) {
+      box.checked = !wanted;
+      return notice('Open a room tab first.', true);
+    }
+    let url = null;
+    if (wanted) {
+      const [active] = await api.tabs.query({ active: true, currentWindow: true });
+      const open = (await api.tabs.query({ currentWindow: true })).filter(usable);
+      const page =
+        usable(active) && /^https?:/.test(active.url || '') && !isRoomPage(active.url || '')
+          ? active
+          : open.find((item) => /^https?:/.test(item.url || '') && !isRoomPage(item.url || ''));
+      if (!page) {
+        box.checked = false;
+        return notice('Open the page you want to type into, then tick this.', true);
+      }
+      url = page.url;
+    }
+    box.disabled = true;
+    try {
+      const reply = await api.tabs.sendMessage(tab.id, { type: 'brosr:trust-target', url });
+      if (reply && reply.ok) {
+        notice(url ? `Typing goes to ${pageLabel(url)}.` : 'Typing goes to the room tab.');
+        await refresh();
+        return;
+      }
+      box.checked = !wanted;
+      notice(
+        reply && reply.reason === 'no-trust'
+          ? 'Start the room with trusted input first.'
+          : 'The room tab did not answer.',
+        true
+      );
+    } catch {
+      box.checked = !wanted;
+      notice('The room tab did not answer.', true);
     }
     box.disabled = false;
   });

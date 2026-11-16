@@ -5,7 +5,12 @@ import test from 'node:test';
 import { actionsForRecord, prepareRecords } from '../../core/trust.mjs';
 import { createRoomClient } from '../../core/sync.mjs';
 import { encode } from '../../core/protocol.mjs';
-import { createTrustAgent, grantedPeers, watchTrust } from '../trust.mjs';
+import {
+  createTrustAgent,
+  grantedPeers,
+  resolveTrustTarget,
+  watchTrust,
+} from '../trust.mjs';
 import { roomUrl } from '../room.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -31,8 +36,8 @@ function fakeBidi() {
   };
 }
 
-function published(peerList) {
-  return { result: { value: JSON.stringify({ peerList }) } };
+function published(peerList, extra = {}) {
+  return { result: { value: JSON.stringify({ peerList, ...extra }) } };
 }
 
 test('a click becomes one pointer move, press and release', () => {
@@ -248,6 +253,68 @@ test('a granted batch goes to the trusted sink, and a refusal replays', async ()
   assert.equal(calls.length, 2);
   assert.equal(client.publish().inputApplied, 1);
   assert.equal(client.publish().inputReasons.target, 1);
+});
+
+test('a trust target resolves to the tab that shows it, not the room', async () => {
+  const bidi = fakeBidi();
+  bidi.cmd = async (method) => {
+    if (method === 'browsingContext.getTree') {
+      return {
+        contexts: [
+          { context: 'room', url: 'http://127.0.0.1:8787/?room=r1&peer=host' },
+          { context: 'form', url: 'http://127.0.0.1:8787/form.html' },
+        ],
+      };
+    }
+    return {};
+  };
+  assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/form.html'), 'form');
+  assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/form.html#top'), 'form');
+  assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/gone.html'), null);
+  assert.equal(await resolveTrustTarget(bidi, ''), null);
+});
+
+test('the watcher moves the agent to the published target and back', async () => {
+  const roomUrl = 'http://127.0.0.1:8787/?room=r1&peer=host';
+  let shown = published([{ id: 'peer', granted: true, self: false }]);
+  const bidi = fakeBidi();
+  bidi.cmd = async (method) => {
+    if (method === 'script.evaluate') return shown;
+    if (method === 'browsingContext.getTree') {
+      return {
+        contexts: [
+          { context: 'ctx', url: roomUrl },
+          { context: 'form', url: 'http://127.0.0.1:8787/form.html' },
+        ],
+      };
+    }
+    return {};
+  };
+  const watcher = watchTrust({ bidi, context: 'ctx', token: 't', intervalMs: 10 });
+  await waitFor(() => watcher.agent(), 'the room agent');
+  const room = watcher.agent();
+  assert.equal(room.context, 'ctx');
+  assert.equal(watcher.state.targetContext, 'ctx');
+
+  shown = published([{ id: 'peer', granted: true, self: false }], {
+    trustTarget: 'http://127.0.0.1:8787/form.html',
+  });
+  await waitFor(() => watcher.agent() !== room, 'the target agent');
+  assert.equal(watcher.agent().context, 'form');
+  assert.equal(watcher.state.targetUrl, 'http://127.0.0.1:8787/form.html');
+  assert.equal(await room.isActive(), false);
+
+  const target = watcher.agent();
+  shown = published([{ id: 'peer', granted: true, self: false }], {
+    trustTarget: 'http://127.0.0.1:8787/gone.html',
+  });
+  await waitFor(() => watcher.agent() !== target, 'the fallback agent');
+  assert.equal(watcher.agent().context, 'ctx');
+  assert.equal(watcher.state.missingTarget, 'http://127.0.0.1:8787/gone.html');
+
+  await watcher.stop();
+  assert.equal(watcher.agent(), null);
+  assert.equal(watcher.state.seenGrants, 3);
 });
 
 test('a granted peer is never this tab', () => {

@@ -14,6 +14,9 @@ import { BiDi } from '../spike/bidi.mjs';
 import { actionsForRecord } from '../core/trust.mjs';
 
 export const TRUST_TTL_MS = 5 * 60 * 1000;
+// A target tab can close or navigate after the panel named it. The helper looks
+// it up again this often, and keeps the room tab when nothing matches.
+export const TARGET_REFRESH_MS = 10 * 1000;
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_RECORDS = 256;
 
@@ -171,6 +174,7 @@ export async function createTrustAgent({
 
   return {
     grant,
+    context,
     token,
     port: address.port,
     host: address.address,
@@ -207,8 +211,44 @@ export function grantedPeers(published) {
     .filter(Boolean);
 }
 
+// The panel names the tab a grant types into by URL. The helper finds that tab
+// on the same browser, and a URL no tab shows resolves to nothing so the caller
+// can keep the room tab.
+export async function resolveTrustTarget(bidi, target) {
+  const asked = String(target || '');
+  if (!asked) return null;
+  let wanted;
+  try {
+    wanted = new URL(asked);
+  } catch {
+    return null;
+  }
+  const tree = await bidi.cmd('browsingContext.getTree', {});
+  const contexts = (tree && tree.contexts) || [];
+  const read = (item) => {
+    try {
+      return new URL(item.url);
+    } catch {
+      return null;
+    }
+  };
+  // An exact address wins. The room params a tab adds later change the query,
+  // so origin and path are the fallback that still names the same page.
+  const exact = contexts.find((item) => {
+    const url = read(item);
+    return url && url.href === wanted.href;
+  });
+  const page = contexts.find((item) => {
+    const url = read(item);
+    return url && url.origin === wanted.origin && url.pathname === wanted.pathname;
+  });
+  const hit = exact || page;
+  return hit ? hit.context : null;
+}
+
 // Poll the room tab for control. The listener exists only while the list has a
-// granted peer, and it follows a different grant by replacing the agent.
+// granted peer, follows a different grant by replacing the agent, and moves to
+// the published target tab when the panel names one.
 export function watchTrust({
   bidi,
   context,
@@ -225,9 +265,15 @@ export function watchTrust({
     agent: null,
     error: null,
     seenGrants: 0,
+    targetUrl: null,
+    targetContext: context,
+    missingTarget: null,
   };
   let agent = null;
   let peerId = null;
+  let targetUrl = null;
+  let targetContext = context;
+  let resolvedAt = 0;
   let timer = null;
   let stopped = false;
 
@@ -266,17 +312,50 @@ export function watchTrust({
       state.error = text(error);
     }
     const granted = grantedPeers(published);
+    // The panel names the tab this grant types into. The room tab itself is
+    // the fallback, so a closed or missing target never stops the channel.
+    const asked =
+      granted.length && published && typeof published.trustTarget === 'string'
+        ? published.trustTarget
+        : '';
+    if (!asked) {
+      targetContext = context;
+      targetUrl = null;
+      state.missingTarget = null;
+    } else if (asked !== targetUrl || Date.now() - resolvedAt > TARGET_REFRESH_MS) {
+      let hit = null;
+      try {
+        hit = await resolveTrustTarget(bidi, asked);
+      } catch (error) {
+        state.error = text(error);
+      }
+      const next = hit || context;
+      if (next !== targetContext) {
+        log(
+          hit
+            ? `[trust] typing into ${asked} on context ${hit}`
+            : `[trust] no tab shows ${asked}, typing into the room tab`
+        );
+      }
+      targetUrl = asked;
+      targetContext = next;
+      resolvedAt = Date.now();
+      state.missingTarget = hit ? null : asked;
+    }
+    state.targetUrl = targetUrl;
+    state.targetContext = targetContext;
+
     if (!granted.length) {
       if (agent) log('[trust] grant ended, listener closed');
       await stopAgent();
       peerId = null;
       state.peerId = null;
-    } else if (!agent || granted[0] !== peerId) {
+    } else if (!agent || granted[0] !== peerId || agent.context !== targetContext) {
       await stopAgent();
       peerId = granted[0];
       agent = await createTrustAgent({
         bidi,
-        context,
+        context: targetContext,
         token,
         ttlMs,
         grant: { peerId, active: true },
