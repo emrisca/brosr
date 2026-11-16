@@ -38,11 +38,28 @@ function capture(room, opcode, payload) {
   );
 }
 
+// A count says a room changed. The address says which machine changed it, and
+// a leave with no join beside it is easier to spot than a number that fell.
+function addressOf(socket) {
+  const raw = (socket && socket.remoteAddress) || '';
+  return raw.replace(/^::ffff:/, '') || 'unknown';
+}
+
+function note(action, client, peers) {
+  if (process.env.RELAY_QUIET) return;
+  console.error(
+    `[relay] ${action} ${client.remote} room=${client.room} peers=${peers} uptime=${
+      Date.now() - STARTED
+    }ms`
+  );
+}
+
 function leave(client) {
   const room = rooms.get(client.room);
   if (!room) return;
-  room.delete(client);
+  if (!room.delete(client)) return;
   if (!room.size) rooms.delete(client.room);
+  note('leave', client, room.size);
 }
 
 const server = http.createServer((req, res) => {
@@ -193,9 +210,10 @@ server.on('upgrade', (req, socket) => {
   );
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const room = url.searchParams.get('room') || 'default';
-  const client = { socket, buf: Buffer.alloc(0), room };
+  const client = { socket, buf: Buffer.alloc(0), room, remote: addressOf(socket) };
   if (!rooms.has(room)) rooms.set(room, new Set());
   rooms.get(room).add(client);
+  note('join', client, rooms.get(room).size);
   socket.on('data', (chunk) => {
     client.buf = Buffer.concat([client.buf, chunk]);
     readFrames(client);
