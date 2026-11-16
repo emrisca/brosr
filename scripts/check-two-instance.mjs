@@ -8,9 +8,9 @@
 // bundle was missing the trust module the room entry imports.
 //
 // Two lanes share the flow. The default lane uses two Zen profiles. The
-// --chrome lane loads the unpacked Chromium build in two windows. Chrome 137
-// and later ignore --load-extension, so that lane picks a build that still
-// reads the flag, which today means Brave, Chromium or Chrome for Testing.
+// --chrome lane loads the unpacked Chromium build in two windows. Branded
+// Google Chrome 137 and later ignore --load-extension. Brave, Chromium and
+// Chrome for Testing still read the flag at 157, so the lane prefers those.
 //
 // Everything stays on loopback: its own relay, temp profiles and three free
 // ports. It never touches the app browser on 9333.
@@ -27,7 +27,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
-import { buildChrome, buildXpi } from '../zen/package.mjs';
+import { bridgeEntries, buildChrome, buildXpi } from '../zen/package.mjs';
+import { zipEntry } from '../spike/unzip.mjs';
 import { findZen, writeProfile } from '../zen/profile.mjs';
 import { createTrustAgent } from '../host/trust.mjs';
 
@@ -274,14 +275,14 @@ function chromiumBuild() {
     const probe = spawnSync(file, ['--version'], { encoding: 'utf8' });
     const shown = String((probe.stdout || probe.stderr || '').trim());
     const major = Number((shown.match(/(\d+)\./) || [])[1]);
-    // Only Google Chrome and Brave carry the branded refusal. Chromium and
-    // Chrome for Testing keep the flag at every version, which is why they are
-    // the supported lane for a current build.
-    const branded = /Google Chrome\.app|Brave Browser\.app/.test(file);
+    // Only branded Google Chrome carries the refusal. Brave loads the flag at
+    // 157 despite the Chromium version it shares, which the service worker
+    // target in a probe confirmed.
+    const branded = /Google Chrome\.app/.test(file);
     if (branded && major >= 137) {
       if (explicit) {
         throw new Error(
-          `${path.basename(file)} ${major} ignores --load-extension. Point BROSR_CHECK_BROWSER at Chromium or Chrome for Testing.`
+          `${path.basename(file)} ${major} ignores --load-extension. Point BROSR_CHECK_BROWSER at Brave, Chromium or Chrome for Testing.`
         );
       }
       rejected.push(`${path.basename(file)} ${major}`);
@@ -290,8 +291,42 @@ function chromiumBuild() {
     return { file, version: shown || String(major) };
   }
   throw new Error(
-    `no Chromium build here accepts --load-extension${rejected.length ? ` (ignored by ${rejected.join(', ')})` : ''}. Run npx @puppeteer/browsers install chrome@stable --path zen/.runtime/cft.`
+    `no Chromium build here accepts --load-extension${rejected.length ? ` (ignored by ${rejected.join(', ')})` : ''}. Run npx @puppeteer/browsers install chrome@stable --path zen/.runtime/cft, or use Brave.`
   );
+}
+
+// The profile installs zen/.runtime/bridge.xpi, not the file this check builds.
+// A stale copy can pass every lane here while the browser gets a bundle that is
+// one module short, which is the failure this check exists for. So compare what
+// ships against the tree and name every file that differs.
+function shippedBridge() {
+  const file = path.join(root, 'zen', '.runtime', 'bridge.xpi');
+  if (!fs.existsSync(file)) return { ok: true, skipped: 'zen/.runtime/bridge.xpi is absent' };
+
+  const raw = zipEntry(file, 'manifest.json');
+  if (!raw) return { ok: false, reason: 'the shipped bridge has no manifest.json' };
+
+  const version = JSON.parse(raw.toString('utf8')).version;
+  const source = JSON.parse(fs.readFileSync(path.join(root, 'bridge', 'manifest.json'), 'utf8'));
+  const entries = bridgeEntries();
+  const missing = [];
+  const changed = [];
+
+  for (const entry of entries) {
+    const held = zipEntry(file, entry.name);
+    if (!held) missing.push(entry.name);
+    else if (!held.equals(Buffer.from(entry.data))) changed.push(entry.name);
+  }
+
+  return {
+    file: path.relative(root, file),
+    version,
+    want: source.version,
+    files: entries.length,
+    missing,
+    changed,
+    ok: version === source.version && missing.length === 0 && changed.length === 0,
+  };
 }
 
 let relay = null;
@@ -306,8 +341,22 @@ let extensionDir = null;
 let hostProfile = null;
 let guestProfile = null;
 let bridge = null;
+let shipped = null;
 
 try {
+  shipped = shippedBridge();
+  out.steps.shipped = shipped;
+  if (!shipped.ok) {
+    process.stderr.write(
+      `[brosr] the shipped bridge is behind the tree: ${JSON.stringify({
+        version: shipped.version,
+        want: shipped.want,
+        missing: shipped.missing,
+        changed: shipped.changed,
+      })}\n`
+    );
+  }
+
   for (const [name, port] of [
     ['the relay', RELAY_PORT],
     ['the host browser', HOST_PORT],
@@ -480,13 +529,31 @@ try {
   );
   await sleep(500);
   await guestPage.keys('trusted');
-  const typed = await until(async () => {
-    const raw = await form.eval(
-      "JSON.stringify({ value: document.getElementById('field').value, keys: window.__keys })"
-    );
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && parsed.value === 'trusted' ? parsed : null;
-  }, 'the host field', 25000);
+  let typed;
+  try {
+    typed = await until(async () => {
+      const raw = await form.eval(
+        "JSON.stringify({ value: document.getElementById('field').value, keys: window.__keys })"
+      );
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && parsed.value === 'trusted' ? parsed : null;
+    }, 'the host field', 25000);
+  } catch (error) {
+    // A timeout here has three possible ends: the guest never captured, the
+    // host never sent a batch, or the agent never applied one. Record all three
+    // so a failing run names the step that broke.
+    out.steps.diagnosis = {
+      form: await form
+        .eval(
+          "JSON.stringify({ value: document.getElementById('field').value, keys: (window.__keys || []).length })"
+        )
+        .catch((e) => String(e)),
+      host: await hostPage.read().catch(() => null),
+      guest: await guestPage.read().catch(() => null),
+      agent: agent && agent.stats ? agent.stats : null,
+    };
+    throw error;
+  }
   const keys = typed.keys || [];
   out.steps.typed = {
     value: typed.value,
@@ -498,6 +565,7 @@ try {
   const hostTrust = await hostPage.read();
   out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
   out.ok =
+    shipped.ok &&
     typed.value === 'trusted' &&
     keys.length >= 7 &&
     keys.every((k) => k.trusted === true) &&

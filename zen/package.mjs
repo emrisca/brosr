@@ -39,7 +39,7 @@ const arg = (name, fallback) => {
 };
 const read = (file) => fs.readFileSync(file);
 
-function bridgeEntries(manifest = MANIFEST) {
+export function bridgeEntries(manifest = MANIFEST) {
   return [
     { name: 'manifest.json', data: read(manifest) },
     { name: 'content.js', data: read(path.join(bridge, 'content.js')) },
