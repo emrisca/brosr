@@ -20,6 +20,7 @@ const CORE = [
   'room.mjs',
   'overlay.mjs',
   'input.mjs',
+  'trust.mjs',
   'sync.mjs',
   'seal.mjs',
   'browser-entry.mjs',

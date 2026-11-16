@@ -1,0 +1,522 @@
+// Two real browsers, one grant, one trusted run. The host page opens a room with
+// a grant for a named peer and starts its own trust agent. The guest joins the
+// same relay in a second browser, the host grants it through the URL, and the
+// guest's keys travel to the host form through the browser's input pipeline.
+//
+// The bridge is built from this tree into a temp file, so a stale or incomplete
+// XPI cannot pass this check. That is the failure this check found: the packaged
+// bundle was missing the trust module the room entry imports.
+//
+// Two lanes share the flow. The default lane uses two Zen profiles. The
+// --chrome lane loads the unpacked Chromium build in two windows. Chrome 137
+// and later ignore --load-extension, so that lane picks a build that still
+// reads the flag, which today means Brave, Chromium or Chrome for Testing.
+//
+// Everything stays on loopback: its own relay, temp profiles and three free
+// ports. It never touches the app browser on 9333.
+//
+//   node scripts/check-two-instance.mjs
+//   node scripts/check-two-instance.mjs --chrome
+//   node scripts/check-two-instance.mjs --zen=/path/to/zen
+//   BROSR_CHECK_BROWSER=/path/to/chromium node scripts/check-two-instance.mjs --chrome
+import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { BiDi } from '../spike/bidi.mjs';
+import { buildChrome, buildXpi } from '../zen/package.mjs';
+import { findZen, writeProfile } from '../zen/profile.mjs';
+import { createTrustAgent } from '../host/trust.mjs';
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const RELAY = path.join(root, 'relay', 'target', 'debug', 'brosr-relay');
+const TOKEN = 'check-two-instance-token';
+const RELAY_PORT = 8891;
+const HOST_PORT = 9351;
+const GUEST_PORT = 9352;
+const ROOM = 'twolocal';
+const PEER = 'guest-1';
+const CHROMIUM = [
+  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+  '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const out = { steps: {} };
+const chromeLane = process.argv.includes('--chrome');
+
+function free(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => server.close(() => resolve(true)));
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+async function connect(port, ms = 45000) {
+  const end = Date.now() + ms;
+  let last = null;
+  while (Date.now() < end) {
+    try {
+      return await new BiDi(`ws://127.0.0.1:${port}/session`).connect();
+    } catch (error) {
+      last = error;
+      await sleep(300);
+    }
+  }
+  throw new Error(`no BiDi on ${port}${last ? `: ${last.message}` : ''}`);
+}
+
+async function until(fn, label, ms = 20000) {
+  const end = Date.now() + ms;
+  let last = null;
+  while (Date.now() < end) {
+    try {
+      const value = await fn();
+      if (value) return value;
+    } catch (error) {
+      last = error;
+    }
+    await sleep(200);
+  }
+  throw new Error(`timed out on ${label}${last ? `: ${last.message}` : ''}`);
+}
+
+// A page is the only surface the flow needs: an evaluate, a key run and the
+// action list the trust agent sends. A Zen page forwards all three to BiDi. A
+// Chromium page maps them to CDP, which has no input.performActions method.
+function zenPage(bidi, context) {
+  const evalIn = async (expression) => {
+    const res = await bidi.cmd('script.evaluate', {
+      expression,
+      target: { context },
+      awaitPromise: true,
+      resultOwnership: 'none',
+    });
+    return res && res.result ? res.result.value : undefined;
+  };
+  return {
+    eval: evalIn,
+    sendActions: (actions) => bidi.cmd('input.performActions', { context, actions }),
+    keys: (text) =>
+      bidi.cmd('input.performActions', {
+        context,
+        actions: [
+          {
+            type: 'key',
+            id: 'brosr-check-keys',
+            actions: [...text].flatMap((ch) => [
+              { type: 'keyDown', value: ch },
+              { type: 'keyUp', value: ch },
+            ]),
+          },
+        ],
+      }),
+    read: async () => {
+      const raw = await evalIn("document.documentElement.dataset.brosr || ''").catch(() => '');
+      try {
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+class ChromiumPage {
+  constructor(ws) {
+    this.ws = ws;
+    this.nextId = 0;
+    this.pending = new Map();
+    ws.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data);
+      if (!message.id) return;
+      const held = this.pending.get(message.id);
+      if (!held) return;
+      this.pending.delete(message.id);
+      if (message.error) held.reject(new Error(JSON.stringify(message.error)));
+      else held.resolve(message.result);
+    });
+  }
+
+  send(method, params = {}) {
+    const id = (this.nextId += 1);
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async eval(expression) {
+    const result = await this.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (result.exceptionDetails) {
+      throw new Error(
+        result.exceptionDetails.text +
+          ' ' +
+          (result.exceptionDetails.exception?.description || '')
+      );
+    }
+    return result.result.value;
+  }
+
+  // Chrome inserts a character on a keyDown with text. The virtual key code
+  // keeps the event shaped like a real key, and the page sees isTrusted true.
+  async sendActions(actions) {
+    for (const group of actions || []) {
+      if (group.type !== 'key') continue;
+      for (const step of group.actions || []) {
+        const value = String(step.value || '');
+        if (step.type === 'keyDown') {
+          const code = value.length === 1 ? value.toUpperCase().charCodeAt(0) : 0;
+          await this.send('Input.dispatchKeyEvent', {
+            type: 'keyDown',
+            key: value,
+            code: value.length === 1 ? `Key${value.toUpperCase()}` : undefined,
+            windowsVirtualKeyCode: code,
+            nativeVirtualKeyCode: code,
+            text: value,
+            unmodifiedText: value,
+          });
+        } else {
+          await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key: value });
+        }
+      }
+    }
+  }
+
+  async keys(text) {
+    await this.send('Page.bringToFront');
+    await this.sendActions([
+      {
+        type: 'key',
+        actions: [...text].flatMap((ch) => [
+          { type: 'keyDown', value: ch },
+          { type: 'keyUp', value: ch },
+        ]),
+      },
+    ]);
+  }
+
+  async read() {
+    const raw = await this.eval("document.documentElement.dataset.brosr || ''").catch(() => '');
+    try {
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function openChromiumTab(port, url) {
+  const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', () => reject(new Error('debug socket')), { once: true });
+  });
+  const page = new ChromiumPage(ws);
+  await page.send('Page.enable');
+  await page.send('Runtime.enable');
+  await page.send('Page.navigate', { url });
+  await until(async () => (await page.eval('document.readyState')) === 'complete', 'the page load', 20000);
+  return page;
+}
+
+// A build downloaded by @puppeteer/browsers lives under the runtime folder. It
+// is the supported way to keep --load-extension on a current Chromium.
+function findChromeForTesting() {
+  const base = path.join(root, 'zen', '.runtime', 'cft', 'chrome');
+  let versions = [];
+  try {
+    versions = fs.readdirSync(base);
+  } catch {
+    return null;
+  }
+  for (const version of versions) {
+    const dir = path.join(base, version);
+    let builds = [];
+    try {
+      builds = fs.readdirSync(dir).filter((name) => name.startsWith('chrome-mac'));
+    } catch {
+      continue;
+    }
+    for (const build of builds) {
+      const file = path.join(
+        dir,
+        build,
+        'Google Chrome for Testing.app',
+        'Contents',
+        'MacOS',
+        'Google Chrome for Testing'
+      );
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  return null;
+}
+
+function chromiumBuild() {
+  const explicit = process.env.BROSR_CHECK_BROWSER;
+  const candidates = [explicit, ...CHROMIUM, findChromeForTesting()].filter(Boolean);
+  const rejected = [];
+  for (const file of candidates) {
+    if (!fs.existsSync(file)) continue;
+    const probe = spawnSync(file, ['--version'], { encoding: 'utf8' });
+    const shown = String((probe.stdout || probe.stderr || '').trim());
+    const major = Number((shown.match(/(\d+)\./) || [])[1]);
+    // Only Google Chrome and Brave carry the branded refusal. Chromium and
+    // Chrome for Testing keep the flag at every version, which is why they are
+    // the supported lane for a current build.
+    const branded = /Google Chrome\.app|Brave Browser\.app/.test(file);
+    if (branded && major >= 137) {
+      if (explicit) {
+        throw new Error(
+          `${path.basename(file)} ${major} ignores --load-extension. Point BROSR_CHECK_BROWSER at Chromium or Chrome for Testing.`
+        );
+      }
+      rejected.push(`${path.basename(file)} ${major}`);
+      continue;
+    }
+    return { file, version: shown || String(major) };
+  }
+  throw new Error(
+    `no Chromium build here accepts --load-extension${rejected.length ? ` (ignored by ${rejected.join(', ')})` : ''}. Run npx @puppeteer/browsers install chrome@stable --path zen/.runtime/cft.`
+  );
+}
+
+let relay = null;
+let host = null;
+let guest = null;
+let hostBidi = null;
+let guestBidi = null;
+let agent = null;
+let relayLog = '';
+let chromium = null;
+let extensionDir = null;
+let hostProfile = null;
+let guestProfile = null;
+let bridge = null;
+
+try {
+  for (const [name, port] of [
+    ['the relay', RELAY_PORT],
+    ['the host browser', HOST_PORT],
+    ['the guest browser', GUEST_PORT],
+  ]) {
+    if (!(await free(port))) throw new Error(`port ${port} for ${name} is busy`);
+  }
+
+  relay = spawn(RELAY, [], {
+    cwd: root,
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      PORT: String(RELAY_PORT),
+      FIXTURES: path.join(root, 'spike', 'fixtures'),
+      ASSETS: path.join(root, 'assets'),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  relay.stdout.on('data', (chunk) => {
+    relayLog += chunk;
+  });
+  relay.stderr.on('data', (chunk) => {
+    relayLog += chunk;
+  });
+  await until(
+    async () => (await fetch(`http://127.0.0.1:${RELAY_PORT}/health`)).ok,
+    'the relay',
+    15000
+  );
+  out.steps.relay = `http://127.0.0.1:${RELAY_PORT}`;
+
+  let openHost;
+  let openGuest;
+  if (chromeLane) {
+    const build = chromiumBuild();
+    chromium = build;
+    out.steps.lane = 'chromium';
+    out.steps.browser = `${path.basename(build.file)} ${build.version.replace(/^[^\d]*/, '')}`;
+    extensionDir = await mkdtemp(path.join(tmpdir(), 'brosr-check-ext-'));
+    buildChrome(extensionDir);
+    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-host-'));
+    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-guest-'));
+    const launch = (profile, port) =>
+      spawn(
+        build.file,
+        [
+          '--headless=new',
+          `--remote-debugging-port=${port}`,
+          `--user-data-dir=${profile}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-gpu',
+          '--disable-features=Translate,MediaRouter',
+          '--window-size=1400,900',
+          `--disable-extensions-except=${extensionDir}`,
+          `--load-extension=${extensionDir}`,
+          'about:blank',
+        ],
+        { stdio: 'ignore' }
+      );
+    host = launch(hostProfile, HOST_PORT);
+    guest = launch(guestProfile, GUEST_PORT);
+    for (const port of [HOST_PORT, GUEST_PORT]) {
+      await until(
+        async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok,
+        `the devtools endpoint on ${port}`,
+        30000
+      );
+    }
+    openHost = (url) => openChromiumTab(HOST_PORT, url);
+    openGuest = (url) => openChromiumTab(GUEST_PORT, url);
+  } else {
+    const zen = findZen();
+    if (!zen) throw new Error('no Zen binary found. Pass --zen=<path>.');
+    out.steps.lane = 'zen';
+    out.steps.browser = 'Zen';
+    bridge = path.join(tmpdir(), `brosr-check-bridge-${process.pid}.xpi`);
+    buildXpi(bridge);
+    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-host-'));
+    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-guest-'));
+    writeProfile(hostProfile, { bridge });
+    writeProfile(guestProfile, { bridge });
+    const launch = (profile, port) =>
+      spawn(
+        zen,
+        ['--profile', profile, '--no-remote', '--new-instance', '--remote-debugging-port', String(port), '-headless', 'about:blank'],
+        { stdio: 'ignore' }
+      );
+    host = launch(hostProfile, HOST_PORT);
+    guest = launch(guestProfile, GUEST_PORT);
+    hostBidi = await connect(HOST_PORT);
+    guestBidi = await connect(GUEST_PORT);
+    openHost = async (url) => {
+      const created = await hostBidi.cmd('browsingContext.create', { type: 'tab' });
+      await hostBidi.cmd('browsingContext.navigate', {
+        context: created.context,
+        url,
+        wait: 'complete',
+      });
+      return zenPage(hostBidi, created.context);
+    };
+    openGuest = async (url) => {
+      const created = await guestBidi.cmd('browsingContext.create', { type: 'tab' });
+      await guestBidi.cmd('browsingContext.navigate', {
+        context: created.context,
+        url,
+        wait: 'complete',
+      });
+      return zenPage(guestBidi, created.context);
+    };
+  }
+
+  const formUrl = `http://127.0.0.1:${RELAY_PORT}/form.html`;
+  const form = await openHost(formUrl);
+  await form.eval(
+    "(() => { const f = document.getElementById('field'); if (!f) return false; f.focus(); window.__keys = []; f.addEventListener('keydown', (e) => window.__keys.push({ key: e.key, trusted: e.isTrusted })); return true; })()"
+  );
+  out.steps.form = formUrl;
+
+  // The agent binds before the page reads its port, because the room's trust
+  // client posts to this exact address and no other. The page object stands in
+  // for a BiDi session, so one agent serves both lanes.
+  agent = await createTrustAgent({
+    bidi: { cmd: (method, params = {}) => form.sendActions(params.actions) },
+    context: 'form',
+    token: TOKEN,
+    grant: { peerId: PEER, active: true },
+  });
+  out.steps.agent = agent.url;
+
+  const hostUrl =
+    `http://127.0.0.1:${RELAY_PORT}/?role=host&room=${ROOM}&peer=host&name=Host` +
+    `&relay=${RELAY_PORT}&grant=${PEER}#t=${TOKEN}&tp=${agent.port}`;
+  const hostPage = await openHost(hostUrl);
+  out.steps.hostUrl = hostUrl;
+  const hostState = await until(async () => {
+    const s = await hostPage.read();
+    return s && s.socket === 1 && s.role === 'host' ? s : null;
+  }, 'the host socket', 30000);
+  if (!hostState.trust) throw new Error('the host page has no trust client');
+
+  const guestUrl = `http://127.0.0.1:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest&relay=${RELAY_PORT}`;
+  const guestPage = await openGuest(guestUrl);
+  out.steps.guestUrl = guestUrl;
+  const joined = await until(async () => {
+    const s = await guestPage.read();
+    return s && s.socket === 1 ? s : null;
+  }, 'the guest socket', 30000);
+  out.steps.guestJoined = { socket: joined.socket, role: joined.role, peerId: joined.peerId };
+
+  const granted = await until(async () => {
+    const s = await guestPage.read();
+    return s && s.granted === true && s.capture === true ? s : null;
+  }, 'the grant and capture at the guest', 30000);
+  out.steps.granted = { guest: granted.granted, capture: granted.capture, peers: granted.peers };
+
+  const hostSees = await until(async () => {
+    const s = await hostPage.read();
+    const peers = (s && s.peerList) || [];
+    return peers.some((p) => p.id === PEER && p.granted === true) ? s : null;
+  }, 'the grant at the host', 20000);
+  out.steps.hostGrant = {
+    peers: hostSees.peerList.map((p) => ({ id: p.id, granted: p.granted })),
+    trust: Boolean(hostSees.trust),
+  };
+
+  await form.eval(
+    "document.getElementById('field').focus(); document.getElementById('field').value = ''; window.__keys = []; true"
+  );
+  await sleep(500);
+  await guestPage.keys('trusted');
+  const typed = await until(async () => {
+    const raw = await form.eval(
+      "JSON.stringify({ value: document.getElementById('field').value, keys: window.__keys })"
+    );
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && parsed.value === 'trusted' ? parsed : null;
+  }, 'the host field', 25000);
+  const keys = typed.keys || [];
+  out.steps.typed = {
+    value: typed.value,
+    keys: keys.length,
+    trusted: keys.filter((k) => k.trusted === true).length,
+    all: keys.length > 0 && keys.every((k) => k.trusted === true),
+  };
+
+  const hostTrust = await hostPage.read();
+  out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
+  out.ok =
+    typed.value === 'trusted' &&
+    keys.length >= 7 &&
+    keys.every((k) => k.trusted === true) &&
+    Boolean(hostTrust && hostTrust.trust && hostTrust.trust.applied >= 7 && hostTrust.trust.failed === 0);
+} catch (error) {
+  out.error = String((error && error.message) || error);
+  out.relayLog = relayLog.slice(-2000);
+} finally {
+  if (agent) await agent.close().catch(() => {});
+  if (hostBidi) hostBidi.close();
+  if (guestBidi) guestBidi.close();
+  if (host) host.kill('SIGTERM');
+  if (guest) guest.kill('SIGTERM');
+  if (relay) relay.kill('SIGTERM');
+  if (hostProfile) await rm(hostProfile, { recursive: true, force: true }).catch(() => {});
+  if (guestProfile) await rm(guestProfile, { recursive: true, force: true }).catch(() => {});
+  if (extensionDir) await rm(extensionDir, { recursive: true, force: true }).catch(() => {});
+  if (bridge) await rm(bridge, { force: true }).catch(() => {});
+}
+
+process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+process.exit(out.ok ? 0 : 1);
