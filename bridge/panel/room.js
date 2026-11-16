@@ -209,14 +209,19 @@ function renderSettings(data) {
   }
 }
 
-function siteLabel(key) {
+function siteParts(key) {
   try {
     const url = new URL(key);
     const path = url.pathname.replace(/\/+$/, '');
-    return path && path !== '/' ? `${url.host}${path}` : url.host;
+    return { host: url.host, path: path && path !== '/' ? path : '' };
   } catch {
-    return key;
+    return { host: key, path: '' };
   }
+}
+
+function siteLabel(key) {
+  const parts = siteParts(key);
+  return parts.path ? `${parts.host}${parts.path}` : parts.host;
 }
 
 function renderCursorSites(data) {
@@ -232,8 +237,10 @@ function renderCursorSites(data) {
       return [];
     }
   })();
-  const keys = [...new Set([...(policy || []), ...seen, ...defaults])];
-  const active = policy || defaults;
+  const forgotten = Array.isArray(data && data.cursorForgot) ? data.cursorForgot : [];
+  const keep = (key) => !forgotten.includes(key);
+  const keys = [...new Set([...(policy || []), ...seen, ...defaults])].filter(keep);
+  const active = (policy || defaults).filter(keep);
   const signature = `${active.join(',')}|${keys.join(',')}`;
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
@@ -241,7 +248,7 @@ function renderCursorSites(data) {
   if (!keys.length) {
     const empty = document.createElement('li');
     empty.className = 'empty';
-    empty.textContent = 'No sites seen yet.';
+    empty.textContent = 'No sites yet. A site joins this list the first time someone visits it.';
     list.append(empty);
     return;
   }
@@ -249,15 +256,36 @@ function renderCursorSites(data) {
     const row = document.createElement('li');
     const label = document.createElement('label');
     label.className = 'switch-row';
+    const parts = siteParts(key);
     const text = document.createElement('span');
-    text.textContent = siteLabel(key);
+    text.className = 'site-text';
     text.title = key;
+    const host = document.createElement('span');
+    host.className = 'site-host';
+    host.textContent = parts.host;
+    text.append(host);
+    // The path sits on its own line, so two long addresses on one host still
+    // read as different sites.
+    if (parts.path) {
+      const path = document.createElement('span');
+      path.className = 'site-path';
+      path.textContent = parts.path;
+      text.append(path);
+    }
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = active.includes(key);
     input.addEventListener('change', () => setCursorSite(key, input.checked));
     label.append(text, input);
-    row.append(label);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'site-forget';
+    const name = siteLabel(key);
+    remove.title = `Remove ${name} from this list`;
+    remove.setAttribute('aria-label', `Remove ${name} from this list`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => forgetCursorSite(key));
+    row.append(label, remove);
     list.append(row);
   }
 }
@@ -279,6 +307,17 @@ async function setCursorSite(site, on) {
     notice(
       on ? `${siteLabel(site)} shows cursors.` : `${siteLabel(site)} hides cursors.`
     );
+    await refresh();
+  } else {
+    notice('The site list did not change.', true);
+    await refresh();
+  }
+}
+
+async function forgetCursorSite(site) {
+  const reply = await roomMessage({ type: 'brosr:cursor-forget', site, on: true });
+  if (reply && reply.ok) {
+    notice(`${siteLabel(site)} is off the list.`);
     await refresh();
   } else {
     notice('The site list did not change.', true);

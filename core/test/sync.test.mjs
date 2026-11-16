@@ -1238,6 +1238,54 @@ test('the host site list gates cursors and travels to a late guest', () => {
   assert.equal(client.publish().cursors, 0);
 });
 
+test('the host takes a site off the list, and a later visit does not bring it back', () => {
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 0,
+    document: cursorDocument(),
+    pageUrl: () => 'https://example.com/canvas',
+    cursorSites: ['https://example.com/canvas', 'https://example.com/notes'],
+    send: (frame) => sent.push(decode(frame)),
+  });
+
+  assert.deepEqual(host.forgetSite('https://example.com/notes'), ['https://example.com/notes']);
+  assert.deepEqual(host.publish().cursorForgot, ['https://example.com/notes']);
+  // The removed site is off at the same moment, so the list and the rule agree.
+  assert.deepEqual(host.publish().cursorSites, ['https://example.com/canvas']);
+  assert.deepEqual(
+    sent.filter((message) => message.type === 'cursorpolicy').at(-1).sites,
+    ['https://example.com/canvas']
+  );
+
+  // Someone visiting the removed site reports it, and the row stays out.
+  host.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.2, y: 0.2 },
+      url: 'https://example.com/notes',
+      roomTime: 0,
+    }),
+    0
+  );
+  assert.equal(host.publish().cursorSeen.includes('https://example.com/notes'), true);
+  assert.deepEqual(host.publish().cursorForgot, ['https://example.com/notes']);
+
+  // Switching the site on again restores its row.
+  host.setCursorSites(['https://example.com/canvas', 'https://example.com/notes']);
+  assert.deepEqual(host.forgetSite('https://example.com/notes', false), []);
+  assert.deepEqual(host.publish().cursorForgot, []);
+
+  // A peer holds no list, so it cannot remove a row.
+  const peer = createRoomClient({ role: 'peer', peerId: 'peer', hostId: 'host', now: () => 0 });
+  assert.equal(peer.forgetSite('https://example.com/notes'), null);
+});
+
 test('a peer custom cursor and the name switch reach the drawn position', () => {
   const image = { src: 'data:image/png;base64,AAAA', name: 'star', w: 32, h: 32 };
   const shared = [];

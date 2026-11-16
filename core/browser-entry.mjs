@@ -435,6 +435,16 @@ export async function start() {
     }
   })());
   let cursorSites = savedSites || defaultCursorSites(location.href);
+  // Sites the host removed from the panel list. The list belongs to the host,
+  // so only the room tab of the host browser ever writes this.
+  const savedForgot = cleanCursorSites((() => {
+    try {
+      return JSON.parse(readSetting('brosr-cursor-forgot') || 'null');
+    } catch {
+      return null;
+    }
+  })());
+  let cursorForgot = savedForgot || [];
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
   const source =
@@ -572,6 +582,7 @@ export async function start() {
     customCursor: savedCursor,
     sharePointer,
     cursorSites,
+    cursorForgot,
     showNames,
     // A learned list is written here and sent to the rest of this browser, so
     // every tab follows the host without holding a socket.
@@ -1178,8 +1189,23 @@ export async function start() {
         else next.delete(key);
         cursorSites = client.setCursorSites([...next]) || [];
         writeSetting('brosr-cursor-sites', JSON.stringify(cursorSites));
+        // Switching a site on brings its row back, even after a removal.
+        if (message.on) {
+          cursorForgot = client.forgetSite(key, false) || cursorForgot;
+          writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
+        }
         publish();
         return reply({ ok: true, sites: cursorSites });
+      }
+      if (message.type === 'brosr:cursor-forget') {
+        // Only the host holds the list, so only the host can take a row off it.
+        if (role !== 'host') return reply({ ok: false, reason: 'not-host' });
+        const key = cursorSiteOf(String(message.site || ''));
+        if (!key) return reply({ ok: false, reason: 'bad-site' });
+        cursorForgot = client.forgetSite(key, message.on !== false) || cursorForgot;
+        writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
+        publish();
+        return reply({ ok: true, forgot: cursorForgot });
       }
       if (message.type === 'brosr:presence-point') {
         // Another tab of this browser owns the mouse. Presence carries that

@@ -68,6 +68,9 @@ export function createRoomClient({
   cursorSites = null,
   // A viewer can hide every pointer name without hiding the pointers.
   showNames = true,
+  // Sites the host took off the list stay off, so a visit does not bring the
+  // row back.
+  cursorForgot = null,
   // A peer that learns a new site list reports it here, so every tab of this
   // browser follows the host at once.
   onPolicy = null,
@@ -113,6 +116,9 @@ export function createRoomClient({
   // Every site a presence frame has named. The host panel offers these as
   // toggles, so a site someone is actually on can be switched on.
   const seenSites = new Set();
+  // Sites the host removed from the list. The panel leaves them out even while
+  // people are on them, so a removal holds until the site is switched on again.
+  const forgottenSites = new Set(cleanCursorSites(cursorForgot) || []);
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
   const latencies = [];
@@ -319,6 +325,23 @@ export function createRoomClient({
       }
     }
     return [...next];
+  }
+
+  // Taking a site off the list also switches it off, so the list and the rule
+  // never disagree about a site the host removed.
+  function forgetSite(key, on) {
+    if (!isHost()) return null;
+    const clean = cursorSiteOf(key);
+    if (!clean) return null;
+    if (on === false) {
+      forgottenSites.delete(clean);
+    } else {
+      forgottenSites.add(clean);
+      if (Array.isArray(allowedSites) && allowedSites.includes(clean)) {
+        setCursorSites(allowedSites.filter((site) => site !== clean));
+      }
+    }
+    return [...forgottenSites];
   }
 
   function sendPolicy() {
@@ -1359,6 +1382,7 @@ export function createRoomClient({
       sharePointer: sharingPointer,
       cursorSites: allowedSites === null ? null : [...allowedSites],
       cursorSeen: [...seenSites],
+      cursorForgot: [...forgottenSites],
       cursorNames: showingNames,
       colours: ROOM_COLOURS,
       url: state.url,
@@ -1420,6 +1444,7 @@ export function createRoomClient({
     setCursor,
     setSharePointer,
     setCursorSites,
+    forgetSite,
     setShowNames,
     sendPolicy,
     hello,
