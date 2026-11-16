@@ -100,10 +100,10 @@
             </span>
             <div class="tile-copy">
               <h2 class="tile-name" id="listen-title">Listen</h2>
-              <p class="tile-note">One track, one playhead.</p>
+              <p class="tile-note" id="listen-note">One track, one playhead.</p>
             </div>
           </div>
-          <span class="tile-state is-live">Live</span>
+          <span class="tile-state is-live" id="listen-state">Live</span>
         </div>
         <div class="site-list">
           <a class="site" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer">
@@ -390,6 +390,43 @@
         openCursors();
         pruneCursors();
       }, 1000);
+    })();
+    // The core writes the room state onto the document, and the Listen tile
+    // reads the music player out of it. A track title replaces the note, and
+    // the chip follows the playhead instead of sitting at a fixed Live. A page
+    // with no core behind it keeps the plain note.
+    (function () {
+      var note = document.getElementById('listen-note');
+      var chip = document.getElementById('listen-state');
+      if (!note || !chip) return;
+
+      function render(media) {
+        if (!media || !media.music || !media.title) {
+          note.textContent = 'One track, one playhead.';
+          note.removeAttribute('title');
+          chip.textContent = 'Live';
+          chip.classList.add('is-live');
+          return;
+        }
+        note.textContent = media.title;
+        note.title = media.title;
+        chip.textContent = media.playing ? 'Playing' : 'Paused';
+        chip.classList.toggle('is-live', Boolean(media.playing));
+      }
+
+      function read() {
+        var media = null;
+        try {
+          var raw = document.documentElement.dataset.brosr;
+          if (raw) media = JSON.parse(raw).media || null;
+        } catch (err) {
+          media = null;
+        }
+        render(media);
+      }
+
+      read();
+      setInterval(read, 2000);
     })();
   </script>
 </body>

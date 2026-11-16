@@ -11,7 +11,7 @@
 // tab that shows the film stays near the host without a second seek loop.
 
 import { mediaKey } from './media.mjs';
-import { adPlayingFrom, hostOf, playerKey } from './youtube.mjs';
+import { adPlayingFrom, hostOf, isYouTubeMusic, playerKey } from './youtube.mjs';
 
 // The room samples its own media at the host tick rate. A tab uses the same
 // rate, so one hop never adds more than one tick of lag.
@@ -36,6 +36,34 @@ const AD_ROOT = '#movie_player';
 
 export function isYouTubeHost(value = '') {
   return YT_HOST.test(hostOf(value));
+}
+
+// Cinecat plays a normal HTML5 player, but its title page can put that player
+// inside a provider frame. The frame URL names the provider, while the title
+// page names the film. A Cinecat watch page is the film key when the browser
+// sends it as the frame's referrer.
+export const CINECAT_HOST = 'cinecat.eu';
+export const CINECAT_WATCH_PATH = /^\/(?:media|tv\/watch)\/[^/]+(?:\/[^/]+\/[^/]+)?\/?$/;
+
+export function isCinecatHost(value = '') {
+  return /(^|\.)cinecat\.eu$/i.test(hostOf(value));
+}
+
+export function isCinecatWatchPage(value = '') {
+  try {
+    const url = new URL(String(value || ''));
+    return isCinecatHost(url.hostname) && CINECAT_WATCH_PATH.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+// A Cinecat player frame reports the title page that owns it, not the provider
+// URL inside the frame. A missing or non-watch referrer keeps the frame URL,
+// so a normal embedded player still works the way it did before.
+export function framePageHref({ href = '', referrer = '', embedded = false } = {}) {
+  if (!embedded) return href;
+  return isCinecatWatchPage(referrer) ? referrer : href;
 }
 
 // A site player often hides its film behind a blob URL, a media source or an
@@ -76,6 +104,26 @@ export function mediaKeyFor(element, { pageUrl = '' } = {}) {
   return mediaKey(element) || pageKey(pageUrl);
 }
 
+// A player page names its own track. The media session carries the cleanest
+// copy, and the document title is the fallback. YouTube appends its own name to
+// that title, so the tail is dropped before it reaches a room.
+const TITLE_TAIL = /\s*[-|·]\s*YouTube( Music)?\s*$/i;
+
+export function mediaTitle(doc) {
+  if (!doc) return '';
+  let raw = '';
+  try {
+    const meta = doc.mediaSession && doc.mediaSession.metadata;
+    if (meta && meta.title) {
+      raw = meta.artist ? String(meta.title) + ' · ' + String(meta.artist) : String(meta.title);
+    }
+  } catch {
+    raw = '';
+  }
+  if (!raw) raw = String(doc.title || '');
+  return raw.replace(TITLE_TAIL, '').trim().slice(0, 120);
+}
+
 // A tab reads the element the site already plays. YouTube marks an ad on the
 // player container, and the element itself carries no field for one.
 export function mediaStateFromDocument(
@@ -87,6 +135,7 @@ export function mediaStateFromDocument(
   const video = doc.querySelector(VIDEO_SELECTOR);
   if (!video) return null;
   const yt = isYouTubeHost(hostname || href);
+  const music = yt && isYouTubeMusic(hostname || href);
   const key = yt ? playerKey(href) : mediaKeyFor(video, { pageUrl: href });
   if (!key) return null;
   return {
@@ -98,6 +147,10 @@ export function mediaStateFromDocument(
     volume: Number(video.volume ?? 1),
     buffering: Number(video.readyState ?? 0) < 2,
     ad: yt ? adPlayingFrom(doc.querySelector(AD_ROOT)) : false,
+    // A music host reports the track name and the host kind, so a room tile can
+    // say what is playing instead of showing a fixed label.
+    music,
+    title: yt ? mediaTitle(doc) : '',
     at: Date.now(),
   };
 }
@@ -164,6 +217,8 @@ export function viewerState(room, local, now = Date.now()) {
   const behind = open ? Math.round((position - localPosition) * 1000) / 1000 : null;
   return {
     key: room.key,
+    title: String(room.title || ''),
+    music: Boolean(room.music),
     position,
     playing: Boolean(room.playing),
     buffering: Boolean(room.buffering || (open && local.buffering)),
@@ -213,6 +268,8 @@ export class RelayMediaAdapter {
     if (!latest) return null;
     return {
       key: latest.key,
+      title: String(latest.title || ''),
+      music: Boolean(latest.music),
       position: projectPosition(latest, this.now()),
       duration: Number(latest.duration || 0),
       playing: Boolean(latest.playing),
@@ -303,11 +360,13 @@ export class RemoteMediaSync {
     document: doc = typeof document === 'undefined' ? null : document,
     href = typeof location === 'undefined' ? '' : location.href,
     hostname = typeof location === 'undefined' ? '' : location.hostname,
+    pageHref = null,
     now = () => Date.now(),
   } = {}) {
     this.doc = doc;
     this.href = href;
     this.hostname = hostname;
+    this.pageHrefFn = typeof pageHref === 'function' ? pageHref : null;
     this.now = now;
     this.lastSeekAt = -Infinity;
     this.seekIssuedAt = -Infinity;
@@ -324,6 +383,7 @@ export class RemoteMediaSync {
   // passed is the one it started on, so the live document wins when it has one.
   // Otherwise the tab announces a new key and then refuses every frame for it.
   pageHref() {
+    if (this.pageHrefFn) return this.pageHrefFn();
     const live = this.doc && this.doc.location ? this.doc.location.href : '';
     return live || this.href;
   }

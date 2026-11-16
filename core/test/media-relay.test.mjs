@@ -133,6 +133,31 @@ test('the player container marks an ad, and a missing player means no state', ()
   assert.deepEqual(mediaStateFromDocument(null), null);
 });
 
+test('a music host names its track and a watch page does not claim one', () => {
+  const video = fakeVideo({ paused: false });
+  const music = fakeDoc(video, cleanRoot);
+  music.title = 'Night Drive - Artist - YouTube Music';
+  music.mediaSession = { metadata: { title: 'Night Drive', artist: 'Artist' } };
+  const state = mediaStateFromDocument(
+    music,
+    'https://music.youtube.com/watch?v=abc123',
+    'music.youtube.com'
+  );
+  assert.equal(state.music, true);
+  assert.equal(state.title, 'Night Drive · Artist');
+  const seen = viewerState({ ...state, at: 1000 }, null, 1000);
+  assert.equal(seen.music, true);
+  assert.equal(seen.title, 'Night Drive · Artist');
+
+  // A page with no media session falls back to its title, minus the site name,
+  // and a watch page is not reported as music.
+  const plain = fakeDoc(fakeVideo(), cleanRoot);
+  plain.title = 'Some Video - YouTube';
+  const watch = mediaStateFromDocument(plain, ytHref, ytHost);
+  assert.equal(watch.music, false);
+  assert.equal(watch.title, 'Some Video');
+});
+
 test('the YouTube host check covers the watch, embed and short hosts', () => {
   assert.equal(isYouTubeHost('www.youtube.com'), true);
   assert.equal(isYouTubeHost('youtube.com'), true);

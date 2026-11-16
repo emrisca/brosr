@@ -2,7 +2,9 @@
 // Canvas. A paper sheet drawn on one canvas, with a small stroke model so undo,
 // symmetry, layers, the room and a PNG export all read from the same record.
 
-const PAPER = { width: 2400, height: 1600 };
+// The sheet is a square. Ink is clipped to it on every pass, so the desk around
+// it stays empty no matter where a hand ends up.
+const PAPER = { width: 2400, height: 2400 };
 const PAPER_COLOUR = '#f7f7f8';
 
 const PRESETS = {
@@ -39,6 +41,9 @@ let dpr = 1;
 let drawing = null;
 let panning = null;
 let spaceDown = false;
+// The view follows the window until the hand moves it. A resize then refits a
+// sheet nobody zoomed, and leaves a zoomed sheet where it is.
+let fitted = true;
 
 // The room. One WebSocket to the relay, app frames only, JSON like the rest of
 // the wire. A stroke is a list of points, so it travels as one message.
@@ -102,31 +107,33 @@ function hexAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function mirrorTransforms(mode) {
+// A mirror is applied to whichever surface is painting, not to the screen
+// canvas alone, because the committed ink is painted into its own bitmap.
+function mirrorTransforms(g, mode) {
   const cx = PAPER.width / 2;
   const cy = PAPER.height / 2;
   const list = [() => {}];
   const flipX = () => {
-    ctx.translate(PAPER.width, 0);
-    ctx.scale(-1, 1);
+    g.translate(PAPER.width, 0);
+    g.scale(-1, 1);
   };
   const flipY = () => {
-    ctx.translate(0, PAPER.height);
-    ctx.scale(1, -1);
+    g.translate(0, PAPER.height);
+    g.scale(1, -1);
   };
   if (mode === 'vertical' || mode === 'quad') list.push(flipX);
   if (mode === 'horizontal' || mode === 'quad') list.push(flipY);
   if (mode === 'quad') {
     list.push(() => {
-      ctx.translate(PAPER.width, PAPER.height);
-      ctx.scale(-1, -1);
+      g.translate(PAPER.width, PAPER.height);
+      g.scale(-1, -1);
     });
   }
   // The transforms must land around the sheet centre.
   return list.map((apply) => () => {
-    ctx.translate(cx, cy);
+    g.translate(cx, cy);
     apply();
-    ctx.translate(-cx, -cy);
+    g.translate(-cx, -cy);
   });
 }
 
@@ -215,7 +222,7 @@ function paintStroke(g, stroke) {
     paintShape(g, stroke);
     return;
   }
-  for (const apply of mirrorTransforms(stroke.symmetry)) {
+  for (const apply of mirrorTransforms(g, stroke.symmetry)) {
     g.save();
     apply();
     paintFreehand(g, stroke);
@@ -224,21 +231,146 @@ function paintStroke(g, stroke) {
   g.globalAlpha = 1;
 }
 
-function paintScene(g, withLive) {
-  g.globalAlpha = 1;
-  g.fillStyle = PAPER_COLOUR;
-  g.fillRect(0, 0, PAPER.width, PAPER.height);
+// The sheet is the only place ink can land. A point past an edge is pulled back
+// to it, and every paint pass is clipped to the same rectangle, so a stroke that
+// leaves the paper stops at the paper instead of drawing on the desk.
+function clampPoint(point) {
+  return {
+    x: clamp(point.x, 0, PAPER.width),
+    y: clamp(point.y, 0, PAPER.height),
+  };
+}
 
-  for (let index = 0; index < state.layers.length; index++) {
-    const layer = state.layers[index];
+function onPaperPoint(point) {
+  return point.x >= 0 && point.y >= 0 && point.x <= PAPER.width && point.y <= PAPER.height;
+}
+
+// ---------------------------------------------------------------------------
+// Frames
+
+// The committed ink lives in one paper-sized bitmap, so a frame draws two
+// images, the line in progress and the pointers no matter how much is on the
+// sheet. The bitmap holds one pixel per sheet pixel, which is exact at a 100%
+// view and sharp below it. A zoomed-in view magnifies it, so the page keeps a
+// screen-sized crop for that case and rebuilds it once the view rests.
+const ink = document.createElement('canvas');
+ink.width = PAPER.width;
+ink.height = PAPER.height;
+const inkCtx = ink.getContext('2d');
+const SHARP_ZOOM = 1.02;
+const SHARP_IDLE_MS = 120;
+let inkDirty = true;
+let sharp = null;
+let sharpTimer = 0;
+
+function paintCommitted(g) {
+  g.save();
+  g.beginPath();
+  g.rect(0, 0, PAPER.width, PAPER.height);
+  g.clip();
+  for (const layer of state.layers) {
     if (!layer.visible) continue;
     for (const stroke of layer.strokes) paintStroke(g, stroke);
-    if (!withLive) continue;
-    if (drawing && drawing.stroke.layer === index) paintStroke(g, drawing.stroke);
-    for (const stroke of room.inflight.values()) {
-      if (stroke.layer === index) paintStroke(g, stroke);
-    }
   }
+  g.restore();
+  g.globalAlpha = 1;
+}
+
+function paintInk() {
+  inkCtx.setTransform(1, 0, 0, 1, 0, 0);
+  inkCtx.globalAlpha = 1;
+  inkCtx.clearRect(0, 0, PAPER.width, PAPER.height);
+  inkCtx.fillStyle = PAPER_COLOUR;
+  inkCtx.fillRect(0, 0, PAPER.width, PAPER.height);
+  paintCommitted(inkCtx);
+  inkDirty = false;
+}
+
+// A finished stroke goes straight into the bitmap, so a commit never repaints
+// the sheet. Undo, a remote remove or a hidden layer still rebuilds it once.
+function addToInk(stroke) {
+  const layer = state.layers[stroke.layer];
+  if (inkDirty || !layer || !layer.visible) return;
+  inkCtx.save();
+  inkCtx.beginPath();
+  inkCtx.rect(0, 0, PAPER.width, PAPER.height);
+  inkCtx.clip();
+  paintStroke(inkCtx, stroke);
+  inkCtx.restore();
+}
+
+function markInk() {
+  inkDirty = true;
+  sharp = null;
+}
+
+function drawSheet(g) {
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.save();
+  g.translate(view.x, view.y);
+  g.scale(view.z, view.z);
+  g.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  g.shadowBlur = 28;
+  g.shadowOffsetY = 8;
+  g.fillStyle = PAPER_COLOUR;
+  g.fillRect(0, 0, PAPER.width, PAPER.height);
+  g.shadowColor = 'transparent';
+  g.shadowBlur = 0;
+  g.shadowOffsetY = 0;
+  g.drawImage(ink, 0, 0, PAPER.width, PAPER.height);
+  g.restore();
+}
+
+function sharpMatches() {
+  return Boolean(
+    sharp &&
+      sharp.width === canvas.width &&
+      sharp.height === canvas.height &&
+      sharp.dpr === dpr &&
+      sharp.view.x === view.x &&
+      sharp.view.y === view.y &&
+      sharp.view.z === view.z
+  );
+}
+
+function paintSharp() {
+  clearTimeout(sharpTimer);
+  sharpTimer = 0;
+  if (view.z <= SHARP_ZOOM || canvas.width < 1 || canvas.height < 1) return;
+  if (inkDirty) paintInk();
+  const crop = document.createElement('canvas');
+  crop.width = canvas.width;
+  crop.height = canvas.height;
+  drawSheet(crop.getContext('2d'));
+  sharp = {
+    canvas: crop,
+    view: { x: view.x, y: view.y, z: view.z },
+    dpr,
+    width: crop.width,
+    height: crop.height,
+  };
+}
+
+// A zoomed view paints from the magnified bitmap while it moves, then settles
+// into the crisp crop once it stops. The wait is why a wheel turn stays cheap.
+function scheduleSharp() {
+  if (sharpMatches() || view.z <= SHARP_ZOOM || sharpTimer) return;
+  sharpTimer = setTimeout(() => {
+    paintSharp();
+    redraw();
+  }, SHARP_IDLE_MS);
+}
+
+function paintLive(g) {
+  if (drawing) {
+    const layer = state.layers[drawing.stroke.layer];
+    if (layer && layer.visible) paintStroke(g, drawing.stroke);
+  }
+  for (const stroke of room.inflight.values()) {
+    const layer = state.layers[stroke.layer];
+    if (layer && layer.visible) paintStroke(g, stroke);
+  }
+  g.globalAlpha = 1;
 }
 
 function redraw() {
@@ -246,21 +378,25 @@ function redraw() {
   const height = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
+
+  if (sharpMatches()) {
+    ctx.drawImage(sharp.canvas, 0, 0);
+  } else {
+    if (inkDirty) paintInk();
+    drawSheet(ctx);
+  }
+
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.save();
   ctx.translate(view.x, view.y);
   ctx.scale(view.z, view.z);
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-  ctx.shadowBlur = 28;
-  ctx.shadowOffsetY = 8;
-  ctx.fillStyle = PAPER_COLOUR;
-  ctx.fillRect(0, 0, PAPER.width, PAPER.height);
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-  paintScene(ctx, true);
+  ctx.beginPath();
+  ctx.rect(0, 0, PAPER.width, PAPER.height);
+  ctx.clip();
+  paintLive(ctx);
   paintPointers(ctx);
   ctx.restore();
+  scheduleSharp();
 }
 
 // A remote dot carries the person's name and keeps one screen size at every
@@ -331,6 +467,7 @@ function fit() {
   view.z = Math.min(width / PAPER.width, height / PAPER.height) * 0.9;
   view.x = (width - PAPER.width * view.z) / 2;
   view.y = (height - PAPER.height * view.z) / 2;
+  fitted = true;
   redraw();
   showZoom();
   refreshPointer(true);
@@ -348,6 +485,12 @@ function resize() {
   canvas.height = Math.max(1, Math.round(height * dpr));
   canvas.style.width = width + 'px';
   canvas.style.height = height + 'px';
+  // A window that changes size keeps a fitted sheet fitted. A sheet the hand
+  // zoomed stays at that zoom, because a resize is not a request to refit.
+  if (fitted) {
+    fit();
+    return;
+  }
   redraw();
   refreshPointer(true);
 }
@@ -366,6 +509,7 @@ function toWorld(event) {
 function addStroke(stroke) {
   state.layers[stroke.layer].strokes.push(stroke);
   room.seen.add(stroke.id);
+  addToInk(stroke);
 }
 
 function removeById(id) {
@@ -377,6 +521,7 @@ function removeById(id) {
       removed = true;
     }
   }
+  if (removed) markInk();
   return removed;
 }
 
@@ -537,9 +682,7 @@ function sendPointer(force) {
 function refreshPointer(force) {
   if (!pointerAt) return;
   const point = toWorld({ clientX: pointerAt.x, clientY: pointerAt.y });
-  const onPaper =
-    point.x >= 0 && point.y >= 0 && point.x <= PAPER.width && point.y <= PAPER.height;
-  const next = onPaper ? point : null;
+  const next = onPaperPoint(point) ? point : null;
   if (!next && !pointer) return;
   if (!force && pointer && next && Math.hypot(next.x - pointer.x, next.y - pointer.y) < 0.5) {
     return;
@@ -712,7 +855,7 @@ function handle(from, data) {
       for (const point of data.points) {
         if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
         if (held.points.length >= MAX_POINTS) break;
-        held.points.push({ x: point.x, y: point.y });
+        held.points.push(clampPoint(point));
       }
     }
     if (data.part === data.parts - 1) {
@@ -736,7 +879,7 @@ function handle(from, data) {
     const points = [];
     for (const point of data.points) {
       if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-      points.push({ x: point.x, y: point.y });
+      points.push(clampPoint(point));
     }
     let held = room.inflight.get(stroke.id);
     if (!held) {
@@ -881,10 +1024,10 @@ function addPoint(point) {
   // A stabilizer pulls the new point toward the last one, so a shaky hand
   // produces a shorter, calmer path.
   const pull = state.stabilizer * 0.85;
-  const next = {
+  const next = clampPoint({
     x: last.x + (point.x - last.x) * (1 - pull),
     y: last.y + (point.y - last.y) * (1 - pull),
-  };
+  });
   stroke.points.push(next);
   drawing.last = next;
   sendLive(stroke, false);
@@ -900,12 +1043,14 @@ viewport.addEventListener('pointerdown', (event) => {
     return;
   }
   if (event.button !== 0) return;
+  const point = toWorld(event);
+  // A press on the desk is not a stroke. Ink only starts on the sheet.
+  if (!onPaperPoint(point)) return;
   event.preventDefault();
   viewport.setPointerCapture(event.pointerId);
-  const point = toWorld(event);
-  startStroke(point);
+  startStroke(clampPoint(point));
   if (SHAPES.has(state.preset)) {
-    drawing.stroke.points.push(point);
+    drawing.stroke.points.push(clampPoint(point));
   }
   sendLive(drawing.stroke, true);
   redraw();
@@ -918,8 +1063,7 @@ viewport.addEventListener('pointermove', (event) => {
   coords.textContent = Math.round(point.x) + ', ' + Math.round(point.y);
 
   // Only a point on the paper travels, and leaving the paper clears the dot.
-  const onPaper =
-    point.x >= 0 && point.y >= 0 && point.x <= PAPER.width && point.y <= PAPER.height;
+  const onPaper = onPaperPoint(point);
   if (onPaper) {
     pointer = point;
     sendPointer(false);
@@ -931,6 +1075,7 @@ viewport.addEventListener('pointermove', (event) => {
   if (panning) {
     view.x = panning.vx + (event.clientX - panning.x);
     view.y = panning.vy + (event.clientY - panning.y);
+    fitted = false;
     // The move was read against the view before this pan step, so the point is
     // read again now that the paper has moved under the hand.
     refreshPointer(true);
@@ -939,7 +1084,7 @@ viewport.addEventListener('pointermove', (event) => {
   }
   if (!drawing) return;
   if (SHAPES.has(drawing.stroke.tool)) {
-    drawing.stroke.points[1] = point;
+    drawing.stroke.points[1] = clampPoint(point);
     redraw();
     return;
   }
@@ -988,6 +1133,7 @@ viewport.addEventListener(
     view.z = clamp(view.z * Math.exp(-event.deltaY * 0.0015), 0.15, 8);
     view.x = sx - before.x * view.z;
     view.y = sy - before.y * view.z;
+    fitted = false;
     redraw();
     showZoom();
     refreshPointer(true);
@@ -1064,6 +1210,7 @@ for (const button of document.querySelectorAll('.layer')) {
       layer.visible = !layer.visible;
       event.target.textContent = layer.visible ? 'Show' : 'Hidden';
       event.target.dataset.on = layer.visible ? 'on' : 'off';
+      markInk();
       redraw();
       return;
     }
@@ -1081,6 +1228,7 @@ document.getElementById('clear').addEventListener('click', () => {
   state.layers.forEach((layer) => {
     layer.strokes = [];
   });
+  markInk();
   state.history.push({ kind: 'clear', strokes });
   state.redo.length = 0;
   for (const stroke of strokes) sendRemove(stroke);
@@ -1095,7 +1243,9 @@ document.getElementById('export').addEventListener('click', () => {
   out.height = PAPER.height * scale;
   const target = out.getContext('2d');
   target.scale(scale, scale);
-  paintScene(target, false);
+  target.fillStyle = PAPER_COLOUR;
+  target.fillRect(0, 0, PAPER.width, PAPER.height);
+  paintCommitted(target);
   out.toBlob((blob) => {
     if (!blob) return;
     const link = document.createElement('a');
@@ -1108,6 +1258,7 @@ document.getElementById('export').addEventListener('click', () => {
 
 document.getElementById('zoom-in').addEventListener('click', () => {
   view.z = clamp(view.z * 1.2, 0.15, 8);
+  fitted = false;
   redraw();
   showZoom();
   refreshPointer(true);
@@ -1115,6 +1266,7 @@ document.getElementById('zoom-in').addEventListener('click', () => {
 
 document.getElementById('zoom-out').addEventListener('click', () => {
   view.z = clamp(view.z / 1.2, 0.15, 8);
+  fitted = false;
   redraw();
   showZoom();
   refreshPointer(true);

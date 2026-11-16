@@ -3,7 +3,9 @@
 // pointer, then zooms and resizes each page and reads where the other page
 // paints the dot. The dot is placed by sheet coordinates, so the tip of the
 // arrow must land at view.x + point.x * view.z on the receiving page at every
-// zoom and every window size.
+// zoom and every window size. The square sheet is checked too: a stroke that
+// leaves the paper has to stop at its edge, a press on the desk has to draw
+// nothing, and a crowded sheet has to keep a cheap frame.
 //
 // The app keeps its browser on port 9333, so this check uses its own port, its
 // own profile and its own relay.
@@ -23,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LIVE = process.env.BROSR_RELAY || '';
 const ROOM = process.env.BROSR_ROOM || `pointer-${Date.now().toString(36)}`;
-const SHEET = { x: 1200, y: 800 };
+const SHEET = { x: 1200, y: 1200 };
 const TOLERANCE = 4;
 const BROWSERS = [
   process.env.BROSR_CHECK_BROWSER,
@@ -125,7 +127,7 @@ const INSPECT = `(() => {
   if (!c) return null;
   if (typeof view === 'undefined') return { missing: 'view' };
   const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-  let dot = 0, tipX = 1e9, tipY = 1e9;
+  let dot = 0, tipX = 1e9, tipY = 1e9, box = null;
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] < 200) continue;
     const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -134,18 +136,39 @@ const INSPECT = `(() => {
       const p = i / 4, x = p % c.width, y = (p - x) / c.width;
       if (x < tipX) tipX = x;
       if (y < tipY) tipY = y;
+      if (!box) box = { minX: x, minY: y, maxX: x, maxY: y };
+      if (x < box.minX) box.minX = x;
+      if (y < box.minY) box.minY = y;
+      if (x > box.maxX) box.maxX = x;
+      if (y > box.maxY) box.maxY = y;
     }
   }
   const rect = c.getBoundingClientRect();
   return {
     dot,
     tip: dot ? { x: tipX, y: tipY } : null,
+    box,
     dpr: c.width / Math.max(1, rect.width),
     rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
     view: { x: view.x, y: view.y, z: view.z },
+    paper: { width: PAPER.width, height: PAPER.height },
+    fitted: Boolean(fitted),
+    total: state.layers.reduce((sum, layer) => sum + layer.strokes.length, 0),
     pointer: pointer ? { x: pointer.x, y: pointer.y } : null,
     pointerAt: pointerAt ? { x: pointerAt.x, y: pointerAt.y } : null,
     zoom: document.getElementById('zoom-out-value').textContent,
+    symmetry: (() => {
+      const el = document.querySelector('.symmetry');
+      if (!el || !el.parentElement) return null;
+      const own = el.getBoundingClientRect();
+      const stage = el.parentElement.getBoundingClientRect();
+      return {
+        cx: own.left + own.width / 2,
+        stageCx: stage.left + stage.width / 2,
+        top: own.top,
+        stageTop: stage.top,
+      };
+    })(),
   };
 })()`;
 
@@ -198,6 +221,16 @@ async function expectDot(where, tab, point) {
   );
   return state;
 }
+
+// A fit is the view the page gives a sheet nobody zoomed. The check compares
+// against the same formula rather than trusting the displayed percentage.
+const fitZoom = (rect, paper) =>
+  Math.min(rect.width / paper.width, rect.height / paper.height) * 0.9;
+
+// One mouse event on a page. A drag needs buttons set, because a move after a
+// press is what a pointermove on the sheet looks like.
+const mouse = (tab, type, x, y, extra = {}) =>
+  tab.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', ...extra });
 
 // The pointer is placed by the page's own view, so the check reads the same
 // mapping the page uses instead of hard coding a client point.
@@ -303,12 +336,20 @@ try {
     probe.addEventListener('error', () => reject(new Error('probe socket')), { once: true });
   });
 
-  // 1. A point on the paper travels as sheet coordinates.
+  // 1. A point on the paper travels as sheet coordinates. A mouse lands on a
+  // whole client pixel, so the check reads the paper point under that pixel
+  // from the page and not the one it asked for.
   await moveToSheet(a, SHEET);
   const held = await waitFor(() => lastPoint(), 'the first pointer frame', 4000);
+  const onSheet = await a.eval(INSPECT);
+  assert.ok(onSheet.pointer, 'page A did not hold a paper point');
   assert.ok(
-    Math.abs(held.x - SHEET.x) <= 1.5 && Math.abs(held.y - SHEET.y) <= 1.5,
-    `the wire point ${held.x},${held.y} is not the sheet point ${SHEET.x},${SHEET.y}`
+    Math.abs(held.x - onSheet.pointer.x) <= 1 && Math.abs(held.y - onSheet.pointer.y) <= 1,
+    `the wire point ${held.x},${held.y} is not the paper point ${round(onSheet.pointer.x)},${round(onSheet.pointer.y)}`
+  );
+  assert.ok(
+    Math.abs(onSheet.pointer.x - SHEET.x) <= 4 && Math.abs(onSheet.pointer.y - SHEET.y) <= 4,
+    `the pointer landed at ${round(onSheet.pointer.x)},${round(onSheet.pointer.y)} instead of ${SHEET.x},${SHEET.y}`
   );
   console.log(`  page A sent sheet ${round(held.x)},${round(held.y)}`);
   await expectDot('page B before any zoom', b, held);
@@ -415,8 +456,9 @@ try {
     await expectDot(`page B after zoom out click ${step}`, b, next);
   }
 
-  // 7. A changes window size. The view does not move, so the paper point under
-  // the same client place is unchanged and B keeps its dot there.
+  // 7. A changes window size with a zoomed view. A zoom is a choice, so the
+  // resize leaves the view alone and the paper point under the same client
+  // place does not move.
   const beforeResize = await a.eval(INSPECT);
   await a.send('Emulation.setDeviceMetricsOverride', {
     width: 1000,
@@ -434,14 +476,49 @@ try {
   assert.ok(still, 'page A lost the paper under a still hand after a resize');
   assert.ok(
     Math.abs(resizedA.view.x - beforeResize.view.x) < 0.01 && Math.abs(resizedA.view.z - beforeResize.view.z) < 0.001,
-    'the resize moved the view without a fit'
+    'the resize moved a zoomed view without a fit'
   );
   console.log(
     `  page A resized from ${Math.round(beforeResize.rect.width)}x${Math.round(beforeResize.rect.height)} to ${Math.round(resizedA.rect.width)}x${Math.round(resizedA.rect.height)} and still holds ${round(still.x)},${round(still.y)}`
   );
   await expectDot('page B after the window on A resized', b, still);
 
-  // 8. Leaving the paper has to clear the dot, so nothing draws on the desk.
+  // 8. The other case is a sheet nobody zoomed: Fit, put the hand on the middle
+  // of the paper, then change the window. The sheet refits to the new shape and
+  // the point under the hand is read again against the new view.
+  await a.eval('fit()');
+  await sleep(150);
+  await moveToSheet(a, { x: 1200, y: 1200 });
+  await sleep(150);
+  await a.send('Emulation.setDeviceMetricsOverride', {
+    width: 900,
+    height: 820,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await sleep(450);
+  const refit = await a.eval(INSPECT);
+  const wantZoom = fitZoom(refit.rect, refit.paper);
+  assert.ok(
+    Math.abs(refit.view.z - wantZoom) < 0.005,
+    `a fitted sheet kept ${refit.view.z.toFixed(3)} after a resize to ${Math.round(refit.rect.width)}x${Math.round(refit.rect.height)}, expected ${wantZoom.toFixed(3)}`
+  );
+  assert.ok(refit.fitted, 'the page dropped its fitted flag after a resize');
+  assert.ok(refit.pointer, 'page A sent no pointer after a refit');
+  const underRefit = {
+    x: (refit.pointerAt.x - refit.rect.left - refit.view.x) / refit.view.z,
+    y: (refit.pointerAt.y - refit.rect.top - refit.view.y) / refit.view.z,
+  };
+  assert.ok(
+    Math.abs(refit.pointer.x - underRefit.x) <= 1.5 && Math.abs(refit.pointer.y - underRefit.y) <= 1.5,
+    `after a refit A holds ${round(refit.pointer.x)},${round(refit.pointer.y)} but its hand reads ${round(underRefit.x)},${round(underRefit.y)}`
+  );
+  console.log(
+    `  page A refitted to ${Math.round(refit.view.z * 100)}% after a resize to ${Math.round(refit.rect.width)}x${Math.round(refit.rect.height)} and re-read its hand`
+  );
+  await expectDot('page B after the refit', b, refit.pointer);
+
+  // 9. Leaving the paper has to clear the dot, so nothing draws on the desk.
   const last = await a.eval(INSPECT);
   await a.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved',
@@ -455,6 +532,195 @@ try {
   );
   await waitFor(async () => (await b.eval(INSPECT)).dot === 0, 'page B to drop the dot', 4000);
   console.log('  the dot left with the pointer');
+
+  // 10. Ink stops at the paper edge. The stroke starts on the sheet and the
+  // hand leaves it, so every painted pixel has to sit inside the rectangle.
+  const beforeInk = await a.eval(INSPECT);
+  assert.equal(beforeInk.paper.width, beforeInk.paper.height, 'the sheet is not a square');
+  await a.eval('setPreset("ink"); setColour("#1d4ed8")');
+  await moveToSheet(a, { x: 1200, y: 1200 });
+  await sleep(150);
+  const start = await a.eval(INSPECT);
+  const startX = Math.round(start.rect.left + start.view.x + 1200 * start.view.z);
+  const startY = Math.round(start.rect.top + start.view.y + 1200 * start.view.z);
+  const cornerX = Math.round(start.rect.left + 2);
+  const cornerY = Math.round(start.rect.top + 2);
+  await mouse(a, 'mousePressed', startX, startY, { clickCount: 1 });
+  for (const t of [0.35, 0.7, 1]) {
+    await mouse(
+      a,
+      'mouseMoved',
+      Math.round(startX + (cornerX - startX) * t),
+      Math.round(startY + (cornerY - startY) * t),
+      { buttons: 1 }
+    );
+  }
+  await mouse(a, 'mouseReleased', cornerX, cornerY);
+  await sleep(250);
+  const inkState = await a.eval(INSPECT);
+  assert.equal(
+    inkState.total,
+    beforeInk.total + 1,
+    'the stroke that left the sheet did not commit'
+  );
+  const points = await a.eval(`(() => {
+    const layer = state.layers[state.activeLayer];
+    const stroke = layer.strokes[layer.strokes.length - 1];
+    return stroke ? stroke.points : [];
+  })()`);
+  assert.ok(points.length > 2, 'the stroke out of the sheet kept no points');
+  const outside = points.filter(
+    (point) =>
+      point.x < 0 ||
+      point.y < 0 ||
+      point.x > inkState.paper.width ||
+      point.y > inkState.paper.height
+  );
+  assert.equal(outside.length, 0, `${outside.length} stroke points sit outside the paper`);
+  assert.ok(
+    points.some((point) => point.x <= 0.01 || point.y <= 0.01),
+    'no point was pulled back to the paper edge'
+  );
+  const box = inkState.box;
+  assert.ok(box, 'the stroke painted nothing');
+  const paperLeft = inkState.view.x * inkState.dpr;
+  const paperTop = inkState.view.y * inkState.dpr;
+  const paperRight = (inkState.view.x + inkState.paper.width * inkState.view.z) * inkState.dpr;
+  const paperBottom = (inkState.view.y + inkState.paper.height * inkState.view.z) * inkState.dpr;
+  assert.ok(
+    Math.abs(paperRight - paperLeft - (paperBottom - paperTop)) < 1,
+    'the paper is not square on screen'
+  );
+  const slack = 2;
+  assert.ok(
+    box.minX >= paperLeft - slack &&
+      box.minY >= paperTop - slack &&
+      box.maxX <= paperRight + slack &&
+      box.maxY <= paperBottom + slack,
+    `ink painted outside the paper: ${round(box.minX)},${round(box.minY)} to ${round(box.maxX)},${round(box.maxY)} against ${round(paperLeft)},${round(paperTop)} to ${round(paperRight)},${round(paperBottom)}`
+  );
+  console.log(
+    `  a stroke out of the sheet stopped at its edge: ink ${round(box.maxX - box.minX)}x${round(box.maxY - box.minY)} inside a ${round(paperRight - paperLeft)}x${round(paperBottom - paperTop)} paper`
+  );
+
+  // 11. A press on the desk is not a stroke, so the model does not grow.
+  const beforePress = await a.eval(INSPECT);
+  await mouse(a, 'mousePressed', Math.round(beforePress.rect.left + 2), Math.round(beforePress.rect.top + 2), { clickCount: 1 });
+  await mouse(a, 'mouseMoved', Math.round(beforePress.rect.left + 40), Math.round(beforePress.rect.top + 40), { buttons: 1 });
+  await mouse(a, 'mouseReleased', Math.round(beforePress.rect.left + 40), Math.round(beforePress.rect.top + 40));
+  await sleep(200);
+  const afterPress = await a.eval(INSPECT);
+  assert.equal(afterPress.total, beforePress.total, 'a press on the desk started a stroke');
+  console.log('  a press on the desk drew nothing');
+
+  // 12. The symmetry control sits over the middle of the sheet area instead of
+  // in the side panel, and it is reachable on top of the viewport.
+  const layout = await a.eval(INSPECT);
+  assert.ok(layout.symmetry, 'the symmetry control is missing from the page');
+  assert.ok(
+    Math.abs(layout.symmetry.cx - layout.symmetry.stageCx) <= 1,
+    `the symmetry control sits at ${round(layout.symmetry.cx)} against a stage centre of ${round(layout.symmetry.stageCx)}`
+  );
+  assert.ok(
+    layout.symmetry.cx > layout.rect.left &&
+      layout.symmetry.cx < layout.rect.left + layout.rect.width &&
+      layout.symmetry.top >= layout.rect.top,
+    'the symmetry control is outside the canvas area'
+  );
+  console.log(
+    `  the symmetry control sits centred at ${Math.round(layout.symmetry.cx)} over a stage centre of ${Math.round(layout.symmetry.stageCx)}`
+  );
+
+  // 13. A crowded sheet keeps a cheap frame. The single stroke path is what a
+  // full repaint costs, and the page paints a frame from its ink bitmap.
+  const perf = await a.eval(`(() => {
+    const layer = state.layers[0];
+    layer.strokes.length = 0;
+    for (let i = 0; i < 800; i++) {
+      const x = (i % 40) * 55 + 40;
+      const y = Math.floor(i / 40) * 110 + 40;
+      const points = [];
+      for (let j = 0; j < 30; j++) {
+        points.push(clampPoint({ x: x + j * 2, y: y + Math.sin(j / 3) * 14 }));
+      }
+      layer.strokes.push({
+        id: 'perf-' + i,
+        layer: 0,
+        tool: 'pencil',
+        colour: '#18181b',
+        size: 4,
+        opacity: 1,
+        symmetry: 'off',
+        points,
+      });
+    }
+    markInk();
+    redraw();
+
+    const scratch = document.createElement('canvas');
+    scratch.width = canvas.width;
+    scratch.height = canvas.height;
+    const full = () => {
+      const g = scratch.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, scratch.width, scratch.height);
+      g.save();
+      g.translate(view.x, view.y);
+      g.scale(view.z, view.z);
+      g.fillStyle = PAPER_COLOUR;
+      g.fillRect(0, 0, PAPER.width, PAPER.height);
+      paintCommitted(g);
+      g.restore();
+    };
+    const median = (list) => list.slice().sort((a, b) => a - b)[Math.floor(list.length / 2)];
+    // A canvas holds its work until something reads it, so a one-pixel read
+    // ends the pass and the number covers the raster too.
+    const flush = (target) => target.getContext('2d').getImageData(0, 0, 1, 1);
+    const time = (fn, runs, target) => {
+      const list = [];
+      for (let i = 0; i < runs; i++) {
+        const started = performance.now();
+        fn();
+        flush(target);
+        list.push(performance.now() - started);
+      }
+      return Math.round(median(list) * 100) / 100;
+    };
+
+    full();
+    redraw();
+    const fullMs = time(full, 8, scratch);
+    const frameMs = time(redraw, 30, canvas);
+    const live = {
+      id: 'perf-live',
+      layer: 1,
+      tool: 'pencil',
+      colour: '#18181b',
+      size: 4,
+      opacity: 1,
+      symmetry: 'off',
+      points: [],
+    };
+    for (let j = 0; j < 120; j++) {
+      live.points.push(clampPoint({ x: 200 + j * 4, y: 400 + Math.sin(j / 4) * 30 }));
+    }
+    drawing = { stroke: live, last: live.points[live.points.length - 1] };
+    const liveMs = time(redraw, 20, canvas);
+    drawing = null;
+    redraw();
+    return { strokes: layer.strokes.length, fullMs, frameMs, liveMs };
+  })()`);
+  assert.ok(
+    perf.frameMs < perf.fullMs / 2,
+    `a frame took ${perf.frameMs} ms against ${perf.fullMs} ms for a full repaint`
+  );
+  assert.ok(
+    perf.liveMs < perf.fullMs / 2,
+    `a frame with a live line took ${perf.liveMs} ms against ${perf.fullMs} ms for a full repaint`
+  );
+  console.log(
+    `  ${perf.strokes} strokes: full repaint ${perf.fullMs} ms, cached frame ${perf.frameMs} ms, frame with a live line ${perf.liveMs} ms`
+  );
 
   console.log(`PASS: the remote pointer held ${SHEET.x},${SHEET.y} through zoom, resize and clear`);
 } catch (error) {

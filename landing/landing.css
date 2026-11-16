@@ -332,6 +332,14 @@ a {
   line-height: 1.45;
 }
 
+/* A track name can be long, and a tile keeps its height whatever the title. */
+#listen-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
 .tile-state {
   flex: none;
   padding: 3px 9px;
