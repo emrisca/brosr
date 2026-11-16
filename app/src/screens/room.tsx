@@ -120,7 +120,7 @@ export function Room({ run, onLeave }: Props) {
     <div className="flex flex-col gap-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h1 className="text-xl font-medium tracking-tight">Room open</h1>
+          <h1 className="text-xl font-medium tracking-tight">{run.roomName || 'Room open'}</h1>
           <p className="truncate font-mono text-xs text-muted-foreground">{run.room}</p>
         </div>
         <Badge variant={relayReady ? 'default' : 'secondary'} className="shrink-0">

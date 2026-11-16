@@ -3,6 +3,7 @@
 // read and the launch arguments.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import { SITES } from './bookmarks.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -472,14 +473,180 @@ export function chromeExtensionId(dir) {
   );
 }
 
+// Chromium stores bookmark dates as microseconds since 1601, not Unix seconds.
+const CHROME_EPOCH_OFFSET = 11644473600000000n;
+const CHROME_TIME = () => (BigInt(Date.now()) * 1000n + CHROME_EPOCH_OFFSET).toString();
+const BOOKMARK_GUID = (seed) => {
+  const hex = createHash('sha1').update(seed).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+};
+
+function bookmarkChecksum(roots) {
+  const digest = createHash('md5');
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return;
+    digest.update(String(node.id || ''), 'ascii');
+    digest.update(String(node.name || ''), 'utf16le');
+    if (node.type === 'url') {
+      digest.update('url', 'ascii');
+      digest.update(String(node.url || ''), 'ascii');
+      return;
+    }
+    digest.update('folder', 'ascii');
+    for (const child of Array.isArray(node.children) ? node.children : []) visit(child);
+  };
+  for (const key of ['bookmark_bar', 'other', 'synced']) visit(roots[key]);
+  return digest.digest('hex');
+}
+
+function bookmarkRoots(bookmarks) {
+  if (!bookmarks.roots || typeof bookmarks.roots !== 'object') bookmarks.roots = {};
+  const roots = bookmarks.roots;
+  for (const [key, name, id] of [
+    ['bookmark_bar', 'Bookmarks bar', '1'],
+    ['other', 'Other bookmarks', '2'],
+    ['synced', 'Mobile bookmarks', '3'],
+  ]) {
+    if (!roots[key] || typeof roots[key] !== 'object') roots[key] = {};
+    const node = roots[key];
+    if (!Array.isArray(node.children)) node.children = [];
+    node.date_added = node.date_added || CHROME_TIME();
+    node.date_last_used = node.date_last_used || '0';
+    node.date_modified = node.date_modified || node.date_added;
+    node.guid = node.guid || BOOKMARK_GUID(`folder:${key}`);
+    node.id = String(node.id || id);
+    node.name = node.name || name;
+    node.type = 'folder';
+  }
+  return roots;
+}
+
+function bookmarkMaxId(node, max = 0) {
+  if (!node || typeof node !== 'object') return max;
+  const id = Number.parseInt(String(node.id || '0'), 10);
+  if (Number.isFinite(id)) max = Math.max(max, id);
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    max = bookmarkMaxId(child, max);
+  }
+  return max;
+}
+
+function bookmarkUrls(node, urls = new Set()) {
+  if (!node || typeof node !== 'object') return urls;
+  if (node.type === 'url' && typeof node.url === 'string') urls.add(node.url);
+  for (const child of Array.isArray(node.children) ? node.children : []) bookmarkUrls(child, urls);
+  return urls;
+}
+
+// A room profile starts with no bookmarks. The file is written before the
+// browser starts, and an existing bar is kept so a person's own bookmarks
+// survive a later prepare.
+export function writeChromiumBookmarks(profile) {
+  const file = path.join(profile, 'Default', 'Bookmarks');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let bookmarks = {};
+  try {
+    bookmarks = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    bookmarks = {};
+  }
+  bookmarks.version = 1;
+  const roots = bookmarkRoots(bookmarks);
+  const seen = bookmarkUrls(roots.bookmark_bar);
+  let nextId = bookmarkMaxId(roots) + 1;
+  for (const site of SITES) {
+    if (seen.has(site.url)) continue;
+    roots.bookmark_bar.children.push({
+      date_added: CHROME_TIME(),
+      date_last_used: '0',
+      guid: BOOKMARK_GUID(`url:${site.url}`),
+      id: String(nextId++),
+      name: site.name,
+      type: 'url',
+      url: site.url,
+    });
+    seen.add(site.url);
+  }
+  bookmarks.checksum = bookmarkChecksum(roots);
+  fs.writeFileSync(file, JSON.stringify(bookmarks, null, 2) + '\n');
+  return bookmarks;
+}
+
+function setPath(object, dotted, value) {
+  const parts = dotted.split('.');
+  let cursor = object;
+  for (const part of parts.slice(0, -1)) {
+    if (!cursor[part] || typeof cursor[part] !== 'object') cursor[part] = {};
+    cursor = cursor[part];
+  }
+  cursor[parts[parts.length - 1]] = value;
+}
+
+// A room is a browser with the storefront removed: no sponsored new-tab cards,
+// no rewards, wallet, AI chat or sidebar prompts. Unknown vendor keys are inert
+// in the other build, so one pass can set both Brave and Edge shapes.
+function debloatChromium(prefs) {
+  for (const [name, value] of Object.entries({
+    'browser.newtabpage.enabled': false,
+    'browser.newtabpage.activity-stream.showSearch': false,
+    'browser.newtabpage.activity-stream.showSponsored': false,
+    'browser.newtabpage.activity-stream.showSponsoredTopSites': false,
+    'browser.newtabpage.activity-stream.showSponsoredCheckboxes': false,
+    'browser.newtabpage.activity-stream.showWeather': false,
+    'browser.newtabpage.activity-stream.showGreeting': false,
+    'browser.newtabpage.activity-stream.feeds.topsites': false,
+    'browser.newtabpage.activity-stream.feeds.snippets': false,
+    'browser.newtabpage.activity-stream.feeds.section.topstories': false,
+    'browser.newtabpage.activity-stream.feeds.section.highlights': false,
+    'browser.newtabpage.activity-stream.discoverStream.enabled': false,
+    'browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar': false,
+    'browser.newtabpage.activity-stream.default.sites': [],
+    'browser.startup.homepage': 'about:blank',
+    'browser.startup.homepage_override.mstone': 'ignore',
+    'browser.show_home_button': false,
+    'bookmark_bar.show_on_all_tabs': true,
+    'credentials_enable_service': false,
+    'password_manager_enabled': false,
+    'autofill.profile_enabled': false,
+    'autofill.credit_card_enabled': false,
+    'payments.can_make_payment_enabled': false,
+    'profile.default_content_setting_values.notifications': 2,
+    'brave.new_tab_page.show_sponsored_images': false,
+    'brave.new_tab_page.show_brave_stats': false,
+    'brave.new_tab_page.show_rewards': false,
+    'brave.new_tab_page.show_together': false,
+    'brave.new_tab_page.show_branded_background_image': false,
+    'brave.today.opted_in': false,
+    'brave.today.show_opted_in': false,
+    'brave.rewards.enabled': false,
+    'brave.brave_ads.enabled': false,
+    'brave.wallet.show_wallet_icon_on_toolbar': false,
+    'brave.talk.enabled': false,
+    'brave.vpn.show_button': false,
+    'brave.ai_chat.show_ai_chat_button': false,
+    'brave.sidebar.show_sidebar': false,
+    'edge.sidebar.enabled': false,
+    'edge.shopping.enabled': false,
+    'edge.rewards.enabled': false,
+    'edge.copilot.enabled': false,
+    'edge.collections.enabled': false,
+    'edge.drop.enabled': false,
+    'edge.discover.enabled': false,
+  })) {
+    setPath(prefs, name, value);
+  }
+}
+
 // A room profile starts with no settings file, so the room writes one before
 // the first window opens. Three unpacked add-ons are pinned here, because a
-// command-line extension shows no toolbar icon of its own.
+// command-line extension shows no toolbar icon of its own. The same pass seeds
+// the empty bookmark set and turns off the browser's own storefront.
 // Google refuses a sign-in from a browser that blocks its cross-site cookies,
 // and Brave blocks them by default. The room profile allows them, which is the
 // setting Google reads when it asks whether the browser is secure.
 export function pinChromeExtension(profile, extensionDir) {
   const dirs = (Array.isArray(extensionDir) ? extensionDir : [extensionDir]).filter(Boolean);
+  writeChromiumBookmarks(profile);
   const prefsPath = path.join(profile, 'Default', 'Preferences');
   fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
   let prefs = {};
@@ -490,6 +657,7 @@ export function pinChromeExtension(profile, extensionDir) {
   }
   if (!prefs.extensions || typeof prefs.extensions !== 'object') prefs.extensions = {};
   if (!prefs.profile || typeof prefs.profile !== 'object') prefs.profile = {};
+  debloatChromium(prefs);
   // Zero is allow everything, and the per-site map keeps the cookie default on.
   prefs.profile.cookie_controls_mode = 0;
   prefs.profile.block_third_party_cookies = false;

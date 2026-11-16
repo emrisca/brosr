@@ -13,6 +13,7 @@ import {
   prepareSafeBrowsing,
   stageExtensions,
 } from './safe-browsing.mjs';
+import { SITES, bookmarksHtml } from '../host/bookmarks.mjs';
 import { zipEntry } from '../spike/unzip.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -203,6 +204,10 @@ const PREFS = [
   ['browser.shell.checkDefaultBrowser', false],
   ['browser.startup.page', 0],
   ['browser.startup.homepage', 'about:blank'],
+  // The welcome flow is what creates the Zen Basics tab group. A room does not
+  // need it, and the profile removes its session state below as well.
+  ['zen.welcome-screen.seen', true],
+  ['browser.startup.homepage_override.mstone', 'ignore'],
   ['datareporting.policy.dataSubmissionEnabled', false],
   ['toolkit.telemetry.enabled', false],
   ['toolkit.legacyUserProfileCustomizations.stylesheets', true],
@@ -253,29 +258,51 @@ const SIDEBAR_WIDTH = '320px';
 // the same store as the width.
 const WINDOW_MODE = 'maximized';
 
-// Two bookmarks ship with every profile, because a room starts with the sites a
-// viewer opens first. The toolbar folder is the place a first run looks.
-const BOOKMARKS = [
-  ['FMHY', 'https://fmhy.net'],
-  ['YouTube', 'https://www.youtube.com'],
-];
+// Room profiles start with no bookmarks. The landing page is the site list.
+const BOOKMARKS = SITES;
 
 function writeBookmarks(profile) {
-  const rows = BOOKMARKS.map(([name, url]) => `        <DT><A HREF="${url}">${name}</A>`).join(
-    '\n'
+  fs.writeFileSync(path.join(profile, 'bookmarks.html'), bookmarksHtml());
+}
+
+// Gecko imports bookmarks.html only into a new places database. A profile made
+// before the list grew keeps its old database, so this drops that database once
+// per bookmark set. A later room keeps the bookmarks a person added.
+function resetBookmarkDatabase(profile, hash) {
+  const marker = path.join(profile, 'brosr-bookmarks.json');
+  let seen = null;
+  try {
+    seen = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  } catch {
+    seen = null;
+  }
+  if (seen && seen.hash === hash) return false;
+  for (const name of ['places.sqlite', 'places.sqlite-wal', 'places.sqlite-shm', 'bookmarkbackups']) {
+    fs.rmSync(path.join(profile, name), { recursive: true, force: true });
+  }
+  fs.writeFileSync(
+    marker,
+    JSON.stringify({ version: 1, hash, bookmarks: BOOKMARKS.length }, null, 2) + '\n'
   );
-  const doc = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
-<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
-<TITLE>Bookmarks</TITLE>
-<H1>Bookmarks</H1>
-<DL><p>
-    <DT><H3 PERSONAL_TOOLBAR_FOLDER="true">Bookmarks Toolbar</H3>
-    <DL><p>
-${rows}
-    </DL><p>
-</DL><p>
-`;
-  fs.writeFileSync(path.join(profile, 'bookmarks.html'), doc);
+  return true;
+}
+
+// Zen stores the welcome tab group in both the normal session and its own
+// workspace sessions. Clearing them before a room starts keeps Zen Basics out
+// of the profile; the room opens the URL it was given instead of restoring tabs.
+export function clearSessions(profile) {
+  for (const name of [
+    'sessionstore.jsonlz4',
+    'sessionstore-backups',
+    'zen-sessions.jsonlz4',
+    'zen-sessions-backup',
+    'zen-live-folders.jsonlz4',
+    'sessionCheckpoints.json',
+    'recovery.jsonlz4',
+    'recovery.baklz4',
+  ]) {
+    fs.rmSync(path.join(profile, name), { recursive: true, force: true });
+  }
 }
 
 function writeXulstore(profile) {
@@ -316,6 +343,7 @@ export function writeProfile(dir, options = {}) {
   // xulstore. A stock Gecko browser starts on its own width.
   const native = options.native !== false;
   fs.mkdirSync(profile, { recursive: true });
+  clearSessions(profile);
   const bridge =
     options.bridge === false
       ? { installed: false, signaturesRequired: false }
@@ -323,6 +351,10 @@ export function writeProfile(dir, options = {}) {
         ? installBridgeFile(profile, options.bridge)
         : installBridge(profile);
   fs.writeFileSync(path.join(profile, 'user.js'), userJs(bridge.signaturesRequired, native));
+  resetBookmarkDatabase(
+    profile,
+    createHash('sha256').update(JSON.stringify(BOOKMARKS)).digest('hex')
+  );
   writeBookmarks(profile);
   if (native) writeXulstore(profile);
   installExtensions(profile);
@@ -400,6 +432,7 @@ export async function prepareProfile(dir, options = {}) {
   };
   const profile = path.resolve(dir);
   const runtime = options.runtime || RUNTIME;
+  clearSessions(profile);
   pruneExtensions(profile);
   // The add-ons land before the stamp is read. A stamp taken before the first
   // download names four missing files, so the run after it could never match

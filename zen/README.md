@@ -128,8 +128,9 @@ foot row holds the library button, one dot per space and the new tab button. It 
 the room panel, so the panel never covers it, and it drops to the window edge when the panel is
 shut. Zen hides the dots in this layout, so the dock turns the strip back on.
 
-**Basics.** Zen's welcome flow creates a `zen basics` folder, and the dock hides that folder when
-it appears. This build does not create one on a fresh profile, so the rule is a guard rail.
+**Basics.** Zen's welcome flow creates a `zen basics` folder. The room profile marks the welcome
+seen and clears the session files that carry the folder before each start; the dock also hides
+the folder if Zen restores one.
 
 **Column.** The tab column starts under the top bar and owns the left edge down to the window
 bottom. The bar drags the window, and the tabs, the tiles and the panel keep the pointer.
@@ -301,9 +302,9 @@ missing, unsigned, or behind the source manifest. A release can refuse the gap t
   dock parks the card in that pass.
 - The room profile carries a safe browsing set: uBlock Origin, SponsorBlock, AdGuard Extra and
   P-Stream. `zen/safe-browsing.mjs` stages the four signed XPIs and copies them into the
-  profile, so a new room starts blocked. Every profile also starts with an FMHY bookmark and a
-  YouTube bookmark. The `brosr.sites` pref carries the same two pages, and the dock fills the
-  essentials strip with them on the first start.
+  profile, so a new room starts blocked. No profile starts with toolbar bookmarks. The landing
+  page is the site list. The `brosr.sites` pref still carries the two pages the essentials strip
+  seeds on the first start.
 - A headless pass writes the FMHY list into uBlock Origin. A second window reads the list back
   and counts blocked probe requests. The marker holds those counters.
 - Setup needs network once. The XPIs and the list text stay in `zen/.runtime/`, so they are never

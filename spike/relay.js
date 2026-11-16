@@ -148,6 +148,10 @@ const server = http.createServer((req, res) => {
     serve(path.join(__dirname, '..', 'landing', 'landing.css'), res);
     return;
   }
+  if (url.pathname === '/favicon.svg') {
+    serve(path.join(__dirname, '..', 'landing', 'favicon.svg'), res);
+    return;
+  }
   if (url.pathname === '/canvas' || url.pathname.startsWith('/canvas/')) {
     const name =
       url.pathname === '/canvas' || url.pathname === '/canvas/'

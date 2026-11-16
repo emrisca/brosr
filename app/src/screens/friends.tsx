@@ -227,37 +227,11 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
 
         <Separator />
 
-        <form onSubmit={add} className="flex flex-col gap-1.5">
-          <label htmlFor="friend-address" className="text-xs font-medium">
-            Add a friend
-          </label>
-          <div className="flex items-center gap-1.5">
-            <Input
-              id="friend-address"
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-              placeholder="100.64.0.7:8790"
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono text-xs"
-            />
-            <Button
-              type="submit"
-              variant="secondary"
-              size="sm"
-              className="shrink-0"
-              disabled={busy === 'add' || !address.trim()}
-            >
-              <UserPlus />
-              {busy === 'add' ? 'Adding' : 'Add'}
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">Leave the port off to use 8790.</p>
-        </form>
-
         <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
           {friends.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No friends on this list yet.</p>
+            <p className="text-xs text-muted-foreground">
+              No friends yet. Add one under Advanced.
+            </p>
           ) : (
             friends.map((friend) => (
               <div
@@ -318,7 +292,6 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
-                    variant="secondary"
                     size="xs"
                     onClick={() => send(friend)}
                     disabled={!run || busy === friend.address}
@@ -344,6 +317,39 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
         {!run ? (
           <p className="text-xs text-muted-foreground">Open a room to send an invite.</p>
         ) : null}
+
+        <details className="rounded-md border border-border bg-muted/40 p-2">
+          <summary className="cursor-pointer list-none text-xs font-medium text-muted-foreground [&::-webkit-details-marker]:hidden">
+            Advanced
+          </summary>
+          <form onSubmit={add} className="mt-2 flex flex-col gap-1.5">
+            <label htmlFor="friend-address" className="text-xs font-medium">
+              Add by address
+            </label>
+            <div className="flex items-center gap-1.5">
+              <Input
+                id="friend-address"
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                placeholder="100.64.0.7:8790"
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono text-xs"
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                className="shrink-0"
+                disabled={busy === 'add' || !address.trim()}
+              >
+                <UserPlus />
+                {busy === 'add' ? 'Adding' : 'Add'}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">Leave the port off to use 8790.</p>
+          </form>
+        </details>
 
         <Separator />
 

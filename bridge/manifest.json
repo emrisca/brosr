@@ -25,7 +25,9 @@
   "permissions": [
     "tabs",
     "storage",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "*://*.cursors-4u.com/*",
+    "*://cdn.cursors-4u.net/*"
   ],
   "background": {
     "scripts": ["background.js"],

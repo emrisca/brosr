@@ -202,11 +202,7 @@ a {
 
 .bento {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-areas:
-    "watch watch listen"
-    "watch watch play"
-    "canvas canvas notes";
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -238,18 +234,14 @@ a {
   box-shadow: var(--shadow-lift);
 }
 
-.tile-live:hover,
-.tile-live:focus-visible {
-  transform: translateY(-2px);
-}
-
 .tile:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
 .tile-watch {
-  grid-area: watch;
+  grid-column: 1;
+  grid-row: 1 / span 2;
   min-height: 360px;
   background:
     radial-gradient(90% 80% at 100% 0%, color-mix(in oklch, var(--brand) 5%, transparent), transparent 62%),
@@ -257,15 +249,18 @@ a {
 }
 
 .tile-listen {
-  grid-area: listen;
+  grid-column: 1;
+  grid-row: 3;
 }
 
 .tile-play {
-  grid-area: play;
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .tile-canvas {
-  grid-area: canvas;
+  grid-column: 2;
+  grid-row: 3;
   justify-content: space-between;
   background:
     radial-gradient(80% 100% at 100% 100%, color-mix(in oklch, var(--brand) 4%, transparent), transparent 68%),
@@ -273,7 +268,8 @@ a {
 }
 
 .tile-notes {
-  grid-area: notes;
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .tile-head {
@@ -353,12 +349,6 @@ a {
   text-transform: uppercase;
 }
 
-.tile-state.is-live {
-  border-color: transparent;
-  background: var(--brand);
-  color: var(--bg);
-}
-
 .tile-open {
   display: inline-flex;
   align-items: center;
@@ -426,6 +416,7 @@ a {
 
 .site-copy {
   display: flex;
+  grid-column: 1;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
@@ -448,6 +439,7 @@ a {
 }
 
 .site-status {
+  grid-column: 2;
   padding: 3px 7px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -459,13 +451,8 @@ a {
   text-transform: uppercase;
 }
 
-.site-status.is-supported {
-  border-color: transparent;
-  background: var(--brand);
-  color: var(--bg);
-}
-
 .site-arrow {
+  grid-column: 3;
   width: 14px;
   height: 14px;
   color: var(--muted);
@@ -524,11 +511,7 @@ a {
 
 @media (max-width: 900px) {
   .bento {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas:
-      "watch watch"
-      "listen play"
-      "canvas notes";
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   }
 
   .tile-watch {
@@ -552,16 +535,32 @@ a {
 
   .bento {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "watch"
-      "listen"
-      "play"
-      "canvas"
-      "notes";
   }
 
   .tile-watch {
+    grid-column: 1;
+    grid-row: 1;
     min-height: 0;
+  }
+
+  .tile-listen {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .tile-play {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .tile-notes {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  .tile-canvas {
+    grid-column: 1;
+    grid-row: 5;
   }
 }
 
@@ -576,10 +575,5 @@ a {
   .site-arrow,
   .cursor {
     transition: none;
-  }
-
-  .tile-live:hover,
-  .tile-live:focus-visible {
-    transform: none;
   }
 }

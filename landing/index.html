@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Brosr</title>
   <meta name="brosr-cursors" content="page">
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./landing.css">
 </head>
 <body>
@@ -42,7 +43,6 @@
               <p class="tile-note">One playhead for everyone, with pause and seek shared.</p>
             </div>
           </div>
-          <span class="tile-state is-live">Live</span>
         </div>
         <div class="site-list">
           <a class="site" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer">
@@ -50,7 +50,6 @@
               <span class="site-name">YouTube</span>
               <span class="site-host">youtube.com</span>
             </span>
-            <span class="site-status is-supported">Supported</span>
             <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <path d="M7 17 17 7M8 7h9v9"></path>
             </svg>
@@ -60,7 +59,15 @@
               <span class="site-name">Cinecat</span>
               <span class="site-host">cinecat.eu</span>
             </span>
-            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+          <a class="site" href="https://www.miruro.com/#domains" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">Miruro</span>
+              <span class="site-host">miruro.com</span>
+            </span>
             <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <path d="M7 17 17 7M8 7h9v9"></path>
             </svg>
@@ -70,17 +77,15 @@
               <span class="site-name">Movy</span>
               <span class="site-host">movy.sx</span>
             </span>
-            <span class="site-status">Soon</span>
             <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <path d="M7 17 17 7M8 7h9v9"></path>
             </svg>
           </a>
-          <a class="site" href="https://7movies.ac/" target="_blank" rel="noopener noreferrer">
+          <a class="site" href="https://cinejoy.pk/" target="_blank" rel="noopener noreferrer">
             <span class="site-copy">
-              <span class="site-name">7movies</span>
-              <span class="site-host">7movies.ac</span>
+              <span class="site-name">Cinejoy</span>
+              <span class="site-host">cinejoy.pk</span>
             </span>
-            <span class="site-status">Soon</span>
             <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <path d="M7 17 17 7M8 7h9v9"></path>
             </svg>
@@ -103,7 +108,6 @@
               <p class="tile-note" id="listen-note">One track, one playhead.</p>
             </div>
           </div>
-          <span class="tile-state is-live" id="listen-state">Live</span>
         </div>
         <div class="site-list">
           <a class="site" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer">
@@ -111,7 +115,6 @@
               <span class="site-name">YouTube Music</span>
               <span class="site-host">music.youtube.com</span>
             </span>
-            <span class="site-status is-supported">Supported</span>
             <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <path d="M7 17 17 7M8 7h9v9"></path>
             </svg>
@@ -148,30 +151,6 @@
         </div>
       </article>
 
-      <a class="tile tile-canvas tile-live" href="./canvas/" aria-labelledby="canvas-title">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
-                <path d="M13.5 5.5l4 4"></path>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="canvas-title">Canvas</h2>
-              <p class="tile-note">Draw on one surface. Every stroke lands for the room.</p>
-            </div>
-          </div>
-          <span class="tile-state is-live">Live</span>
-        </div>
-        <span class="tile-open">
-          Open canvas
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
-          </svg>
-        </span>
-      </a>
-
       <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title">
         <div class="tile-head">
           <div class="tile-heading">
@@ -189,6 +168,29 @@
         </div>
         <span class="tile-open">
           Open notes
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M7 17 17 7M8 7h9v9"></path>
+          </svg>
+        </span>
+      </a>
+
+      <a class="tile tile-canvas" href="./canvas/" target="_blank" rel="noopener" aria-labelledby="canvas-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
+                <path d="M13.5 5.5l4 4"></path>
+              </svg>
+            </span>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="canvas-title">Canvas</h2>
+              <p class="tile-note">Draw on one surface. Every stroke lands for the room.</p>
+            </div>
+          </div>
+        </div>
+        <span class="tile-open">
+          Open canvas
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
             <path d="M7 17 17 7M8 7h9v9"></path>
           </svg>
@@ -396,9 +398,8 @@
         pruneCursors();
       }, 1000);
     })();
-    // The room, name and docs token ride this page URL, so each tile link
-    // carries them on. Without this a canvas or notes tab opens in its own
-    // room and the host token never arrives.
+    // A tile opens its app in the room it was clicked from. The room, the role
+    // and the docs token ride this page URL, so each tile link carries them on.
     (function () {
       var carry = location.search + location.hash;
       if (!carry) return;
@@ -408,26 +409,20 @@
       }
     })();
     // The core writes the room state onto the document, and the Listen tile
-    // reads the music player out of it. A track title replaces the note, and
-    // the chip follows the playhead instead of sitting at a fixed Live. A page
+    // reads the music player out of it. A track title replaces the note. A page
     // with no core behind it keeps the plain note.
     (function () {
       var note = document.getElementById('listen-note');
-      var chip = document.getElementById('listen-state');
-      if (!note || !chip) return;
+      if (!note) return;
 
       function render(media) {
         if (!media || !media.music || !media.title) {
           note.textContent = 'One track, one playhead.';
           note.removeAttribute('title');
-          chip.textContent = 'Live';
-          chip.classList.add('is-live');
           return;
         }
         note.textContent = media.title;
         note.title = media.title;
-        chip.textContent = media.playing ? 'Playing' : 'Paused';
-        chip.classList.toggle('is-live', Boolean(media.playing));
       }
 
       function read() {

@@ -88,11 +88,15 @@ fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
     }
 
     // Room state lives outside the bundle. The bundle is sealed, so a write
-    // inside it would break the signature on the next launch.
-    let state = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("There is no app data folder: {error}"))?;
+    // inside it would break the signature on the next launch. A test run can
+    // isolate two windows by pointing each process at its own folder.
+    let state = match std::env::var("BROSR_STATE") {
+        Ok(given) if !given.is_empty() => PathBuf::from(given),
+        _ => app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("There is no app data folder: {error}"))?,
+    };
     let runtime = state.join("runtime");
     for dir in [&state, &runtime] {
         fs::create_dir_all(dir)

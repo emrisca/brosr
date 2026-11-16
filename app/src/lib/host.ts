@@ -56,6 +56,7 @@ export type Run = {
   ok: true;
   browser: { id: string; name: string; path: string; family?: 'gecko' | 'chromium' };
   room: string;
+  roomName: string;
   name: string;
   host: string;
   port: number;
@@ -96,8 +97,8 @@ export const detect = () => host<DetectResult>(['detect']);
 export const prepare = (browser: string) =>
   host<Prepared>(['prepare', `--browser=${browser}`]);
 
-export const start = (browser: string, name: string) =>
-  host<Run>(['start', `--browser=${browser}`, `--name=${name}`]);
+export const start = (browser: string, name: string, roomName = 'Room') =>
+  host<Run>(['start', `--browser=${browser}`, `--name=${name}`, `--room-name=${roomName}`]);
 
 export const status = () => host<Status | { ok: true; running: false }>(['status']);
 
@@ -143,6 +144,7 @@ export type FriendsState = {
 export type Joined = {
   joined: true;
   room: string;
+  roomName?: string;
   host: string;
   port: number;
   url: string;

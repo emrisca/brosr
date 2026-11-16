@@ -308,6 +308,7 @@ export function roomUrl({
   room,
   key,
   name,
+  roomName = 'Room',
   role = 'host',
   peer = 'host',
   panel = true,
@@ -321,6 +322,7 @@ export function roomUrl({
   url.searchParams.set('room', room);
   url.searchParams.set('peer', peer);
   url.searchParams.set('name', name);
+  url.searchParams.set('rname', roomName);
   // The page connects to the relay on this port. Without it the page falls back
   // to 8787, which is wrong as soon as the first port is busy.
   url.searchParams.set('relay', String(port));
@@ -348,8 +350,18 @@ export function guestId() {
   return `guest-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-export function guestInvite({ host = '127.0.0.1', port, room, key, name = 'Guest' }) {
-  return roomUrl({ host, port, room, key, name, role: 'peer', peer: guestId(), panel: false });
+export function guestInvite({ host = '127.0.0.1', port, room, key, name = 'Guest', roomName = 'Room' }) {
+  return roomUrl({
+    host,
+    port,
+    room,
+    key,
+    name,
+    roomName,
+    role: 'peer',
+    peer: guestId(),
+    panel: false,
+  });
 }
 
 // A Chromium room loads the bridge as an unpacked folder, so the build is a
@@ -509,6 +521,7 @@ export async function start(options = {}) {
   const port = Number(options.port) || (await freePort(8787, host));
   const room = options.room || roomId();
   const name = options.name || 'Host';
+  const roomName = options.roomName || 'Room';
   const key = newRoomKey();
   // The docs folder holds the host canvas and note library. It sits beside the
   // run file, which is the app data folder in a packaged run.
@@ -555,7 +568,7 @@ export async function start(options = {}) {
   }
   const relayAt = Date.now();
 
-  const url = roomUrl({ host, port, room, key, name, trust, docs: docsToken });
+  const url = roomUrl({ host, port, room, key, name, roomName, trust, docs: docsToken });
   const args = launchArgs(browser, {
     profile: prepared.profile,
     url,
@@ -589,12 +602,13 @@ export async function start(options = {}) {
     started: new Date().toISOString(),
     browser: { id: browser.id, name: browser.name, path: browser.path, family: browser.family },
     room,
+    roomName,
     name,
     host,
     port,
     docsDir,
     url,
-    invite: guestInvite({ host, port, room, key }),
+    invite: guestInvite({ host, port, room, key, roomName }),
     profile: prepared.profile,
     relayPid: relay.pid,
     browserPid: launched.pid,
@@ -714,6 +728,7 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
     started: new Date().toISOString(),
     browser: { id: browser.id, name: browser.name, path: browser.path, family: browser.family },
     room: link.room,
+    roomName: link.roomName || 'Room',
     host: link.host,
     port: link.relayPort,
     url: link.url,

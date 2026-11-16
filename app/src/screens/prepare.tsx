@@ -9,6 +9,7 @@ import { prepare, start, type Browser, type Prepared, type Progress as Stage, ty
 type Props = {
   browser: Browser;
   name: string;
+  roomName: string;
   onReady: (run: Run) => void;
   onBack: () => void;
 };
@@ -32,7 +33,7 @@ function build(browser: string) {
   return pending;
 }
 
-export function Prepare({ browser, name, onReady, onBack }: Props) {
+export function Prepare({ browser, name, roomName, onReady, onBack }: Props) {
   const [phase, setPhase] = useState<Phase>('working');
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -74,7 +75,11 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
     setPhase('starting');
     setError('');
     try {
-      const run = await start(browser.id, name.trim() || 'Host');
+      const run = await start(
+        browser.id,
+        name.trim() || 'Host',
+        roomName.trim() || 'Room'
+      );
       onReady(run);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

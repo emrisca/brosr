@@ -11,7 +11,13 @@
     "128": "assets/icon-128.png"
   },
   "permissions": ["tabs", "storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://*/*", "https://*/*"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://*/*",
+    "https://*/*",
+    "*://*.cursors-4u.com/*",
+    "*://cdn.cursors-4u.net/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

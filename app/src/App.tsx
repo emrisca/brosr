@@ -28,6 +28,7 @@ const INDEX: Record<Step, number> = {
 };
 
 const NAME_KEY = 'brosr-name';
+const ROOM_NAME_KEY = 'brosr-room-name';
 
 export default function App() {
   const { theme, toggle } = useTheme();
@@ -38,6 +39,13 @@ export default function App() {
       return localStorage.getItem(NAME_KEY) || 'Host';
     } catch {
       return 'Host';
+    }
+  });
+  const [roomName, setRoomName] = useState(() => {
+    try {
+      return localStorage.getItem(ROOM_NAME_KEY) || 'Movie night';
+    } catch {
+      return 'Movie night';
     }
   });
   const [browser, setBrowser] = useState<Browser | null>(null);
@@ -77,6 +85,14 @@ export default function App() {
       // A refused store costs the next launch only.
     }
   }, [name]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ROOM_NAME_KEY, roomName);
+    } catch {
+      // A refused store costs the next launch only.
+    }
+  }, [roomName]);
 
   // The lobby has to listen while the app is open, not only while the friends
   // dialog is. This poll starts it and turns a fresh invite into one banner.
@@ -220,7 +236,9 @@ export default function App() {
             {step === 'welcome' ? (
               <Welcome
                 name={name}
+                roomName={roomName}
                 onName={setName}
+                onRoomName={setRoomName}
                 onNext={() => setStep('browsers')}
                 onJoin={() => setJoinOpen(true)}
                 onFriends={() => setFriendsOpen(true)}
@@ -240,6 +258,7 @@ export default function App() {
               <Prepare
                 browser={browser}
                 name={name}
+                roomName={roomName}
                 onReady={(next) => {
                   setRun(next);
                   setStep('room');

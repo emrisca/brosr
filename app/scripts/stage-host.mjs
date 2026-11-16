@@ -24,6 +24,7 @@ const FILES = [
   'host/chrome-pipe.mjs',
   'host/browsers.mjs',
   'host/pstream.mjs',
+  'host/bookmarks.mjs',
   'host/friends.mjs',
   'host/lobby.mjs',
   // The CLI imports both for the stop and session commands.
@@ -153,16 +154,15 @@ for (const relative of copied) {
     const target = path.resolve(path.dirname(file), match[1]);
     if (!target.startsWith(out + path.sep)) continue;
     if (fs.existsSync(target)) continue;
-    holes.push(relative + ' imports ' + match[1]);
+    holes.push(`${relative} imports ${match[1]}`);
   }
 }
-if (holes.length) {
-  stop('staged modules import files that did not land:\n  ' + holes.sort().join('\n  '));
-}
+if (holes.length) stop(`staged modules import files that did not land:\n  ${holes.sort().join('\n  ')}`);
 
 // The app reads these names, so a bundle that lost one fails here.
 for (const required of [
   'host/cli.mjs',
+  'host/bookmarks.mjs',
   'core/seal.mjs',
   'bridge/manifest.json',
   'spike/fixtures/room-b.html',

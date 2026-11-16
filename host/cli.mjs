@@ -93,6 +93,7 @@ const COMMANDS = {
     const run = await start({
       browser,
       room: arg('room') || undefined,
+      roomName: arg('room-name') || 'Room',
       name: arg('name') || 'Host',
       port: arg('port') ? Number(arg('port')) : undefined,
       headless: flag('headless'),
