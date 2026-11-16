@@ -1,6 +1,7 @@
-// The trusted input helper. It owns one BiDi session beside the start path,
+// The trusted input helper. It owns one debugger session beside the start path,
 // binds a loopback listener only while a peer holds a grant, and closes the
-// listener when that grant ends or the room stops.
+// listener when that grant ends or the room stops. Gecko answers over BiDi and
+// Chromium over CDP, and the watcher does not know which one it holds.
 //
 // Three rules from the plan:
 // 1. Loopback only, random port, a token the page cannot read.
@@ -11,6 +12,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
+import { ChromeCdp } from './chrome-cdp.mjs';
 import { actionsForRecord } from '../core/trust.mjs';
 
 export const TRUST_TTL_MS = 5 * 60 * 1000;
@@ -386,7 +388,10 @@ export function watchTrust({
   };
 }
 
-async function connect(debugPort, timeoutMs = 60000) {
+// Gecko opens one BiDi session on the debug port. Chromium exposes a debugger
+// socket instead, so the family picks the client and not the watcher above it.
+async function connect(debugPort, family = 'gecko', timeoutMs = 60000) {
+  if (family === 'chromium') return ChromeCdp.connect(debugPort, timeoutMs);
   const end = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < end) {
@@ -424,9 +429,10 @@ export async function runTrustHelper({
   room,
   token,
   ttlMs = TRUST_TTL_MS,
+  family = 'gecko',
   log = () => {},
 } = {}) {
-  const bidi = await connect(debugPort);
+  const bidi = await connect(debugPort, family);
   const context = await roomContext(bidi, room);
   const watcher = watchTrust({ bidi, context, token, ttlMs, log });
   const close = async () => {
@@ -452,6 +458,7 @@ if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
   const debugPort = Number(arg('debug-port'));
   const room = arg('room');
   const token = arg('token');
+  const family = arg('family', 'gecko');
   if (!debugPort || !room || !token) {
     process.stderr.write('brosr trust: pass --debug-port, --room and --token\n');
     process.exit(2);
@@ -460,6 +467,7 @@ if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
     debugPort,
     room,
     token,
+    family,
     ttlMs: Number(arg('ttl')) || TRUST_TTL_MS,
     log: (line) => process.stderr.write(line + '\n'),
   })

@@ -358,11 +358,8 @@ export async function start(options = {}) {
   const room = options.room || roomId();
   const name = options.name || 'Host';
   const key = newRoomKey();
-  // Trusted input is a Gecko path. Chromium has no BiDi session here, so the
-  // start refuses the flag instead of opening a room that cannot honour it.
-  if (options.trusted && browser.family === 'chromium') {
-    throw new Error('trusted input needs Firefox or Zen, not Chromium');
-  }
+  // Trusted input follows the browser family. Gecko opens a BiDi session and
+  // Chromium a CDP one, and the helper picks its client from the family.
   const trust = options.trusted
     ? {
         token: crypto.randomBytes(32).toString('base64url'),
@@ -419,6 +416,7 @@ export async function start(options = {}) {
         `--debug-port=${trust.port}`,
         `--room=${room}`,
         `--token=${trust.token}`,
+        `--family=${browser.family}`,
       ],
       { cwd: ROOT, detached: true, stdio: 'ignore' }
     );

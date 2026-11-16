@@ -412,8 +412,9 @@ export function launchArgs(
   { profile, url, headless = false, handoff = false, extension = null, remotePort = null }
 ) {
   if (!profile) throw new Error('a room needs a profile path');
-  // Chromium names the profile root with one flag. It has no remote option and
-  // it refuses no-remote, so the Gecko flags would stop it from starting.
+  // Chromium names the profile root with one flag and refuses no-remote, so the
+  // Gecko flags would stop it from starting. Its debug port is a flag of its
+  // own, and the wildcard origin lets a local client open the debugger socket.
   if (browser && browser.family === 'chromium') {
     const args = [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'];
     // The bridge and the blocker are unpacked folders here. Both flags take a
@@ -426,6 +427,10 @@ export function launchArgs(
     }
     // A room launch never asks about a session it did not restore.
     args.push('--disable-session-crashed-bubble');
+    // Trusted input reads and types over CDP. The port is loopback only.
+    if (remotePort) {
+      args.push(`--remote-debugging-port=${remotePort}`, '--remote-allow-origins=*');
+    }
     if (headless) args.push('--headless=new');
     if (url) args.push(url);
     return args;
