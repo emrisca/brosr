@@ -1,15 +1,9 @@
 'use strict';
-// Canvas. One endless warm surface, with a small stroke model so undo,
+// Canvas. A paper sheet drawn on one canvas, with a small stroke model so undo,
 // symmetry, layers, the room and a PNG export all read from the same record.
-// A stroke holds world points, so panning and zooming never move the ink.
 
-const SURFACE = '#faf7f2';
-// The grid is a fixed step in world space, doubled or halved until a line sits
-// between these two screen widths. One grid then serves every zoom level.
-const GRID = 32;
-const GRID_MIN_PX = 24;
-const MIN_ZOOM = 0.05;
-const MAX_ZOOM = 16;
+const PAPER = { width: 2400, height: 1600 };
+const PAPER_COLOUR = '#faf7f2';
 
 const PRESETS = {
   pencil: { label: 'Pencil', size: 4, opacity: 1 },
@@ -73,11 +67,7 @@ function nextStrokeId() {
 }
 
 const viewport = document.getElementById('viewport');
-// The surface and the grid are painted on the ground canvas. The ink canvas
-// above it holds strokes only, so an eraser cuts ink rather than paper.
-const ground = document.getElementById('ground');
 const canvas = document.getElementById('sheet');
-const gctx = ground.getContext('2d');
 const ctx = canvas.getContext('2d');
 
 // ---------------------------------------------------------------------------
@@ -92,39 +82,39 @@ function hexAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Symmetry needs a fixed axis, and an endless surface has no centre. The first
-// point of the stroke is the axis, so the copies always appear beside the line
-// that was drawn, at any pan and any zoom. A transform takes the context it
-// draws on, because the export paints on a second canvas.
-function mirrorTransforms(mode, origin) {
-  const list = [(g) => {}];
-  if (mode === 'vertical' || mode === 'quad') {
-    list.push((g) => {
-      g.translate(origin.x * 2, 0);
-      g.scale(-1, 1);
-    });
-  }
-  if (mode === 'horizontal' || mode === 'quad') {
-    list.push((g) => {
-      g.translate(0, origin.y * 2);
-      g.scale(1, -1);
-    });
-  }
+function mirrorTransforms(mode) {
+  const cx = PAPER.width / 2;
+  const cy = PAPER.height / 2;
+  const list = [() => {}];
+  const flipX = () => {
+    ctx.translate(PAPER.width, 0);
+    ctx.scale(-1, 1);
+  };
+  const flipY = () => {
+    ctx.translate(0, PAPER.height);
+    ctx.scale(1, -1);
+  };
+  if (mode === 'vertical' || mode === 'quad') list.push(flipX);
+  if (mode === 'horizontal' || mode === 'quad') list.push(flipY);
   if (mode === 'quad') {
-    list.push((g) => {
-      g.translate(origin.x * 2, origin.y * 2);
-      g.scale(-1, -1);
+    list.push(() => {
+      ctx.translate(PAPER.width, PAPER.height);
+      ctx.scale(-1, -1);
     });
   }
-  return list;
+  // The transforms must land around the sheet centre.
+  return list.map((apply) => () => {
+    ctx.translate(cx, cy);
+    apply();
+    ctx.translate(-cx, -cy);
+  });
 }
 
 function paintShape(g, stroke) {
   const a = stroke.points[0];
   const b = stroke.points[stroke.points.length - 1];
   g.globalAlpha = stroke.opacity;
-  g.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
-  g.strokeStyle = stroke.colour;
+  g.strokeStyle = stroke.tool === 'eraser' ? PAPER_COLOUR : stroke.colour;
   g.lineWidth = Math.max(0.5, stroke.size);
   g.lineCap = 'round';
   g.lineJoin = 'round';
@@ -151,8 +141,7 @@ function paintShape(g, stroke) {
 function paintFreehand(g, stroke) {
   const points = stroke.points;
   const radius = Math.max(0.6, stroke.size / 2);
-  const colour = stroke.colour;
-  g.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+  const colour = stroke.tool === 'eraser' ? PAPER_COLOUR : stroke.colour;
   const marker = stroke.tool === 'marker';
   const air = stroke.tool === 'airbrush';
   const step = Math.max(0.9, radius * (air ? 0.45 : 0.3));
@@ -204,22 +193,21 @@ function paintStroke(g, stroke) {
   if (!stroke.points.length) return;
   if (SHAPES.has(stroke.tool)) {
     paintShape(g, stroke);
-    g.globalCompositeOperation = 'source-over';
-    g.globalAlpha = 1;
     return;
   }
-  for (const apply of mirrorTransforms(stroke.symmetry, stroke.points[0])) {
+  for (const apply of mirrorTransforms(stroke.symmetry)) {
     g.save();
-    apply(g);
+    apply();
     paintFreehand(g, stroke);
     g.restore();
   }
-  g.globalCompositeOperation = 'source-over';
   g.globalAlpha = 1;
 }
 
-function paintInk(g, withLive) {
+function paintScene(g, withLive) {
   g.globalAlpha = 1;
+  g.fillStyle = PAPER_COLOUR;
+  g.fillRect(0, 0, PAPER.width, PAPER.height);
 
   for (let index = 0; index < state.layers.length; index++) {
     const layer = state.layers[index];
@@ -233,68 +221,24 @@ function paintInk(g, withLive) {
   }
 }
 
-// One grid in world space, with the step doubled until it reads on screen.
-// Zooming out therefore thins the grid instead of crowding it.
-function paintGrid(g, width, height) {
-  let step = GRID;
-  while (step * view.z < GRID_MIN_PX) step *= 2;
-  while (step * view.z > GRID_MIN_PX * 4) step /= 2;
-  const left = -view.x / view.z;
-  const top = -view.y / view.z;
-  const right = left + width / view.z;
-  const bottom = top + height / view.z;
-
-  g.lineWidth = 1 / view.z;
-  g.strokeStyle = 'rgba(28, 26, 23, 0.09)';
-  g.beginPath();
-  for (let x = Math.ceil(left / step) * step; x <= right; x += step) {
-    g.moveTo(x, top);
-    g.lineTo(x, bottom);
-  }
-  for (let y = Math.ceil(top / step) * step; y <= bottom; y += step) {
-    g.moveTo(left, y);
-    g.lineTo(right, y);
-  }
-  g.stroke();
-
-  // The origin is the one fixed point an endless surface can steer by.
-  g.lineWidth = 1.5 / view.z;
-  g.strokeStyle = 'rgba(28, 26, 23, 0.16)';
-  g.beginPath();
-  if (left <= 0 && right >= 0) {
-    g.moveTo(0, top);
-    g.lineTo(0, bottom);
-  }
-  if (top <= 0 && bottom >= 0) {
-    g.moveTo(left, 0);
-    g.lineTo(right, 0);
-  }
-  g.stroke();
-}
-
-function paintGround(width, height) {
-  gctx.setTransform(1, 0, 0, 1, 0, 0);
-  gctx.fillStyle = SURFACE;
-  gctx.fillRect(0, 0, ground.width, ground.height);
-  gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  gctx.save();
-  gctx.translate(view.x, view.y);
-  gctx.scale(view.z, view.z);
-  paintGrid(gctx, width, height);
-  gctx.restore();
-}
-
 function redraw() {
-  const width = viewport.clientWidth;
-  const height = viewport.clientHeight;
-  paintGround(width, height);
+  const width = canvas.width;
+  const height = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, width, height);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.save();
   ctx.translate(view.x, view.y);
   ctx.scale(view.z, view.z);
-  paintInk(ctx, true);
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 28;
+  ctx.shadowOffsetY = 8;
+  ctx.fillStyle = PAPER_COLOUR;
+  ctx.fillRect(0, 0, PAPER.width, PAPER.height);
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  paintScene(ctx, true);
   ctx.restore();
 }
 
@@ -305,50 +249,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-// The bounds of the ink, with the widest stroke taken into account. An empty
-// canvas has nothing to frame, so the origin takes the middle at 100%.
-function contentBounds() {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const layer of state.layers) {
-    if (!layer.visible) continue;
-    for (const stroke of layer.strokes) {
-      const pad = Math.max(1, stroke.size / 2);
-      for (const point of stroke.points) {
-        minX = Math.min(minX, point.x - pad);
-        minY = Math.min(minY, point.y - pad);
-        maxX = Math.max(maxX, point.x + pad);
-        maxY = Math.max(maxY, point.y + pad);
-      }
-    }
-  }
-  if (!Number.isFinite(minX)) return null;
-  return { minX, minY, maxX, maxY };
-}
-
 function fit() {
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
-  const box = contentBounds();
-  if (!box) {
-    view.z = 1;
-    view.x = width / 2;
-    view.y = height / 2;
-    redraw();
-    showZoom();
-    return;
-  }
-  const boxWidth = Math.max(1, box.maxX - box.minX);
-  const boxHeight = Math.max(1, box.maxY - box.minY);
-  view.z = clamp(
-    Math.min((width - 64) / boxWidth, (height - 64) / boxHeight),
-    MIN_ZOOM,
-    MAX_ZOOM
-  );
-  view.x = (width - boxWidth * view.z) / 2 - box.minX * view.z;
-  view.y = (height - boxHeight * view.z) / 2 - box.minY * view.z;
+  view.z = Math.min(width / PAPER.width, height / PAPER.height) * 0.9;
+  view.x = (width - PAPER.width * view.z) / 2;
+  view.y = (height - PAPER.height * view.z) / 2;
   redraw();
   showZoom();
 }
@@ -361,12 +267,10 @@ function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
-  for (const node of [ground, canvas]) {
-    node.width = Math.max(1, Math.round(width * dpr));
-    node.height = Math.max(1, Math.round(height * dpr));
-    node.style.width = width + 'px';
-    node.style.height = height + 'px';
-  }
+  canvas.width = Math.max(1, Math.round(width * dpr));
+  canvas.height = Math.max(1, Math.round(height * dpr));
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
   redraw();
 }
 
@@ -790,7 +694,7 @@ viewport.addEventListener(
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
     const before = { x: (sx - view.x) / view.z, y: (sy - view.y) / view.z };
-    view.z = clamp(view.z * Math.exp(-event.deltaY * 0.0015), MIN_ZOOM, MAX_ZOOM);
+    view.z = clamp(view.z * Math.exp(-event.deltaY * 0.0015), 0.15, 8);
     view.x = sx - before.x * view.z;
     view.y = sy - before.y * view.z;
     redraw();
@@ -892,29 +796,14 @@ document.getElementById('clear').addEventListener('click', () => {
   showHistory();
 });
 
-// The export is what the window shows: the visible world rectangle at twice
-// the screen density. The grid stays out of the file, so the drawing is clean.
 document.getElementById('export').addEventListener('click', () => {
-  const width = viewport.clientWidth;
-  const height = viewport.clientHeight;
   const out = document.createElement('canvas');
   const scale = 2;
-  out.width = Math.max(1, Math.round(width * scale));
-  out.height = Math.max(1, Math.round(height * scale));
-  // Ink goes on its own layer, so an eraser stroke cuts ink and never the
-  // surface. The two layers are joined here.
-  const ink = document.createElement('canvas');
-  ink.width = out.width;
-  ink.height = out.height;
-  const target = ink.getContext('2d');
+  out.width = PAPER.width * scale;
+  out.height = PAPER.height * scale;
+  const target = out.getContext('2d');
   target.scale(scale, scale);
-  target.translate(view.x, view.y);
-  target.scale(view.z, view.z);
-  paintInk(target, false);
-  const outCtx = out.getContext('2d');
-  outCtx.fillStyle = SURFACE;
-  outCtx.fillRect(0, 0, out.width, out.height);
-  outCtx.drawImage(ink, 0, 0);
+  paintScene(target, false);
   out.toBlob((blob) => {
     if (!blob) return;
     const link = document.createElement('a');
@@ -926,13 +815,13 @@ document.getElementById('export').addEventListener('click', () => {
 });
 
 document.getElementById('zoom-in').addEventListener('click', () => {
-  view.z = clamp(view.z * 1.2, MIN_ZOOM, MAX_ZOOM);
+  view.z = clamp(view.z * 1.2, 0.15, 8);
   redraw();
   showZoom();
 });
 
 document.getElementById('zoom-out').addEventListener('click', () => {
-  view.z = clamp(view.z / 1.2, MIN_ZOOM, MAX_ZOOM);
+  view.z = clamp(view.z / 1.2, 0.15, 8);
   redraw();
   showZoom();
 });
