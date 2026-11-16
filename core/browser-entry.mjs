@@ -17,6 +17,7 @@ import {
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
 import { ActionNotice, mediaAction } from './overlay.mjs';
+import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
@@ -305,6 +306,10 @@ export async function start() {
         // The key travels in the fragment. sessionStorage keeps it across the
         // navigation a peer follows, so the next page stays sealed.
         key: params.get('k') || hashParams.get('k') || null,
+        // The trusted token is the fragment's other half. It belongs to this
+        // browser's helper, so a peer link never carries it.
+        trustToken: hashParams.get('t') || null,
+        trustPort: hashParams.get('tp') || params.get('tp') || null,
         openPanel: params.get('panel') === '1',
         selftest: params.get('selftest') === '1',
       }
@@ -329,6 +334,15 @@ export async function start() {
   const source =
     api && api.runtime && api.runtime.id ? 'content-script' : 'page';
   const started = performance.now();
+  // A room started with a trusted channel holds the client in memory. The
+  // token stays out of the page's own URLs and out of the relay.
+  const trust =
+    config.trustToken && config.trustPort
+      ? createTrustClient({
+          url: `http://127.0.0.1:${config.trustPort}`,
+          token: config.trustToken,
+        })
+      : null;
   let socket = null;
   let panelState = null;
   let lastCommand = null;
@@ -560,6 +574,9 @@ export async function start() {
       grantTo: config.grant || null,
       tabId: peerId,
       origin: location.origin,
+      // A granted peer's records reach the browser pipeline instead of the
+      // DOM. The client falls back to synthetic replay if the agent refuses.
+      trusted: trust ? (records) => trust.send(prepareRecords(records, document)) : null,
     },
     // One time base for the clock, the media ticks and the presence stamps.
     // The exchange compares stamps from two machines, so it needs the wall
@@ -664,6 +681,7 @@ export async function start() {
     mediaEchoLocal: echoMedia,
     viewers: panelViewers(),
     socket: socket ? socket.readyState : -1,
+    trust: trust ? { url: trust.url, ...trust.stats } : null,
     elapsed: Math.round(performance.now() - started),
     location: location.href,
     reconnects,

@@ -4,6 +4,8 @@
 //   node host/cli.mjs detect
 //   node host/cli.mjs prepare --browser=zen
 //   node host/cli.mjs start --browser=zen --room=demo --name=Host
+//   node host/cli.mjs start --browser=zen --trusted
+//   node host/cli.mjs trust
 //   node host/cli.mjs status
 //   node host/cli.mjs stop
 //   node host/cli.mjs session --domain=youtube.com --from-firefox=<profile> --to=<cdp url>
@@ -24,6 +26,15 @@ import {
 } from './friends.mjs';
 import { ensureLobby } from './lobby.mjs';
 import { makeInvite } from '../core/friends.mjs';
+
+const isAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const arg = (name, fallback = '') => {
   const hit = process.argv.find((value) => value.startsWith(`--${name}=`));
@@ -83,8 +94,27 @@ const COMMANDS = {
       name: arg('name') || 'Host',
       port: arg('port') ? Number(arg('port')) : undefined,
       headless: flag('headless'),
+      trusted: flag('trusted'),
     });
     return run;
+  },
+
+  // The trusted channel, without its token. A caller learns whether the helper
+  // is alive and on which loopback port, and never receives the secret.
+  async trust() {
+    const run = readRun();
+    if (!run || !run.trust) {
+      return { ok: true, enabled: false, reason: 'start with --trusted to open the channel' };
+    }
+    return {
+      ok: true,
+      enabled: true,
+      port: run.trust.port,
+      url: run.trust.url,
+      helperPid: run.trust.helperPid,
+      helperAlive: Boolean(run.trust.helperPid && isAlive(run.trust.helperPid)),
+      room: run.room,
+    };
   },
 
   async status() {

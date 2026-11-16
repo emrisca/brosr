@@ -280,26 +280,58 @@ export function createRoomClient({
 
     const tabId = (input && input.tabId) || 'tab';
     const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
-    const applied = replayInput(message.records, {
-      root: doc,
-      // A peer that laid out the page differently sends a point that lands
-      // elsewhere here. Drop the record and say so.
-      layoutMatches: !stats.layoutMismatch,
-      allowed: (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind }),
-      onDrop: (reason) => {
-        stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
-      },
-    });
-    if (applied.reasons.layout) {
-      stats.layoutNotice = {
-        at: Math.round(now()),
-        peerId: message.peerId,
-        dropped: applied.reasons.layout,
-      };
+    const allowed = (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind });
+    const replay = () => {
+      const applied = replayInput(message.records, {
+        root: doc,
+        // A peer that laid out the page differently sends a point that lands
+        // elsewhere here. Drop the record and say so.
+        layoutMatches: !stats.layoutMismatch,
+        allowed,
+        onDrop: (reason) => {
+          stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
+        },
+      });
+      if (applied.reasons.layout) {
+        stats.layoutNotice = {
+          at: Math.round(now()),
+          peerId: message.peerId,
+          dropped: applied.reasons.layout,
+        };
+      }
+      stats.inputApplied += applied.applied;
+      stats.inputDropped += applied.dropped;
+      return { ok: true, ...applied };
+    };
+
+    // A trusted room applies the batch in the browser's own input pipeline.
+    // The records arrive already placed against this layout, so the synthetic
+    // path is the fallback and not the first choice. A refusal replays, so a
+    // closed agent or a stale token never swallows a click silently.
+    if (input && typeof input.trusted === 'function') {
+      const sendable = message.records.filter(allowed);
+      if (!sendable.length) {
+        stats.inputDropped += message.records.length;
+        stats.inputReasons.grant = (stats.inputReasons.grant || 0) + message.records.length;
+        return { ok: true, applied: 0, dropped: message.records.length, trusted: true };
+      }
+      Promise.resolve(input.trusted(sendable))
+        .then((answer) => {
+          if (!answer || !answer.ok) {
+            replay();
+            return;
+          }
+          stats.inputApplied += Number(answer.applied) || sendable.length;
+          const skipped = Number(answer.skipped) || 0;
+          if (skipped) {
+            stats.inputDropped += skipped;
+            stats.inputReasons.kind = (stats.inputReasons.kind || 0) + skipped;
+          }
+        })
+        .catch(() => replay());
+      return { ok: true, trusted: true, sent: sendable.length };
     }
-    stats.inputApplied += applied.applied;
-    stats.inputDropped += applied.dropped;
-    return { ok: true, ...applied };
+    return replay();
   }
 
   function setupInput() {

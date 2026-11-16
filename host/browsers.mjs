@@ -407,7 +407,10 @@ export function find(id) {
 // A separate profile keeps the room out of the daily browsing profile.
 // A handoff goes to an instance that is already running, so it must not ask
 // for a new remote session or a second instance.
-export function launchArgs(browser, { profile, url, headless = false, handoff = false, extension = null }) {
+export function launchArgs(
+  browser,
+  { profile, url, headless = false, handoff = false, extension = null, remotePort = null }
+) {
   if (!profile) throw new Error('a room needs a profile path');
   // Chromium names the profile root with one flag. It has no remote option and
   // it refuses no-remote, so the Gecko flags would stop it from starting.
@@ -429,6 +432,8 @@ export function launchArgs(browser, { profile, url, headless = false, handoff = 
   }
   const args = ['--profile', profile];
   if (!handoff) args.push('--no-remote', '--new-instance');
+  // Trusted input needs one WebDriver BiDi session. The port is loopback only.
+  if (remotePort) args.push('--remote-debugging-port', String(remotePort));
   if (headless) args.push('-headless');
   if (url) args.push(url);
   return args;
