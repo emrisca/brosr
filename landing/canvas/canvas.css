@@ -252,6 +252,10 @@ select {
   font-size: 12.5px;
 }
 
+.doc-search {
+  margin-bottom: 6px;
+}
+
 .layers {
   display: flex;
   flex-direction: column;
@@ -298,6 +302,11 @@ select {
 
 .doc-actions button {
   padding: 5px 10px;
+}
+
+.doc-buttons {
+  display: flex;
+  gap: 6px;
 }
 
 .store-row {

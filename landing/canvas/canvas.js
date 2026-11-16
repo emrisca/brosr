@@ -116,6 +116,7 @@ const docs = {
   hidden: false,
   saveTimer: 0,
   sentAt: 0,
+  query: '',
 };
 
 // ---------------------------------------------------------------------------
@@ -657,6 +658,8 @@ const docListEl = document.getElementById('doc-list');
 const docCountEl = document.getElementById('docs-count');
 const docStoreInput = document.getElementById('doc-store');
 const docNewButton = document.getElementById('doc-new');
+const docDuplicateButton = document.getElementById('doc-duplicate');
+const docSearchInput = document.getElementById('doc-search');
 
 function docLabel(value) {
   return String(value || '')
@@ -756,14 +759,25 @@ function showDocuments() {
   if (!docListEl) return;
   docListEl.textContent = '';
   const visible = docs.list.filter((item) => docs.host || !item.hidden);
+  const query = docs.query.trim().toLowerCase();
+  const matched = query
+    ? visible.filter((item) =>
+        (item.name + ' ' + (item.preview || '')).toLowerCase().includes(query)
+      )
+    : visible;
   if (docCountEl) docCountEl.textContent = String(visible.length);
   if (!visible.length) {
     const empty = document.createElement('li');
     empty.className = 'doc-empty';
     empty.textContent = docs.host ? 'No saved canvas yet.' : 'Nothing shared yet.';
     docListEl.append(empty);
+  } else if (!matched.length) {
+    const empty = document.createElement('li');
+    empty.className = 'doc-empty';
+    empty.textContent = 'No canvas matches "' + docs.query.trim() + '".';
+    docListEl.append(empty);
   }
-  for (const item of visible) {
+  for (const item of matched) {
     const row = document.createElement('li');
     row.className = 'doc-row';
     if (item.id === docs.active) row.classList.add('is-active');
@@ -953,6 +967,53 @@ async function newDocument() {
   send({ op: 'doc-open', id: doc.id, name: doc.name, at: doc.at });
 }
 
+// A copy starts a new file with fresh stroke ids, so the room paints it from
+// scratch and the original stays as it was.
+async function duplicateDocument() {
+  if (!docs.host || !docs.api || !docs.active) return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = 0;
+  await saveDocument();
+  const body = docBody();
+  const copy = {
+    id: docs.api.id(),
+    kind: 'canvas',
+    name: docLabel(docs.name + ' copy'),
+    at: Date.now(),
+    hidden: false,
+    stored: docs.stored,
+    body: {
+      layers: body.layers.map((layer) => ({
+        name: layer.name,
+        visible: layer.visible !== false,
+        strokes: layer.strokes.map((stroke) => ({ ...stroke, id: nextStrokeId() })),
+      })),
+      activeLayer: body.activeLayer,
+    },
+  };
+  applyDocument(copy);
+  if (copy.stored) {
+    try {
+      await docs.api.put(copy);
+    } catch {
+      // A failed first save leaves the copy in the room only.
+    }
+    docs.list.unshift({
+      id: copy.id,
+      name: copy.name,
+      at: copy.at,
+      hidden: false,
+      stored: true,
+      preview: docStrokes() === 1 ? '1 stroke' : docStrokes() + ' strokes',
+    });
+    docs.list.sort((a, b) => b.at - a.at);
+    showDocuments();
+    broadcastDocuments();
+  }
+  send({ op: 'doc-open', id: copy.id, name: copy.name, at: copy.at });
+  announce();
+}
+
 async function toggleDocumentHidden(entry) {
   if (!docs.host || !docs.api) return;
   let doc = null;
@@ -1008,6 +1069,13 @@ async function startDocuments() {
 }
 
 if (docNewButton) docNewButton.addEventListener('click', () => newDocument());
+if (docDuplicateButton) docDuplicateButton.addEventListener('click', () => duplicateDocument());
+if (docSearchInput) {
+  docSearchInput.addEventListener('input', () => {
+    docs.query = docSearchInput.value;
+    showDocuments();
+  });
+}
 
 if (docNameInput) {
   docNameInput.addEventListener('change', () => {

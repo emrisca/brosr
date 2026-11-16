@@ -19,6 +19,7 @@ const docs = {
   saveTimer: 0,
   putTimer: 0,
   sentAt: 0,
+  query: '',
 };
 
 const room = { socket: null, retry: null };
@@ -29,6 +30,7 @@ const listEl = document.getElementById('doc-list');
 const countEl = document.getElementById('docs-count');
 const storeInput = document.getElementById('doc-store');
 const newButton = document.getElementById('doc-new');
+const searchInput = document.getElementById('doc-search');
 const stateEl = document.getElementById('doc-state');
 const wordsEl = document.getElementById('word-count');
 const roomEl = document.getElementById('room-state');
@@ -128,14 +130,25 @@ function showDocuments() {
   if (!listEl) return;
   listEl.textContent = '';
   const visible = docs.list.filter((item) => docs.host || !item.hidden);
+  const query = docs.query.trim().toLowerCase();
+  const matched = query
+    ? visible.filter((item) =>
+        (item.name + ' ' + (item.preview || '')).toLowerCase().includes(query)
+      )
+    : visible;
   if (countEl) countEl.textContent = String(visible.length);
   if (!visible.length) {
     const empty = document.createElement('li');
     empty.className = 'doc-empty';
     empty.textContent = docs.host ? 'No saved note yet.' : 'Nothing shared yet.';
     listEl.append(empty);
+  } else if (!matched.length) {
+    const empty = document.createElement('li');
+    empty.className = 'doc-empty';
+    empty.textContent = 'No note matches "' + docs.query.trim() + '".';
+    listEl.append(empty);
   }
-  for (const item of visible) {
+  for (const item of matched) {
     const row = document.createElement('li');
     row.className = 'doc-row';
     if (item.id === docs.active) row.classList.add('is-active');
@@ -172,7 +185,13 @@ function showDocuments() {
       del.textContent = 'Delete';
       del.title = 'Delete this note from the host';
       del.addEventListener('click', () => deleteDocument(item));
-      tools.append(hide, del);
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'doc-tool';
+      copy.textContent = 'Copy';
+      copy.title = 'Duplicate this note';
+      copy.addEventListener('click', () => duplicateDocument(item));
+      tools.append(copy, hide, del);
       row.append(tools);
     }
     listEl.append(row);
@@ -308,6 +327,45 @@ async function newDocument() {
     broadcastDocuments();
   }
   send({ op: 'doc-open', doc: { id: doc.id, name: doc.name, at: doc.at, body: '' } });
+}
+
+// A copy keeps the page as it reads now and writes a new file, so a draft can
+// branch without touching the note it came from.
+async function duplicateDocument(entry) {
+  if (!docs.host || !api || !entry) return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = 0;
+  if (docs.active) await saveDocument();
+  let source = null;
+  try {
+    source = await api.get(entry.id);
+  } catch {
+    source = null;
+  }
+  if (!source) return;
+  const copy = {
+    id: api.id(),
+    kind: 'note',
+    name: label(source.name + ' copy'),
+    at: Date.now(),
+    hidden: false,
+    stored: docs.stored,
+    body: cleanHtml(source.body || ''),
+  };
+  if (copy.stored) {
+    try {
+      await api.put(copy);
+    } catch {
+      return;
+    }
+  }
+  applyDocument(copy, false);
+  if (copy.stored) {
+    mergeEntry(copy);
+    showDocuments();
+    broadcastDocuments();
+  }
+  send({ op: 'doc-open', doc: { id: copy.id, name: copy.name, at: copy.at, body: copy.body } });
 }
 
 async function toggleHidden(entry) {
@@ -612,6 +670,13 @@ if (storeInput) {
 }
 
 if (newButton) newButton.addEventListener('click', () => newDocument());
+
+if (searchInput) {
+  searchInput.addEventListener('input', () => {
+    docs.query = searchInput.value;
+    showDocuments();
+  });
+}
 
 document.getElementById('export').addEventListener('click', () => {
   const name = label(docs.name) || 'note';

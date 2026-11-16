@@ -201,6 +201,22 @@ button:disabled {
   padding: 5px 10px;
 }
 
+.doc-search {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.doc-search::placeholder {
+  color: var(--muted);
+}
+
 .doc-list {
   display: flex;
   flex: 1;
