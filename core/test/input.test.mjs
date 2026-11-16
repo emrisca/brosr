@@ -187,7 +187,7 @@ test('replay drops a record without a grant, without a target, or on a password 
   assert.equal(result.reasons.move, undefined, 'a move is not a failure');
 });
 
-test('a click across a layout mismatch is dropped, and the reason says so', () => {
+test('a click that names a target survives a layout mismatch', () => {
   const button = {
     tagName: 'BUTTON',
     ownerDocument: null,
@@ -214,9 +214,57 @@ test('a click across a layout mismatch is dropped, and the reason says so', () =
   const matched = replayInput([{ kind: 'click', path: '#go' }], { root });
   assert.equal(matched.applied, 1, 'the same layout still applies the click');
 
+  // Two windows of another size resolve the same selector, so the granted
+  // click lands. The old size guard dropped every one of them.
   const mismatch = replayInput([{ kind: 'click', path: '#go' }], { root, layoutMatches: false });
-  assert.equal(mismatch.applied, 0);
-  assert.equal(mismatch.dropped, 1);
-  assert.equal(mismatch.reasons.layout, 1);
-  assert.equal(mismatch.reasons.target, undefined, 'the target resolved, so it is not a target drop');
+  assert.equal(mismatch.applied, 1, 'a named target is placed by selector, not by size');
+  assert.equal(mismatch.reasons.layout, undefined);
+
+  // A record with no address has to be placed by coordinates. That is the one
+  // record a mismatch still drops, because a point lands somewhere else.
+  const blind = replayInput([{ kind: 'click' }], { root, layoutMatches: false });
+  assert.equal(blind.applied, 0);
+  assert.equal(blind.reasons.layout, 1);
+});
+
+test('a granted click follows a link, because a dispatched click cannot', () => {
+  const navigations = [];
+  const link = {
+    tagName: 'A',
+    href: 'https://example.test/canvas/',
+    target: '',
+    ownerDocument: { location: { assign: (url) => navigations.push(url) } },
+    closest: (selector) => (selector === 'a[href]' ? link : null),
+    getAttribute: () => null,
+    hasAttribute: () => false,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+    dispatchEvent: () => true,
+  };
+  const root = {
+    activeElement: null,
+    location: { assign: (url) => navigations.push(url) },
+    defaultView: {
+      Event: class {},
+      MouseEvent: class {
+        constructor(type) {
+          this.type = type;
+        }
+      },
+      KeyboardEvent: class {},
+      WheelEvent: class {},
+    },
+    querySelectorAll: (path) => (path === '#tile' ? [link] : []),
+    dispatchEvent: () => true,
+  };
+
+  const result = replayInput([{ kind: 'click', path: '#tile' }], { root });
+  assert.equal(result.applied, 1);
+  assert.deepEqual(navigations, ['https://example.test/canvas/']);
+
+  // The page sees the click first. A handler that cancels it keeps the last
+  // word, so the link does not open behind its back.
+  navigations.length = 0;
+  link.dispatchEvent = (event) => event.type !== 'click';
+  replayInput([{ kind: 'click', path: '#tile' }], { root });
+  assert.deepEqual(navigations, []);
 });

@@ -207,7 +207,28 @@ export class InputBatcher {
 
 function dispatch(root, element, event) {
   const target = element || root;
-  if (target && typeof target.dispatchEvent === 'function') target.dispatchEvent(event);
+  if (target && typeof target.dispatchEvent === 'function') return target.dispatchEvent(event);
+  return true;
+}
+
+// A real click follows a link. A dispatched click does not, because a browser
+// never runs an untrusted event's default action. A tile that opens a page is
+// a link, so the room repeats the one default it needs after the page has seen
+// the click.
+function activateLink(target, root, record = {}) {
+  if (record.button) return false;
+  const link =
+    target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
+  if (!link) return false;
+  if (link.hasAttribute && link.hasAttribute('download')) return false;
+  if (link.target && link.target !== '_self') return false;
+  const href = String(link.href || '');
+  if (!href || /^\s*javascript:/i.test(href)) return false;
+  const doc = root && root.location ? root : link.ownerDocument;
+  const location = doc && doc.location;
+  if (!location || typeof location.assign !== 'function') return false;
+  location.assign(href);
+  return true;
 }
 
 function setFieldValue(element, value) {
@@ -251,9 +272,10 @@ export function replayInput(
     }
     if (record.kind === 'move') continue;
 
-    // A click on a page that laid out differently lands somewhere else. The
-    // receiver shows a notice and drops the record.
-    if (!layoutMatches && !FREE_KINDS.has(record.kind)) {
+    // A click travels as a selector, not as a point, so a window of another
+    // size cannot misplace it. Only a record with no address at all has to be
+    // placed by coordinates, and that is the record this guard protects.
+    if (!layoutMatches && !FREE_KINDS.has(record.kind) && !record.path) {
       drop('layout');
       continue;
     }
@@ -281,7 +303,15 @@ export function replayInput(
         button: record.button || 0,
       };
       const kind = record.kind === 'click' ? ['mousedown', 'mouseup', 'click'] : [record.kind];
-      for (const name of kind) dispatch(root, target, new view.MouseEvent(name, options));
+      let canceled = false;
+      for (const name of kind) {
+        const event = new view.MouseEvent(name, options);
+        const sent = dispatch(root, target, event);
+        if (name === 'click' && sent === false) canceled = true;
+      }
+      // The page saw the click first, so a handler that cancels it keeps its
+      // say. Only an unhandled click on a link follows the link.
+      if (record.kind === 'click' && !canceled) activateLink(target, root, record);
       result.applied += 1;
       continue;
     }

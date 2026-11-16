@@ -326,9 +326,20 @@ export function createRoomClient({
           button: event.button,
           canvas: canvasFraction(event.target, event),
         });
+        // A click is a whole act, and a click on a link unloads this page. A
+        // queued record would leave with the page still holding it, so the
+        // click goes out now instead of on the next tick.
+        batcher.flush();
       },
       true
     );
+
+    // A page can leave without a click, and the last keys still belong to the
+    // room. One flush on the way out keeps the tail of the input.
+    const flushOut = () => batcher.flush();
+    if (typeof doc.defaultView?.addEventListener === 'function') {
+      doc.defaultView.addEventListener('pagehide', flushOut, { passive: true });
+    }
 
     doc.addEventListener(
       'keydown',
@@ -999,9 +1010,10 @@ export function createRoomClient({
   setupResize();
   setupInput();
 
-  if (isHost() && input && input.grantTo) {
-    grants.grant(input.grantTo, { tabId: input.tabId || 'tab', origin: input.origin || '' });
-  }
+  // A room opened with a grant names the peer it trusts. The peer needs the
+  // same frame the panel sends, or it never starts capturing, so this grant
+  // goes out on the wire through the one path that also grants here.
+  if (isHost() && input && input.grantTo) setGrant(input.grantTo, true);
 
   return {
     role: currentRole,

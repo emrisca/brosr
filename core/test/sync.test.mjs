@@ -435,7 +435,9 @@ test('the published layout notice clears once the layouts agree again', () => {
   );
   assert.equal(client.publish().layoutMismatch, true);
 
-  const click = client.receive(
+  // A click names its target, so another window size cannot misplace it. The
+  // room applies it even while the two layouts differ.
+  const named = client.receive(
     encode({
       type: 'input',
       peerId: 'p2',
@@ -445,7 +447,21 @@ test('the published layout notice clears once the layouts agree again', () => {
     }),
     1000
   );
-  assert.equal(click.reasons.layout, 1, 'the click was dropped for the layout');
+  assert.equal(named.reasons.layout, undefined, 'a named target is not dropped for the layout');
+
+  // A record with no address is placed by coordinates, and a mismatch still
+  // drops that one. The notice stays, so the receiver is never silent.
+  const click = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 2,
+      records: [{ kind: 'click' }],
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(click.reasons.layout, 1, 'the blind click was dropped for the layout');
   const noticed = client.publish().layoutNotice;
   assert.equal(noticed.peerId, 'p2');
   assert.equal(noticed.dropped, 1);
@@ -472,8 +488,8 @@ test('the published layout notice clears once the layouts agree again', () => {
     encode({
       type: 'input',
       peerId: 'p2',
-      seq: 2,
-      records: [{ kind: 'click', path: '#go' }],
+      seq: 3,
+      records: [{ kind: 'click' }],
       roomTime: 1400,
     }),
     1400
@@ -840,6 +856,58 @@ test('presence carries the last trusted pointer position', () => {
   doc.dispatch('pointermove', { isTrusted: false, clientX: 10, clientY: 10 });
   client.presence();
   assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
+});
+
+test('a granted click leaves at once, before a link can unload the page', () => {
+  const listeners = new Map();
+  const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500, addEventListener() {} },
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    input: { capture: true, tabId: 'peer', origin: 'https://example.com' },
+    send: (frame) => sent.push(decode(frame)),
+  });
+  const tile = {
+    tagName: 'A',
+    getAttribute: () => '',
+    closest: () => null,
+  };
+
+  // Without the grant the click stays local.
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+  assert.equal(sent.filter((message) => message.type === 'input').length, 0);
+
+  client.receive(
+    encode({
+      type: 'control',
+      peerId: 'peer',
+      allowed: true,
+      tabId: 'peer',
+      origin: 'https://example.com',
+    }),
+    0
+  );
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+
+  // No tick: the click is already on the wire because it flushed itself. A
+  // queued record would be lost when the link unloads the page.
+  const batches = sent.filter((message) => message.type === 'input');
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].records[0].kind, 'click');
 });
 
 test('a granted peer types into a field, and no text leaves without the grant', () => {

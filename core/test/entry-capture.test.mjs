@@ -14,3 +14,14 @@ test('a room tab always installs input capture', () => {
   assert.match(source, /capture: true/);
   assert.doesNotMatch(source, /params\.get\('capture'\)/);
 });
+
+test('a grant is sent again once the socket is open', () => {
+  // A grant frame sent before the socket opened went nowhere, and the peer then
+  // never started capturing. The open handler has to send it again.
+  assert.match(source, /socket\.onopen[\s\S]*?client\.setGrant\(input\.grantTo, true\)/);
+});
+
+test('a click flushes at once, so a link cannot unload the page first', () => {
+  const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
+  assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
+});

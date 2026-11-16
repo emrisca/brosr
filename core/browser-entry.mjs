@@ -777,6 +777,9 @@ export async function start() {
       // page and scroll instead of starting over.
       client.hello();
       client.tick(Date.now());
+      // A grant frame sent before the socket opened went nowhere. The room
+      // opened with a grant is sent again now, so the peer can start capturing.
+      if (isHost() && input && input.grantTo) client.setGrant(input.grantTo, true);
       publish();
     };
     socket.onerror = () => publish();
