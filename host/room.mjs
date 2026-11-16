@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { newRoomKey } from '../core/seal.mjs';
 import { prepareProfile } from '../zen/profile.mjs';
@@ -30,13 +30,19 @@ const RUN_DIR = STATE;
 const RUN_FILE = path.join(RUN_DIR, 'room.json');
 const JOIN_FILE = path.join(RUN_DIR, 'join.json');
 const PROFILE = path.join(RUN_DIR, 'profile');
-// A Chromium room keeps its own data directory, because the add-on format and
-// the profile layout are not the ones Gecko reads.
-const PROFILE_CHROME = path.join(RUN_DIR, 'profile-chrome');
 // A person can host and join. A second window on one profile is refused by the
 // browser, so a join keeps its own folder.
 const PROFILE_GUEST = path.join(RUN_DIR, 'profile-guest');
-const PROFILE_GUEST_CHROME = path.join(RUN_DIR, 'profile-guest-chrome');
+
+// Chromium builds keep one profile per browser. Brave and Edge write different
+// vendor state into the same folder, and Edge exits when it inherits a folder
+// that Brave created.
+function chromiumProfile(browser, guest) {
+  return path.join(
+    RUN_DIR,
+    guest ? `profile-guest-${browser.id}` : `profile-${browser.id}`
+  );
+}
 const CHROME_BRIDGE = path.join(RUNTIME, 'bridge-chrome');
 const BRIDGE = path.join(RUNTIME, 'bridge.xpi');
 const RELAY = path.join(ROOT, 'spike', 'relay.js');
@@ -164,7 +170,7 @@ function killTree(pid) {
   if (!alive(pid)) return false;
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
     } else {
       process.kill(-pid, 'SIGTERM');
     }
@@ -177,6 +183,99 @@ function killTree(pid) {
       return false;
     }
   }
+}
+
+// A Chromium launch can hand the URL to an existing browser and exit, leaving
+// the actual window under a different PID. Windows also lets a launcher exit
+// while its browser tree stays alive. The room profile is unique to this app, so
+// every process carrying that profile belongs to the room. Stop each tree, not
+// only the PID that spawn returned.
+function killProfile(profile) {
+  if (!profile || !fs.existsSync(profile)) return false;
+  if (process.platform === 'win32') {
+    const script = [
+      '$hits = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:BROSR_PROFILE) })',
+      'foreach ($hit in $hits) { taskkill.exe /PID $hit.ProcessId /T /F 2>$null | Out-Null }',
+      '$hits.Count',
+    ].join('; ');
+    const result = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        env: { ...process.env, BROSR_PROFILE: profile },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10000,
+        windowsHide: true,
+      }
+    );
+    return Number.parseInt(String(result.stdout || '0').trim(), 10) > 0;
+  }
+  try {
+    const result = spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' });
+    const hits = String(result.stdout || '')
+      .split(/\r?\n/)
+      .filter((line) => line.includes(profile));
+    for (const line of hits) {
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (!pid || pid === process.pid) continue;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        // The process exited between listing and signaling.
+      }
+    }
+    return hits.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// A Windows launcher can exit while the browser it started keeps the profile
+// open, so a dead pid is not proof the browser is gone. Ask for a process that
+// still carries this room's profile. Other platforms hand back the browser pid
+// from spawn, so the scan stays on Windows.
+function profileAlive(profile) {
+  if (process.platform !== 'win32' || !profile || !fs.existsSync(profile)) return false;
+  const script = [
+    '$hits = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:BROSR_PROFILE) })',
+    '$hits.Count',
+  ].join('; ');
+  try {
+    const result = spawnSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        env: { ...process.env, BROSR_PROFILE: profile },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 10000,
+        windowsHide: true,
+      }
+    );
+    return Number.parseInt(String(result.stdout || '0').trim(), 10) > 0;
+  } catch {
+    return false;
+  }
+}
+
+function roomProfiles() {
+  try {
+    return fs
+      .readdirSync(RUN_DIR, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          (entry.name === 'profile' || entry.name.startsWith('profile-'))
+      )
+      .map((entry) => path.join(RUN_DIR, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function stopProfiles() {
+  return roomProfiles().map((profile) => killProfile(profile));
 }
 
 export function readRun() {
@@ -278,7 +377,7 @@ export async function prepare({ browser: browserId, bridge = true, onProgress, g
     throw new Error(browser.reason || `${browser.name} cannot host a room`);
   }
   if (browser.family === 'chromium') {
-    const profileDir = guest ? PROFILE_GUEST_CHROME : PROFILE_CHROME;
+    const profileDir = chromiumProfile(browser, guest);
     const existed = fs.existsSync(profileDir);
     if (typeof onProgress === 'function') {
       onProgress({ step: 1, total: 2, label: 'Building the bridge' });
@@ -347,7 +446,7 @@ function bridgeVersion() {
 // port and two windows on one profile would fight.
 export async function start(options = {}) {
   const previous = readRun();
-  if (previous && (alive(previous.relayPid) || alive(previous.browserPid))) stop();
+  if (previous) stop();
 
   // Each leg is timed, because the whole wait is the sum of three steps and the
   // report says which one cost the time.
@@ -468,6 +567,8 @@ export function stop() {
   // app-exit rule, so no control channel outlives the room.
   const trust = run && run.trust && run.trust.helperPid ? killTree(run.trust.helperPid) : false;
   const guest = joined ? killTree(joined.browserPid) : false;
+  const profiles = stopProfiles();
+  const profileStopped = profiles.some(Boolean);
   for (const file of [RUN_FILE, JOIN_FILE]) {
     try {
       fs.rmSync(file);
@@ -475,13 +576,20 @@ export function stop() {
       // A second stop has nothing to remove.
     }
   }
-  if (!run && !joined) return { ok: true, stopped: false, reason: 'no room is running' };
+  if (!run && !joined) {
+    return {
+      ok: true,
+      stopped: profileStopped,
+      reason: profileStopped ? 'stale room browser stopped' : 'no room is running',
+    };
+  }
   return {
     ok: true,
-    stopped: relay || browser || guest,
+    stopped: relay || browser || guest || profileStopped,
     relay,
     browser,
     guest,
+    profileStopped,
     room: run ? run.room : joined.room,
   };
 }
@@ -554,15 +662,16 @@ async function guestStatus() {
   const ready = await relayReady(join.port, join.host);
   const link = ready ? await relayStatus(join.port, join.room, join.host) : null;
   const peers = link ? link.peers : 0;
-  // On Windows the launcher that spawn returns is not the browser that stays
-  // up, so a dead pid alone does not mean the guest is gone. A page in the room
-  // is the stronger proof, and it is the state a person sees.
+  // On Windows the launcher that spawn returns can exit while the browser it
+  // started stays up, so a dead pid alone does not mean the guest is gone. Ask
+  // for a process that still carries the room profile.
+  const browserOpen = browser || profileAlive(join.profile);
   return {
     ...join,
     role: 'peer',
     running: browser || peers > 0,
     relayAlive: ready,
-    browserAlive: browser,
+    browserAlive: browserOpen,
     relayReady: ready,
     peers,
   };
@@ -584,11 +693,14 @@ export async function status() {
     writeRun(run);
     rememberStart(run.browser.id, run.liveMs);
   }
+  // The pid from spawn can be a Windows launcher that exits at once. The room
+  // profile is unique to this app, so a process carrying it is the browser.
+  const browserOpen = browser || profileAlive(run.profile);
   return {
     ...run,
-    running: relay || browser,
+    running: relay || browser || peers > 0,
     relayAlive: relay,
-    browserAlive: browser,
+    browserAlive: browserOpen,
     relayReady: ready,
     peers,
   };
