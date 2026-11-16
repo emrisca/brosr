@@ -26,7 +26,9 @@ function run(name, args, timeout) {
   const ms = Date.now() - started;
   steps.push({ name, ok, exit: result.status, ms });
   process.stdout.write(`[check-all] ${ok ? 'ok  ' : 'FAIL'} ${name} (${ms} ms)\n`);
-  if (!ok) process.stdout.write(output.split('\n').slice(-25).join('\n') + '\n');
+  // The lane prints the failing state at the end, and twenty five lines cut the
+  // diagnosis out of it. Eighty keeps the form state a timeout names.
+  if (!ok) process.stdout.write(output.split('\n').slice(-80).join('\n') + '\n');
   return ok;
 }
 

@@ -263,6 +263,10 @@ async function openChromiumTab(port, url) {
   const page = new ChromiumPage(ws);
   await page.send('Page.enable');
   await page.send('Runtime.enable');
+  // A headless page on a runner can report itself unfocused even after the tab
+  // is raised, and an unfocused page drops injected key events. Focus emulation
+  // makes the page behave as if the window held focus.
+  await page.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
   await page.send('Page.navigate', { url });
   await until(async () => (await page.eval('document.readyState')) === 'complete', 'the page load', 20000);
   return page;
@@ -821,7 +825,7 @@ try {
     out.steps.diagnosis = {
       form: await form
         .eval(
-          "JSON.stringify({ value: document.getElementById('field').value, keys: (window.__keys || []).length })"
+          "JSON.stringify({ value: document.getElementById('field').value, keys: (window.__keys || []).length, active: (document.activeElement && (document.activeElement.id || document.activeElement.tagName)) || null, focused: document.hasFocus(), visibility: document.visibilityState })"
         )
         .catch((e) => String(e)),
       host: await hostPage.read().catch(() => null),
