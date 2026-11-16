@@ -71,6 +71,16 @@
       </section>
 
       <section class="group">
+        <h2><label for="symmetry">Symmetry</label></h2>
+        <select id="symmetry">
+          <option value="off" selected>Off</option>
+          <option value="vertical">Mirror left and right</option>
+          <option value="horizontal">Mirror top and bottom</option>
+          <option value="quad">Mirror all four</option>
+        </select>
+      </section>
+
+      <section class="group">
         <h2>Colour</h2>
         <div class="swatches" role="group" aria-label="Colour swatch">
           <button type="button" class="swatch" style="--c:#18181b" data-color="#18181b" aria-label="Charcoal" aria-pressed="true"></button>
@@ -108,15 +118,6 @@
     </aside>
 
     <main class="stage">
-      <div class="symmetry">
-        <label for="symmetry">Symmetry</label>
-        <select id="symmetry">
-          <option value="off" selected>Off</option>
-          <option value="vertical">Mirror left and right</option>
-          <option value="horizontal">Mirror top and bottom</option>
-          <option value="quad">Mirror all four</option>
-        </select>
-      </div>
       <div id="viewport" class="viewport">
         <canvas id="sheet" aria-label="Drawing surface"></canvas>
       </div>

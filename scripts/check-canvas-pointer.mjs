@@ -5,7 +5,7 @@
 // arrow must land at view.x + point.x * view.z on the receiving page at every
 // zoom and every window size. The square sheet is checked too: a stroke that
 // leaves the paper has to stop at its edge, a press on the desk has to draw
-// nothing, and a crowded sheet has to keep a cheap frame.
+// nothing, and a sheet of 2000 strokes has to keep a frame inside one refresh.
 //
 // The app keeps its browser on port 9333, so this check uses its own port, its
 // own profile and its own relay.
@@ -27,6 +27,8 @@ const LIVE = process.env.BROSR_RELAY || '';
 const ROOM = process.env.BROSR_ROOM || `pointer-${Date.now().toString(36)}`;
 const SHEET = { x: 1200, y: 1200 };
 const TOLERANCE = 4;
+// One frame at 60 Hz is 16.7 ms. A crowded sheet has to stay well inside it.
+const FRAME_BUDGET = 8;
 const BROWSERS = [
   process.env.BROSR_CHECK_BROWSER,
   '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -158,15 +160,20 @@ const INSPECT = `(() => {
     pointerAt: pointerAt ? { x: pointerAt.x, y: pointerAt.y } : null,
     zoom: document.getElementById('zoom-out-value').textContent,
     symmetry: (() => {
-      const el = document.querySelector('.symmetry');
-      if (!el || !el.parentElement) return null;
-      const own = el.getBoundingClientRect();
-      const stage = el.parentElement.getBoundingClientRect();
+      const picker = document.getElementById('symmetry');
+      if (!picker) return null;
+      const own = picker.getBoundingClientRect();
+      const panel = picker.closest('aside');
+      const panelRect = panel ? panel.getBoundingClientRect() : null;
       return {
         cx: own.left + own.width / 2,
-        stageCx: stage.left + stage.width / 2,
-        top: own.top,
-        stageTop: stage.top,
+        cy: own.top + own.height / 2,
+        width: own.width,
+        inPanel: Boolean(panel),
+        panelRight: panelRect ? panelRect.right : null,
+        overStage: Boolean(document.querySelector('.stage #symmetry')),
+        options: picker.options.length,
+        value: picker.value,
       };
     })(),
   };
@@ -613,25 +620,35 @@ try {
   assert.equal(afterPress.total, beforePress.total, 'a press on the desk started a stroke');
   console.log('  a press on the desk drew nothing');
 
-  // 12. The symmetry control sits over the middle of the sheet area instead of
-  // in the side panel, and it is reachable on top of the viewport.
+  // 12. The symmetry control lives in the left panel, left of the sheet, so it
+  // never sits where a mirror line looks like it runs on screen.
   const layout = await a.eval(INSPECT);
   assert.ok(layout.symmetry, 'the symmetry control is missing from the page');
+  assert.ok(layout.symmetry.inPanel, 'the symmetry control is not in the side panel');
+  assert.ok(!layout.symmetry.overStage, 'the symmetry control still sits over the stage');
   assert.ok(
-    Math.abs(layout.symmetry.cx - layout.symmetry.stageCx) <= 1,
-    `the symmetry control sits at ${round(layout.symmetry.cx)} against a stage centre of ${round(layout.symmetry.stageCx)}`
+    layout.symmetry.cx < layout.rect.left,
+    `the symmetry control sits at ${round(layout.symmetry.cx)} against a canvas that starts at ${round(layout.rect.left)}`
   );
-  assert.ok(
-    layout.symmetry.cx > layout.rect.left &&
-      layout.symmetry.cx < layout.rect.left + layout.rect.width &&
-      layout.symmetry.top >= layout.rect.top,
-    'the symmetry control is outside the canvas area'
-  );
+  assert.equal(layout.symmetry.options, 4, 'the symmetry select lost an option');
   console.log(
-    `  the symmetry control sits centred at ${Math.round(layout.symmetry.cx)} over a stage centre of ${Math.round(layout.symmetry.stageCx)}`
+    `  the symmetry control sits in the panel at ${Math.round(layout.symmetry.cx)}, left of a canvas that starts at ${Math.round(layout.rect.left)}`
   );
 
-  // 13. A crowded sheet keeps a cheap frame. The single stroke path is what a
+  // 13. A pick in the panel still reaches the stroke model, so the control stays
+  // wired from the place it now sits.
+  const pickSymmetry = (value) => `(() => {
+    const select = document.getElementById('symmetry');
+    select.value = ${JSON.stringify(value)};
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return state.symmetry;
+  })()`;
+  assert.equal(await a.eval(pickSymmetry('vertical')), 'vertical', 'a vertical pick did not reach the model');
+  assert.equal(await a.eval(pickSymmetry('quad')), 'quad', 'a quad pick did not reach the model');
+  assert.equal(await a.eval(pickSymmetry('off')), 'off', 'the model kept a mode after Off');
+  console.log('  a symmetry pick reaches the stroke model from the panel');
+
+  // 14. A crowded sheet keeps a cheap frame. The single stroke path is what a
   // full repaint costs, and the page paints a frame from its ink bitmap.
   const perf = await a.eval(`(() => {
     const layer = state.layers[0];
@@ -720,6 +737,109 @@ try {
   );
   console.log(
     `  ${perf.strokes} strokes: full repaint ${perf.fullMs} ms, cached frame ${perf.frameMs} ms, frame with a live line ${perf.liveMs} ms`
+  );
+
+  // 15. Two thousand strokes is a sheet nobody draws by hand, and a frame still
+  // has to land inside one refresh. The whole sheet is painted once for the
+  // baseline, so a frame that scaled with the count would show up here.
+  const stress = await a.eval(`(() => {
+    const layer = state.layers[0];
+    layer.strokes.length = 0;
+    for (let i = 0; i < 2000; i++) {
+      const x = (i % 50) * 44 + 20;
+      const y = Math.floor(i / 50) * 55 + 20;
+      const points = [];
+      for (let j = 0; j < 24; j++) {
+        points.push(clampPoint({ x: x + j * 1.6, y: y + Math.sin(j / 3) * 10 }));
+      }
+      layer.strokes.push({
+        id: 'stress-' + i,
+        layer: 0,
+        tool: 'pencil',
+        colour: '#18181b',
+        size: 4,
+        opacity: 1,
+        symmetry: 'off',
+        points,
+      });
+    }
+    markInk();
+    redraw();
+
+    const scratch = document.createElement('canvas');
+    scratch.width = canvas.width;
+    scratch.height = canvas.height;
+    const full = () => {
+      const g = scratch.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, scratch.width, scratch.height);
+      g.save();
+      g.translate(view.x, view.y);
+      g.scale(view.z, view.z);
+      g.fillStyle = PAPER_COLOUR;
+      g.fillRect(0, 0, PAPER.width, PAPER.height);
+      paintCommitted(g);
+      g.restore();
+    };
+    const median = (list) => list.slice().sort((a, b) => a - b)[Math.floor(list.length / 2)];
+    const flush = (target) => target.getContext('2d').getImageData(0, 0, 1, 1);
+    const time = (fn, runs, target) => {
+      const list = [];
+      for (let i = 0; i < runs; i++) {
+        const started = performance.now();
+        fn();
+        flush(target);
+        list.push(performance.now() - started);
+      }
+      return Math.round(median(list) * 100) / 100;
+    };
+
+    full();
+    redraw();
+    const fullMs = time(full, 6, scratch);
+    const frameMs = time(redraw, 40, canvas);
+    const live = {
+      id: 'stress-live',
+      layer: 1,
+      tool: 'pencil',
+      colour: '#18181b',
+      size: 4,
+      opacity: 1,
+      symmetry: 'off',
+      points: [],
+    };
+    for (let j = 0; j < 160; j++) {
+      live.points.push(clampPoint({ x: 120 + j * 5, y: 1200 + Math.sin(j / 5) * 40 }));
+    }
+    drawing = { stroke: live, last: live.points[live.points.length - 1] };
+    const liveMs = time(redraw, 30, canvas);
+    drawing = null;
+    redraw();
+    return {
+      strokes: layer.strokes.length,
+      points: layer.strokes.reduce((sum, stroke) => sum + stroke.points.length, 0),
+      width: canvas.width,
+      height: canvas.height,
+      fullMs,
+      frameMs,
+      liveMs,
+    };
+  })()`);
+  assert.equal(stress.strokes, 2000, `the stress lane committed ${stress.strokes} strokes`);
+  assert.ok(
+    stress.frameMs <= FRAME_BUDGET,
+    `a frame on ${stress.strokes} strokes took ${stress.frameMs} ms against a budget of ${FRAME_BUDGET} ms`
+  );
+  assert.ok(
+    stress.liveMs <= FRAME_BUDGET,
+    `a frame with a live line on ${stress.strokes} strokes took ${stress.liveMs} ms against a budget of ${FRAME_BUDGET} ms`
+  );
+  assert.ok(
+    stress.frameMs * 4 < stress.fullMs,
+    `a frame on ${stress.strokes} strokes took ${stress.frameMs} ms against ${stress.fullMs} ms for a full repaint`
+  );
+  console.log(
+    `  ${stress.strokes} strokes, ${stress.points} points at ${stress.width}x${stress.height}: full repaint ${stress.fullMs} ms, cached frame ${stress.frameMs} ms, frame with a live line ${stress.liveMs} ms`
   );
 
   console.log(`PASS: the remote pointer held ${SHEET.x},${SHEET.y} through zoom, resize and clear`);
