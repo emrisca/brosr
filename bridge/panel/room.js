@@ -4,7 +4,19 @@
 const $ = (id) => document.getElementById(id);
 // One namespace for both engines.
 const api = globalThis.browser || globalThis.chrome || null;
-const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The landing page is the room front door, and its room params mark it. A
+// fixture page is still a room page by its name.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  if (typeof href !== 'string' || !href) return false;
+  if (ROOM_FIXTURE.test(href)) return true;
+  try {
+    const url = new URL(href);
+    return url.searchParams.has('room') && url.searchParams.has('peer');
+  } catch {
+    return false;
+  }
+}
 // One guest id per panel, so two people copying the link do not collide.
 const GUEST = 'guest-' + Math.random().toString(36).slice(2, 6);
 
@@ -289,6 +301,11 @@ function renderWatch(reply) {
   if (!list) return;
   list.replaceChildren();
   delete copy.title;
+  const action = $('watch-action');
+  if (action) {
+    action.hidden = true;
+    action.textContent = '';
+  }
   if (!media) {
     state.textContent = 'No media';
     delete state.dataset.state;
@@ -320,6 +337,12 @@ function renderWatch(reply) {
     ? 'Bring the film tab to the front'
     : 'Open the film in a new tab';
 
+  const last = data.lastMediaAction;
+  if (action && last && last.text) {
+    action.textContent = last.text;
+    action.hidden = false;
+  }
+
   const peers = Array.isArray(data.peerList) ? data.peerList : [];
   const reports = Array.isArray(data.viewers) ? data.viewers : [];
   const byId = new Map(reports.map((entry) => [String(entry && entry.id), entry]));
@@ -341,6 +364,25 @@ function renderWatch(reply) {
   }
 }
 
+// The Control section names the tab a grant types into. A room with no trusted
+// channel has no switch to move, so the row states why it stays off.
+function renderTrust(data) {
+  const box = $('trust-target');
+  const note = $('trust-note');
+  if (!box) return;
+  const hasTrust = Boolean(data && data.trust);
+  const url = data && typeof data.trustTarget === 'string' ? data.trustTarget : '';
+  box.disabled = !hasTrust;
+  box.checked = hasTrust && Boolean(url);
+  if (note) {
+    note.textContent = !hasTrust
+      ? 'This room has no trusted channel.'
+      : url
+        ? `Typing goes to ${pageLabel(url)}.`
+        : 'Typing goes to this room tab.';
+  }
+}
+
 function render(reply) {
   lastReply = reply;
   const data = reply.data || {};
@@ -356,6 +398,7 @@ function render(reply) {
   setStatus(data.socket === 1 ? 'Connected' : 'Reconnecting...');
   $('control').hidden = reply.role !== 'host';
   renderSeal(data.seal);
+  renderTrust(data);
   const invite = inviteLink(data.inviteUrl || data.location);
   $('invite-box').hidden = !invite;
   if (invite && $('invite').value !== invite) $('invite').value = invite;
@@ -457,6 +500,7 @@ function missing(reason) {
   $('invite-box').hidden = true;
   $('invite').value = '';
   renderSeal(null);
+  renderTrust(null);
   $('playback').textContent = '-';
   $('relay').textContent = '-';
   renderWatch(null);
@@ -477,15 +521,15 @@ async function targetTab() {
     // Fall through to the tab list.
   }
   const [active] = await api.tabs.query({ active: true, currentWindow: true });
-  if (usable(active) && ROOM_PAGE.test(active.url || '')) return active;
+  if (usable(active) && isRoomPage(active.url || '')) return active;
   const tabs = (await api.tabs.query({ currentWindow: true })).filter(usable);
-  const here = tabs.find((tab) => ROOM_PAGE.test(tab.url || ''));
+  const here = tabs.find((tab) => isRoomPage(tab.url || ''));
   if (here) return here;
   // A sidebar belongs to no window in some builds, so both scans above come
   // back empty and the panel would sit blank beside a live room. Every window is
   // the last pass, and a room elsewhere beats no room at all.
   const all = (await api.tabs.query({})).filter(usable);
-  return all.find((tab) => ROOM_PAGE.test(tab.url || '')) || null;
+  return all.find((tab) => isRoomPage(tab.url || '')) || null;
 }
 
 // A sidebar can be refused the tab message channel while the page itself
@@ -677,6 +721,16 @@ function hostOf(url) {
   }
 }
 
+// A target reads as the page it is, not only as the site it sits on.
+function pageLabel(url) {
+  try {
+    const parsed = new URL(String(url));
+    return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`;
+  } catch {
+    return String(url || '');
+  }
+}
+
 function renderTabs() {
   const list = $('tabs-list');
   const auto = $('tabs-auto');
@@ -690,6 +744,11 @@ function renderTabs() {
   auto.disabled = !canShare;
   auto.checked = Boolean(state && state.auto);
   auto.title = canShare ? 'Send every new tab to the room.' : 'Ask the host for control first.';
+  const noticeBox = $('notice-media');
+  if (noticeBox) {
+    noticeBox.checked = !state || state.notices !== false;
+    noticeBox.disabled = !state;
+  }
   note.hidden = !guest;
   note.textContent = guest ? 'Ask the host for control, then tick a tab.' : '';
   renderSync();
@@ -751,6 +810,7 @@ async function loadTabs() {
         canShare: Boolean(reply.canShare || reply.role === 'host'),
         auto: Boolean(reply.auto),
         sync: reply.sync !== false,
+        notices: reply.notices !== false,
         tabs: Array.isArray(reply.tabs) ? reply.tabs : [],
       };
       renderTabs();
@@ -823,6 +883,79 @@ if (syncBox) {
     } catch {
       box.checked = !wanted;
       notice('The background page did not answer.', true);
+    }
+    box.disabled = false;
+  });
+}
+
+const noticeToggle = $('notice-media');
+if (noticeToggle) {
+  noticeToggle.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    const wanted = box.checked;
+    box.disabled = true;
+    try {
+      const reply = await tabMessage({ type: 'brosr:notice-toggle', on: wanted });
+      if (reply && reply.ok) {
+        notice(wanted ? 'Action notices are on.' : 'Action notices are off.');
+        await loadTabs();
+        return;
+      }
+      box.checked = !wanted;
+      notice('The browser did not answer.', true);
+    } catch {
+      box.checked = !wanted;
+      notice('The background page did not answer.', true);
+    }
+    box.disabled = false;
+  });
+}
+
+// Trusted typing follows one tab at a time. The switch sends that tab's URL to
+// the room tab, and the helper resolves it on this browser. A room opened
+// without a trusted channel answers no-trust and the switch rolls back.
+const trustBox = $('trust-target');
+if (trustBox) {
+  trustBox.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    const wanted = box.checked;
+    const tab = await targetTab();
+    if (!tab) {
+      box.checked = !wanted;
+      return notice('Open a room tab first.', true);
+    }
+    let url = null;
+    if (wanted) {
+      const [active] = await api.tabs.query({ active: true, currentWindow: true });
+      const open = (await api.tabs.query({ currentWindow: true })).filter(usable);
+      const page =
+        usable(active) && /^https?:/.test(active.url || '') && !isRoomPage(active.url || '')
+          ? active
+          : open.find((item) => /^https?:/.test(item.url || '') && !isRoomPage(item.url || ''));
+      if (!page) {
+        box.checked = false;
+        return notice('Open the page you want to type into, then tick this.', true);
+      }
+      url = page.url;
+    }
+    box.disabled = true;
+    try {
+      const reply = await api.tabs.sendMessage(tab.id, { type: 'brosr:trust-target', url });
+      if (reply && reply.ok) {
+        notice(url ? `Typing goes to ${pageLabel(url)}.` : 'Typing goes to the room tab.');
+        await refresh();
+        return;
+      }
+      box.checked = !wanted;
+      notice(
+        reply && reply.reason === 'no-trust'
+          ? 'Start the room with trusted input first.'
+          : 'The room tab did not answer.',
+        true
+      );
+    } catch {
+      box.checked = !wanted;
+      notice('The room tab did not answer.', true);
     }
     box.disabled = false;
   });

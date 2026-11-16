@@ -607,6 +607,20 @@ button:focus-visible,
   color: var(--room-text);
 }
 
+/* The last person-caused change, so a room that paused can say who did it
+   without waiting for the notice in the film tab. */
+.watch-action {
+  margin: 0;
+  color: var(--room-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabs-notice {
+  justify-self: start;
+  margin-top: 4px;
+}
+
 /* A viewer row says what each peer's own tab does with the film, so the gap is
    visible without asking anyone. The badge is the only coloured part, and its
    two colours keep the status contrast the rest of the panel uses. */

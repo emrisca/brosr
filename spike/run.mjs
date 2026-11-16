@@ -171,16 +171,16 @@ function buildBridge() {
   fs.writeFileSync(
     xpi,
     makeZip([
-      { name: 'manifest.json', data: fs.readFileSync(path.join(here, 'bridge', 'manifest.json')) },
-      { name: 'content.js', data: fs.readFileSync(path.join(here, 'bridge', 'content.js')) },
+      { name: 'manifest.json', data: fs.readFileSync(path.join(here, '..', 'bridge', 'manifest.json')) },
+      { name: 'content.js', data: fs.readFileSync(path.join(here, '..', 'bridge', 'content.js')) },
       {
         name: 'background.js',
-        data: fs.readFileSync(path.join(here, 'bridge', 'background.js')),
+        data: fs.readFileSync(path.join(here, '..', 'bridge', 'background.js')),
       },
       // The manifest names a room panel, so the XPI has to carry it.
       ...['room.html', 'room.css', 'room.js'].map((name) => ({
         name: `panel/${name}`,
-        data: fs.readFileSync(path.join(here, '..', 'zen', 'panel', name)),
+        data: fs.readFileSync(path.join(here, '..', 'bridge', 'panel', name)),
       })),
       ...[
         'icon-16.png',
@@ -556,8 +556,65 @@ try {
     log(
       `[media] running ${seconds}s, host=${hostFirst ? hostFirst.source : 'missing'}, peer=${peerFirst ? peerFirst.source : 'missing'}`
     );
-    await sleep(seconds * 1000);
+    await sleep(Math.min(4000, seconds * 1000));
 
+    // The fixture starts paused, so a held bias alone proves nothing about
+    // play, pause or a seeking replay. Drive the room through all three.
+    const phases = {};
+    const withClip = (body) => `(() => { const v = document.getElementById('clip'); ${body} return true; })()`;
+
+    // A headless browser can refuse to start a media pipeline, and a play
+    // promise that never settles would stall the lane. Ask without waiting and
+    // read the element, so the run records the limit instead of hanging.
+    await evaluate(
+      bidiA,
+      ctxA,
+      "(() => { const v = document.getElementById('clip'); window.__brosrPlay = 'pending'; v.play().then(() => { window.__brosrPlay = 'ok'; }, (e) => { window.__brosrPlay = 'error ' + e.name; }); return true; })()"
+    );
+    await waitForDatasetWhere(
+      bidiB,
+      ctxB,
+      (entry) => entry.debug && entry.debug.paused === false,
+      8000
+    );
+    await sleep(4000);
+    const hostPlaying = (await readDataset(bidiA, ctxA)) || {};
+    const playing = (await readDataset(bidiB, ctxB)) || {};
+    phases.hostPlay = await evaluate(bidiA, ctxA, 'window.__brosrPlay || "missing"');
+    phases.play = {
+      peerPaused: playing.debug ? playing.debug.paused : null,
+      hostPaused: hostPlaying.debug ? hostPlaying.debug.paused : null,
+      hostPosition: hostPlaying.position ?? null,
+      peerPosition: playing.position ?? null,
+      drift: stats(playing.samples || []),
+    };
+    // No start, no ordering to check. The rest of the lane still runs.
+    const playSupported = phases.play.hostPaused === false;
+    phases.play.supported = playSupported;
+
+    await evaluate(bidiA, ctxA, withClip('v.pause();'));
+    await sleep(2000);
+    const hostPaused = (await readDataset(bidiA, ctxA)) || {};
+    const paused = (await readDataset(bidiB, ctxB)) || {};
+    phases.pause = {
+      peerPaused: paused.debug ? paused.debug.paused : null,
+      hostPosition: hostPaused.position ?? null,
+      peerPosition: paused.position ?? null,
+    };
+
+    await evaluate(bidiA, ctxA, withClip('v.currentTime = 1.5; v.play().catch(() => {});'));
+    await sleep(4000);
+    const hostReplayed = (await readDataset(bidiA, ctxA)) || {};
+    const replayed = (await readDataset(bidiB, ctxB)) || {};
+    phases.seek = {
+      peerPaused: replayed.debug ? replayed.debug.paused : null,
+      hostPosition: hostReplayed.position ?? null,
+      peerPosition: replayed.position ?? null,
+      seeks: replayed.seeks ?? null,
+      drift: stats(replayed.samples || []),
+    };
+
+    await sleep(Math.min(2000, seconds * 1000));
     const hostFinal = (await readDataset(bidiA, ctxA)) || {};
     const peerFinal = (await readDataset(bidiB, ctxB)) || {};
     const drift = stats(peerFinal.samples || []);
@@ -571,7 +628,17 @@ try {
           drift.p95 <= 250 &&
           (peerFinal.cursors || 0) >= 1 &&
           (hostFinal.cursors || 0) >= 1 &&
-          String(peerFinal.key || '').endsWith('/media/clip.webm')
+          String(peerFinal.key || '').endsWith('/media/clip.webm') &&
+          (!playSupported ||
+            (phases.play.peerPaused === false &&
+              phases.play.drift &&
+              phases.play.drift.p95 <= 250)) &&
+          (!playSupported || phases.pause.peerPaused === true) &&
+          (!playSupported || phases.seek.peerPaused === false) &&
+          (phases.seek.seeks ?? 0) >= 1 &&
+          typeof phases.seek.hostPosition === 'number' &&
+          typeof phases.seek.peerPosition === 'number' &&
+          Math.abs(phases.seek.hostPosition - phases.seek.peerPosition) <= 0.25,
       ),
       source: peerFinal.source || null,
       hostSource: hostFinal.source || null,
@@ -588,6 +655,7 @@ try {
       cursors: { host: hostFinal.cursors ?? 0, peer: peerFinal.cursors ?? 0 },
       drift,
       debug: peerFinal.debug || null,
+      phases,
       seconds,
     };
   }

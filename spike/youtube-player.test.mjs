@@ -3,7 +3,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AD_CLASS, createPlayer } from './fixtures/youtube-player.js';
+import { AD_CLASS, createPlayer } from './fixtures/youtube-player.mjs';
 import { YouTubeAdapter } from '../core/youtube.mjs';
 import { createRoomClient } from '../core/sync.mjs';
 import { encode } from '../core/protocol.mjs';

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canvas, Brosr</title>
+  <link rel="stylesheet" href="./canvas.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" href="../">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span>Brosr</span>
+    </a>
+    <h1>Canvas</h1>
+    <div class="actions">
+      <button id="undo" type="button" class="ghost" title="Undo (Cmd Z)">Undo</button>
+      <button id="redo" type="button" class="ghost" title="Redo (Cmd Shift Z)">Redo</button>
+      <button id="export" type="button" class="ghost">Save PNG</button>
+      <button id="clear" type="button" class="ghost danger">Clear</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="panel" aria-label="Drawing controls">
+      <section class="group">
+        <h2>Brush</h2>
+        <div class="brushes" role="group" aria-label="Brush preset">
+          <button type="button" class="brush" data-preset="pencil" aria-pressed="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19l2-6 8-8 4 4-8 8-6 2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+            <span>Pencil</span>
+          </button>
+          <button type="button" class="brush" data-preset="ink" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17c4 2 8-1 8-5 0-2-2-4-4-2s0 5 3 5 5-3 5-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"></path></svg>
+            <span>Ink</span>
+          </button>
+          <button type="button" class="brush" data-preset="marker" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16l7-9 4 3-7 9-4 1v-4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+            <span>Marker</span>
+          </button>
+          <button type="button" class="brush" data-preset="airbrush" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2" fill="currentColor"></circle><circle cx="7" cy="7" r="1" fill="currentColor"></circle><circle cx="17" cy="7" r="1" fill="currentColor"></circle><circle cx="7" cy="17" r="1" fill="currentColor"></circle><circle cx="17" cy="17" r="1" fill="currentColor"></circle></svg>
+            <span>Air</span>
+          </button>
+          <button type="button" class="brush" data-preset="eraser" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 18h9M5 14l6-6 5 5-4 4H7l-2-3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+            <span>Eraser</span>
+          </button>
+          <button type="button" class="brush" data-preset="line" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18L18 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path></svg>
+            <span>Line</span>
+          </button>
+          <button type="button" class="brush" data-preset="rect" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="6" width="14" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"></rect></svg>
+            <span>Box</span>
+          </button>
+          <button type="button" class="brush" data-preset="ellipse" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="7" ry="5.5" fill="none" stroke="currentColor" stroke-width="1.5"></ellipse></svg>
+            <span>Oval</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="group">
+        <h2><label for="size">Size</label> <output id="size-out">8</output></h2>
+        <input id="size" type="range" min="1" max="80" value="8">
+        <h2><label for="opacity">Opacity</label> <output id="opacity-out">100%</output></h2>
+        <input id="opacity" type="range" min="10" max="100" value="100">
+        <h2><label for="stabilizer">Stabilizer</label> <output id="stabilizer-out">35%</output></h2>
+        <input id="stabilizer" type="range" min="0" max="100" value="35">
+      </section>
+
+      <section class="group">
+        <h2><label for="symmetry">Symmetry</label></h2>
+        <select id="symmetry">
+          <option value="off" selected>Off</option>
+          <option value="vertical">Mirror left and right</option>
+          <option value="horizontal">Mirror top and bottom</option>
+          <option value="quad">Mirror all four</option>
+        </select>
+      </section>
+
+      <section class="group">
+        <h2>Colour</h2>
+        <div class="swatches" role="group" aria-label="Colour swatch">
+          <button type="button" class="swatch" style="--c:#1c1a17" data-color="#1c1a17" aria-label="Charcoal" aria-pressed="true"></button>
+          <button type="button" class="swatch" style="--c:#c2410c" data-color="#c2410c" aria-label="Clay" aria-pressed="false"></button>
+          <button type="button" class="swatch" style="--c:#b45309" data-color="#b45309" aria-label="Amber" aria-pressed="false"></button>
+          <button type="button" class="swatch" style="--c:#15803d" data-color="#15803d" aria-label="Fern" aria-pressed="false"></button>
+          <button type="button" class="swatch" style="--c:#1d4ed8" data-color="#1d4ed8" aria-label="Lake" aria-pressed="false"></button>
+          <button type="button" class="swatch" style="--c:#6d28d9" data-color="#6d28d9" aria-label="Violet" aria-pressed="false"></button>
+          <button type="button" class="swatch" style="--c:#f5f5f4" data-color="#f5f5f4" aria-label="Chalk" aria-pressed="false"></button>
+        </div>
+        <label class="custom-colour" for="colour">
+          <span>Custom</span>
+          <input id="colour" type="color" value="#1c1a17">
+        </label>
+      </section>
+
+      <section class="group">
+        <h2>Layers</h2>
+        <div class="layers" role="group" aria-label="Layer">
+          <button type="button" class="layer" data-layer="0" aria-pressed="false">
+            <span class="layer-name">Sketch</span>
+            <span class="layer-toggle" data-visible="0" title="Show or hide this layer">Show</span>
+          </button>
+          <button type="button" class="layer" data-layer="1" aria-pressed="true">
+            <span class="layer-name">Ink</span>
+            <span class="layer-toggle" data-visible="1" title="Show or hide this layer">Show</span>
+          </button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <div id="viewport" class="viewport">
+        <canvas id="sheet" aria-label="Drawing surface"></canvas>
+      </div>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button id="zoom-out" type="button" title="Zoom out">-</button>
+        <output id="zoom-out-value">100%</output>
+        <button id="zoom-in" type="button" title="Zoom in">+</button>
+        <button id="fit" type="button">Fit</button>
+      </div>
+    </main>
+  </div>
+
+  <footer class="status" aria-live="polite">
+    <span id="tool-state">Pencil</span>
+    <span id="coords">0, 0</span>
+    <span id="room-state">Solo</span>
+    <span class="hint">Space drags the sheet. Wheel zooms. Cmd Z undoes.</span>
+  </footer>
+
+  <script src="./canvas.js"></script>
+</body>
+</html>

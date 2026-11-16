@@ -5,12 +5,15 @@ import { createServer } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { decode, encode } from '../protocol.mjs';
 import { newRoomKey, roomKey, sealFrame, openFrame } from '../seal.mjs';
 
-const RELAY = new URL('../../spike/relay.js', import.meta.url).pathname;
+// fileURLToPath, because a URL pathname carries a leading slash before C: on Windows
+// and Node cannot open that as a path.
+const RELAY = fileURLToPath(new URL('../../spike/relay.js', import.meta.url));
 const RELAY_BIN = process.env.RELAY_BIN || '';
-const FIXTURES = new URL('../../spike/fixtures', import.meta.url).pathname;
+const FIXTURES = fileURLToPath(new URL('../../spike/fixtures', import.meta.url));
 
 // The same two proofs run against the Node spike relay and the axum relay. Set
 // RELAY_BIN to a built binary and neither frame rule changes.

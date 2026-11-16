@@ -1,6 +1,7 @@
 // The room lifecycle for the app. One call builds a profile, starts the relay,
 // opens the browser and writes a run file. The app reads that file for status
 // and calls stop to end it.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -39,6 +40,8 @@ const PROFILE_GUEST_CHROME = path.join(RUN_DIR, 'profile-guest-chrome');
 const CHROME_BRIDGE = path.join(RUNTIME, 'bridge-chrome');
 const BRIDGE = path.join(RUNTIME, 'bridge.xpi');
 const RELAY = path.join(ROOT, 'spike', 'relay.js');
+// The trusted input helper. It owns the BiDi session and the loopback agent.
+const TRUST = path.join(here, 'trust.mjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -94,7 +97,7 @@ export async function freePort(start = 8787, host = '127.0.0.1') {
 function relayReady(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const request = http.get(
-      { host, port, path: '/room-b.html', timeout: 800 },
+      { host, port, path: '/', timeout: 800 },
       (response) => {
         response.resume();
         resolve(response.statusCode === 200);
@@ -186,7 +189,8 @@ export function readRun() {
 
 function writeRun(run) {
   ensureDir(RUN_DIR);
-  fs.writeFileSync(RUN_FILE, JSON.stringify(run, null, 2));
+  // The run file can hold a trusted input token, so only this user reads it.
+  fs.writeFileSync(RUN_FILE, JSON.stringify(run, null, 2), { mode: 0o600 });
   return run;
 }
 
@@ -206,8 +210,11 @@ export function roomUrl({
   role = 'host',
   peer = 'host',
   panel = true,
+  trust = null,
 }) {
-  const url = new URL(`http://${formatAddress(host, port)}/room-b.html`);
+  // The landing page is the front door of a room. The room params below are
+  // what mark it as the room tab, so no second fixture page is needed.
+  const url = new URL(`http://${formatAddress(host, port)}/`);
   url.searchParams.set('role', role);
   url.searchParams.set('room', room);
   url.searchParams.set('peer', peer);
@@ -216,7 +223,14 @@ export function roomUrl({
   // to 8787, which is wrong as soon as the first port is busy.
   url.searchParams.set('relay', String(port));
   if (panel) url.searchParams.set('panel', '1');
-  url.hash = `k=${key}`;
+  // The key and the trusted token ride in the fragment, so neither reaches the
+  // relay or a request line. The token opens the loopback agent and nothing
+  // else, and only while a peer holds a grant.
+  const fragment = [`k=${key}`];
+  if (trust && trust.port && trust.token) {
+    fragment.push(`t=${trust.token}`, `tp=${trust.port}`);
+  }
+  url.hash = fragment.join('&');
   return url.toString();
 }
 
@@ -344,6 +358,14 @@ export async function start(options = {}) {
   const room = options.room || roomId();
   const name = options.name || 'Host';
   const key = newRoomKey();
+  // Trusted input follows the browser family. Gecko opens a BiDi session and
+  // Chromium a CDP one, and the helper picks its client from the family.
+  const trust = options.trusted
+    ? {
+        token: crypto.randomBytes(32).toString('base64url'),
+        port: await freePort(9330, '127.0.0.1'),
+      }
+    : null;
 
   // The relay does not read the profile, so it boots while the profile is
   // written. A cold first run then costs the larger of the two legs, not both.
@@ -371,16 +393,35 @@ export async function start(options = {}) {
   }
   const relayAt = Date.now();
 
-  const url = roomUrl({ host, port, room, key, name });
+  const url = roomUrl({ host, port, room, key, name, trust });
   const args = launchArgs(browser, {
     profile: prepared.profile,
     url,
     headless: Boolean(options.headless),
     extension: prepared.extensionDirs || prepared.extension || null,
+    remotePort: trust ? trust.port : null,
   });
   const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
   child.unref();
   const launchedAt = Date.now();
+
+  // The helper waits for the room tab, then binds its listener only when the
+  // page reports a granted peer. A room with no grant keeps the port closed.
+  let helper = null;
+  if (trust) {
+    helper = spawn(
+      process.execPath,
+      [
+        TRUST,
+        `--debug-port=${trust.port}`,
+        `--room=${room}`,
+        `--token=${trust.token}`,
+        `--family=${browser.family}`,
+      ],
+      { cwd: ROOT, detached: true, stdio: 'ignore' }
+    );
+    helper.unref();
+  }
 
   const run = writeRun({
     ok: true,
@@ -395,6 +436,16 @@ export async function start(options = {}) {
     profile: prepared.profile,
     relayPid: relay.pid,
     browserPid: child.pid,
+    // The token stays here. Only the helper and the room tab read it, and the
+    // status command reports the port and the helper without the token.
+    trust: trust
+      ? {
+          port: trust.port,
+          token: trust.token,
+          helperPid: helper ? helper.pid : null,
+          url: `http://127.0.0.1:${trust.port}`,
+        }
+      : null,
     bridge: prepared.bridge,
     extensions: prepared.extensions,
     timings: {
@@ -413,6 +464,9 @@ export function stop() {
   const joined = readJoin();
   const relay = run ? killTree(run.relayPid) : false;
   const browser = run ? killTree(run.browserPid) : false;
+  // The helper closes the listener before it exits. Killing it here is the
+  // app-exit rule, so no control channel outlives the room.
+  const trust = run && run.trust && run.trust.helperPid ? killTree(run.trust.helperPid) : false;
   const guest = joined ? killTree(joined.browserPid) : false;
   for (const file of [RUN_FILE, JOIN_FILE]) {
     try {
@@ -490,9 +544,33 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
   });
 }
 
+// A machine that joined someone else's room runs no local relay, so it has no
+// room.json. Its join file is the record, and the relay it reports on is the
+// one the invite named.
+async function guestStatus() {
+  const join = readJoin();
+  if (!join) return { ok: true, running: false };
+  const browser = alive(join.browserPid);
+  const ready = await relayReady(join.port, join.host);
+  const link = ready ? await relayStatus(join.port, join.room, join.host) : null;
+  const peers = link ? link.peers : 0;
+  // On Windows the launcher that spawn returns is not the browser that stays
+  // up, so a dead pid alone does not mean the guest is gone. A page in the room
+  // is the stronger proof, and it is the state a person sees.
+  return {
+    ...join,
+    role: 'peer',
+    running: browser || peers > 0,
+    relayAlive: ready,
+    browserAlive: browser,
+    relayReady: ready,
+    peers,
+  };
+}
+
 export async function status() {
   const run = readRun();
-  if (!run) return { ok: true, running: false };
+  if (!run) return guestStatus();
   const relay = alive(run.relayPid);
   const browser = alive(run.browserPid);
   const host = run.host || '127.0.0.1';

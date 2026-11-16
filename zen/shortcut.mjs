@@ -28,6 +28,7 @@ const CORE = [
   'room.mjs',
   'overlay.mjs',
   'input.mjs',
+  'trust.mjs',
   'sync.mjs',
   'browser-entry.mjs',
   'tabs.mjs',

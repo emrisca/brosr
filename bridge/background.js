@@ -12,7 +12,20 @@ const session = api.storage && api.storage.session ? api.storage.session : null;
 
 // The room page names its tab. A hello message is one source and this is the
 // second, because a tab restored from the session store can miss the hello.
-const ROOM_URL = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The landing page is the front door, and its room params are what mark it, so
+// a landing page opened by hand stays a plain tab. The fixture names stay,
+// because those pages still exist.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  if (typeof href !== 'string' || !href) return false;
+  if (ROOM_FIXTURE.test(href)) return true;
+  try {
+    const url = new URL(href);
+    return url.searchParams.has('room') && url.searchParams.has('peer');
+  } catch {
+    return false;
+  }
+}
 
 // Firefox reports no tab as -1. A check for null alone would keep that
 // placeholder and send every message to it.
@@ -31,6 +44,44 @@ function shareable(url) {
   }
 }
 
+// A cursor belongs to a page, and two copies of one page sit at different
+// addresses because of the room params. The key drops those, and it stays in
+// step with cursorKey() in core/browser-entry.mjs.
+const CURSOR_PARAMS = [
+  'role',
+  'peer',
+  'host',
+  'room',
+  'name',
+  'bias',
+  'relay',
+  'panel',
+  'selftest',
+  'capture',
+  'grant',
+];
+function cursorKey(href) {
+  try {
+    const url = new URL(String(href || ''));
+    for (const key of CURSOR_PARAMS) url.searchParams.delete(key);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+// A pointer moves far more often than a room needs. One tab can send at most
+// every 60 ms, which keeps a tab drag from flooding the worker.
+const CURSOR_MS = 60;
+const cursorAt = new Map();
+function cursorAllowed(tabId) {
+  const now = Date.now();
+  if (now - (cursorAt.get(tabId) || 0) < CURSOR_MS) return false;
+  cursorAt.set(tabId, now);
+  return true;
+}
+
 const text = (error) => String((error && error.message) || error);
 
 // The live copy is the fast path. Storage is the copy that survives a worker
@@ -42,6 +93,7 @@ const memory = {
   lastSelftest: null,
   lastRoomStatus: null,
   remoteKeyTabs: null,
+  mediaTabKeys: null,
 };
 
 async function state() {
@@ -66,7 +118,7 @@ async function save(changes) {
 }
 
 function rememberTab(tab, seen) {
-  if (!tab || !validId(tab.id) || !ROOM_URL.test(tab.url || '')) return null;
+  if (!tab || !validId(tab.id) || !isRoomPage(tab.url || '')) return null;
   if (seen.roomTabId !== null && seen.roomTabId !== tab.id) return null;
   return tab.id;
 }
@@ -79,7 +131,7 @@ async function roomTab() {
   let id = null;
   try {
     const tabs = await api.tabs.query({});
-    const found = tabs.find((tab) => validId(tab.id) && ROOM_URL.test(tab.url || ''));
+    const found = tabs.find((tab) => validId(tab.id) && isRoomPage(tab.url || ''));
     if (found) id = found.id;
   } catch {
     // A restricted window can refuse the query.
@@ -97,7 +149,7 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
 });
 
 api.tabs.query({}).then((tabs) => {
-  const found = tabs.find((tab) => validId(tab.id) && ROOM_URL.test(tab.url || ''));
+  const found = tabs.find((tab) => validId(tab.id) && isRoomPage(tab.url || ''));
   if (found) save({ roomTabId: found.id });
 }).catch(() => {});
 
@@ -105,6 +157,7 @@ api.tabs.onRemoved.addListener((id) => {
   announced.delete(id);
   remoteTabs.delete(id);
   mediaTabs.delete(id);
+  save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
   for (const [key, tabId] of [...remoteKeys]) {
     if (tabId !== id) continue;
@@ -122,7 +175,7 @@ api.tabs.onRemoved.addListener((id) => {
 // Sharing is host-led. A guest opens what the host announces and never sends
 // its own tabs, so one person's browsing stays private by default.
 const local = api.storage && api.storage.local ? api.storage.local : null;
-const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, granted: false };
+const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, notices: true, granted: false };
 let roomRole = null;
 let prefsLoaded = false;
 
@@ -131,12 +184,13 @@ async function loadPrefs() {
   prefsLoaded = true;
   if (!local) return prefs;
   try {
-    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'granted']);
+    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'notices', 'granted']);
     if (saved) {
       prefs.autoShare = saved.autoShare !== false;
       prefs.muted = saved.muted || {};
       prefs.shared = saved.shared || {};
       prefs.sync = saved.sync !== false;
+      prefs.notices = saved.notices !== false;
       prefs.granted = saved.granted === true;
     }
   } catch {
@@ -179,6 +233,31 @@ state()
 // Tabs with a player, keyed by the film each one shows. The room tab drives
 // playback through this map, because the film is usually in another tab.
 const mediaTabs = new Map();
+// A worker restart empties that map, and a film tab only announces a new key
+// when the film changes. The book keeps the last entry per tab, so a paused tab
+// is still reachable after the worker comes back. A write happens only when a
+// key changes, not on every four-a-second report.
+const mediaBook = () =>
+  Object.fromEntries(
+    [...mediaTabs].map(([id, entry]) => [String(id), { key: entry.key, at: entry.at }])
+  );
+async function rememberMediaTab(id, key) {
+  const next = { key: String(key || ''), at: Date.now() };
+  const prev = mediaTabs.get(id);
+  mediaTabs.set(id, next);
+  if (!prev || prev.key !== next.key) await save({ mediaTabKeys: mediaBook() });
+}
+state()
+  .then((saved) => {
+    const book = saved && saved.mediaTabKeys;
+    if (!book || typeof book !== 'object') return;
+    for (const [raw, entry] of Object.entries(book)) {
+      const id = Number(raw);
+      if (!validId(id) || !entry || !entry.key) continue;
+      mediaTabs.set(id, { key: String(entry.key), at: Number(entry.at) || Date.now() });
+    }
+  })
+  .catch(() => {});
 // A host tab can reach the open path from several frames at once. One slot per
 // host tab keeps that burst to a single local tab.
 const opening = new Set();
@@ -227,7 +306,7 @@ async function considerTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return;
   if (!(await mayShare())) return;
   const seen = await state();
-  if (tab.id === seen.roomTabId || ROOM_URL.test(tab.url)) return;
+  if (tab.id === seen.roomTabId || isRoomPage(tab.url)) return;
   if (remoteTabs.has(tab.id)) return;
   if (announced.get(tab.id) === tab.url) return;
   await loadPrefs();
@@ -363,6 +442,7 @@ async function handle(message, sender) {
       canShare,
       auto: prefs.autoShare,
       sync: prefs.sync,
+      notices: prefs.notices,
       granted: prefs.granted,
       tabs,
     };
@@ -377,6 +457,12 @@ async function handle(message, sender) {
   if (message.type === 'brosr:sync-toggle') {
     await savePrefs({ sync: Boolean(message.on) });
     return { ok: true, sync: prefs.sync };
+  }
+  // The action notice is a choice too. Playback still syncs when it is off;
+  // only the name card in the film tab stays away.
+  if (message.type === 'brosr:notice-toggle') {
+    await savePrefs({ notices: Boolean(message.on) });
+    return { ok: true, notices: prefs.notices };
   }
   if (message.type === 'brosr:tab-share') {
     const tabId = Number(message.tabId);
@@ -460,6 +546,53 @@ async function handle(message, sender) {
       opening.delete(slot);
     }
   }
+  // A shared tab reports its pointer. The room tab holds the socket, so the
+  // point goes there and the room puts it on the wire under this peer.
+  if (message.type === 'brosr:cursor-out') {
+    const from = sender && sender.tab ? sender.tab.id : null;
+    const page = cursorKey(message.page);
+    const x = Number(message.x);
+    const y = Number(message.y);
+    if (!validId(from) || !page || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return { ok: false, reason: 'cursor' };
+    }
+    if (!cursorAllowed(from)) return { ok: true, skipped: 'rate' };
+    const id = await roomTab();
+    if (!validId(id) || id === from) return { ok: false, reason: 'no-room' };
+    api.tabs
+      .sendMessage(id, { type: 'brosr:cursor-send', page, x, y })
+      .catch(() => {});
+    return { ok: true };
+  }
+  // A cursor from the room reaches the tabs that show that page and no others,
+  // because a dot on a different page points at nothing.
+  if (message.type === 'brosr:cursor-apply') {
+    const page = cursorKey(message.page);
+    const x = Number(message.x);
+    const y = Number(message.y);
+    if (!page || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return { ok: false, reason: 'cursor' };
+    }
+    const name = String(message.name || '').slice(0, 24);
+    const from = String(message.from || '');
+    const seen = await state();
+    const all = await api.tabs.query({}).catch(() => []);
+    for (const tab of all) {
+      if (!validId(tab.id) || tab.id === seen.roomTabId) continue;
+      if (cursorKey(tab.url) !== page) continue;
+      api.tabs
+        .sendMessage(tab.id, {
+          type: 'brosr:cursor-draw',
+          page,
+          x: Math.max(0, Math.min(1, x)),
+          y: Math.max(0, Math.min(1, y)),
+          name,
+          from,
+        })
+        .catch(() => {});
+    }
+    return { ok: true };
+  }
   if (message.type === 'brosr:tab-status') {
     const id = await roomTab();
     if (id === null) return { ok: false, reason: 'no-tab' };
@@ -486,9 +619,10 @@ async function handle(message, sender) {
     const id = await roomTab();
     if (id === from) {
       mediaTabs.delete(from);
+      save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'room-tab' };
     }
-    mediaTabs.set(from, { key: String(message.key || ''), at: Date.now() });
+    await rememberMediaTab(from, message.key);
     return { ok: true, tabs: mediaTabs.size };
   }
   if (message.type === 'brosr:media-out') {
@@ -496,7 +630,7 @@ async function handle(message, sender) {
     if (!validId(from)) return { ok: false, reason: 'no-tab' };
     const media = message.state;
     if (!media || typeof media !== 'object' || !media.key) return { ok: false, reason: 'state' };
-    mediaTabs.set(from, { key: String(media.key), at: Date.now() });
+    await rememberMediaTab(from, media.key);
     await loadPrefs();
     if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     // A tab that is not playing must not take the room away from the film the
@@ -553,16 +687,22 @@ async function handle(message, sender) {
         api.tabs
           .sendMessage(id, {
             type: 'brosr:media-apply',
+            from: message.from || null,
+            name: message.name || null,
+            action: message.action || null,
+            notices: prefs.notices,
             key,
             position: message.position,
             playing: Boolean(message.playing),
             rate: message.rate,
             volume: message.volume,
+            ad: Boolean(message.ad),
             at: message.at,
           })
           .then(() => true)
           .catch(() => {
             mediaTabs.delete(id);
+            save({ mediaTabKeys: mediaBook() });
             return false;
           })
       )

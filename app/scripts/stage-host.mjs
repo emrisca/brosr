@@ -40,6 +40,9 @@ const FILES = [
   'bridge/manifest.chrome.json',
   'bridge/background.js',
   'bridge/content.js',
+  // content.js injects this page-scope script, and the profile builder packs
+  // it into both extension builds. Without it, prepare stops on a missing file.
+  'bridge/bridge-youtube.js',
   'bridge/panel/room.html',
   'bridge/panel/room.css',
   'bridge/panel/room.js',
@@ -55,8 +58,9 @@ const GLOBS = [
 // Folders, copied whole. The relay serves the room page, its scripts and the
 // fixtures straight from spike/fixtures, and the start path waits for a 200 on
 // room-b.html. A bundle without this tree looks like a relay that never came
-// up, which is the error the setup screen shows.
-const TREES = ['spike/fixtures'];
+// up, which is the error the setup screen shows. The landing tree is the front
+// door that relay answers with, so it ships beside the fixtures.
+const TREES = ['spike/fixtures', 'landing'];
 
 function copyTree(relative) {
   const from = path.join(repo, relative);
@@ -131,6 +135,8 @@ for (const required of [
   'bridge/manifest.json',
   'spike/fixtures/room-b.html',
   'spike/fixtures/sync.html',
+  'landing/index.html',
+  'landing/canvas/canvas.js',
 ]) {
   if (!fs.existsSync(path.join(out, required))) stop(`staged tree lacks ${required}`);
 }

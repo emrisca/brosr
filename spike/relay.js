@@ -16,8 +16,11 @@ const ROOT = path.join(__dirname, 'fixtures');
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
+  '.svg': 'image/svg+xml',
 };
 
 // One table per room. A frame never crosses from one room to another.
@@ -35,11 +38,28 @@ function capture(room, opcode, payload) {
   );
 }
 
+// A count says a room changed. The address says which machine changed it, and
+// a leave with no join beside it is easier to spot than a number that fell.
+function addressOf(socket) {
+  const raw = (socket && socket.remoteAddress) || '';
+  return raw.replace(/^::ffff:/, '') || 'unknown';
+}
+
+function note(action, client, peers) {
+  if (process.env.RELAY_QUIET) return;
+  console.error(
+    `[relay] ${action} ${client.remote} room=${client.room} peers=${peers} uptime=${
+      Date.now() - STARTED
+    }ms`
+  );
+}
+
 function leave(client) {
   const room = rooms.get(client.room);
   if (!room) return;
-  room.delete(client);
+  if (!room.delete(client)) return;
   if (!room.size) rooms.delete(client.room);
+  note('leave', client, room.size);
 }
 
 const server = http.createServer((req, res) => {
@@ -89,8 +109,25 @@ const server = http.createServer((req, res) => {
     serve(path.join(__dirname, '..', 'assets', path.basename(url.pathname)), res);
     return;
   }
-  const rel = url.pathname === '/' ? '/sync.html' : url.pathname;
-  const file = path.join(ROOT, rel);
+  // The landing page is the room front door, with one tile per Brosr app. It
+  // sits beside the fixtures so a room and its apps ship together.
+  if (url.pathname === '/' || url.pathname === '/index.html') {
+    serve(path.join(__dirname, '..', 'landing', 'index.html'), res);
+    return;
+  }
+  if (url.pathname === '/landing.css') {
+    serve(path.join(__dirname, '..', 'landing', 'landing.css'), res);
+    return;
+  }
+  if (url.pathname === '/canvas' || url.pathname.startsWith('/canvas/')) {
+    const name =
+      url.pathname === '/canvas' || url.pathname === '/canvas/'
+        ? 'index.html'
+        : path.basename(url.pathname);
+    serve(path.join(__dirname, '..', 'landing', 'canvas', name), res);
+    return;
+  }
+  const file = path.join(ROOT, url.pathname);
   if (!file.startsWith(ROOT)) {
     res.writeHead(403);
     res.end('forbidden');
@@ -173,9 +210,10 @@ server.on('upgrade', (req, socket) => {
   );
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const room = url.searchParams.get('room') || 'default';
-  const client = { socket, buf: Buffer.alloc(0), room };
+  const client = { socket, buf: Buffer.alloc(0), room, remote: addressOf(socket) };
   if (!rooms.has(room)) rooms.set(room, new Set());
   rooms.get(room).add(client);
+  note('join', client, rooms.get(room).size);
   socket.on('data', (chunk) => {
     client.buf = Buffer.concat([client.buf, chunk]);
     readFrames(client);

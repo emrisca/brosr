@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { status, stop, type Run, type Status } from '@/lib/host';
+import { address, status, stop, type Run, type Status } from '@/lib/host';
 
 type Props = {
   run: Run;
@@ -23,7 +23,9 @@ function Dot({ on }: { on: boolean }) {
 
 export function Room({ run, onLeave }: Props) {
   const [live, setLive] = useState<Status | null>(null);
+  const [me, setMe] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -45,6 +47,20 @@ export function Room({ run, onLeave }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    let open = true;
+    address()
+      .then((answer) => {
+        if (open) setMe(answer.address);
+      })
+      .catch(() => {
+        if (open) setMe('');
+      });
+    return () => {
+      open = false;
+    };
+  }, []);
+
   const relayReady = Boolean(live?.relayReady);
   const browserOpen = Boolean(live?.browserAlive);
   const peers = live?.peers ?? 0;
@@ -56,6 +72,17 @@ export function Room({ run, onLeave }: Props) {
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
       setError('Select the link and press Command C to copy it.');
+    }
+  }
+
+  async function copyAddress() {
+    if (!me) return;
+    try {
+      await navigator.clipboard.writeText(me);
+      setCopiedAddress(true);
+      window.setTimeout(() => setCopiedAddress(false), 1600);
+    } catch {
+      setError('Select the address and press Command C to copy it.');
     }
   }
 
@@ -98,6 +125,38 @@ export function Room({ run, onLeave }: Props) {
             {copied ? 'Copied' : 'Copy'}
           </Button>
         </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="lobby" className="text-xs text-muted-foreground">
+          Lobby address
+        </label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="lobby"
+            readOnly
+            value={me || 'Reading the address'}
+            className="font-mono text-xs"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={copyAddress}
+            disabled={!me}
+            className="shrink-0"
+          >
+            {copiedAddress ? <Check /> : <Copy />}
+            {copiedAddress ? 'Copied' : 'Copy'}
+          </Button>
+        </div>
+        {me ? (
+          <p className="text-xs text-muted-foreground">
+            {me.startsWith('127.0.0.1')
+              ? 'No tailnet address yet. Only this machine can reach this room.'
+              : 'A friend on the tailnet or local network reaches your room here.'}
+          </p>
+        ) : null}
       </div>
 
       <Separator />

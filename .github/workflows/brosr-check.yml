@@ -1,0 +1,50 @@
+# The guard, both browser lanes and the tests as one job. The signed bridge is
+# gitignored, so a hosted runner skips that guard and both lanes build from the
+# tree. A runner has a private IPv4, so the Zen lane also joins a keyed room on
+# a plain HTTP origin and proves the seal where the page has no crypto.subtle.
+name: Brosr check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+
+      - name: Build the relay
+        run: cargo build --manifest-path relay/Cargo.toml
+
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable --path zen/.runtime/cft
+
+      - name: Install Zen
+        run: brew install --cask zen
+
+      - name: Run the guard, both lanes and the tests
+        run: node scripts/check-all.mjs
+
+      # A failed lane names its state in its own log. The step above writes one
+      # file per step, and nothing else on a runner survives the job.
+      - name: Keep the check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brosr-check-logs
+          path: zen/.runtime/check-*.log
+          if-no-files-found: ignore
+          # The logs sit in a dot folder, and v4 skips hidden paths unless the
+          # step asks for them, which left the upload empty on the first run.
+          include-hidden-files: true

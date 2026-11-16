@@ -153,6 +153,12 @@ export type AnswerResult = FriendsState & {
   joined?: Joined;
 };
 
+// The lobby address this machine offers. The host reads it without starting
+// the lobby, so the screen can show it beside a room it already opened.
+export type Address = { ok: true; address: string };
+
+export const address = () => host<Address>(['address']);
+
 export const friends = () => host<FriendsState>(['friends']);
 
 export const addFriend = (address: string, name: string) =>
@@ -163,6 +169,11 @@ export const removeFriend = (address: string) =>
 
 export const sendInvite = (address: string) =>
   host<FriendsState>(['invite-send', `--to=${address}`]);
+
+// A pasted invite opens the invited room in the guest profile. The link
+// carries the relay and the room key, so nothing here starts a room.
+export const join = (url: string, browser?: string) =>
+  host<Joined>(['join', `--url=${url}`, ...(browser ? [`--browser=${browser}`] : [])]);
 
 export const answerInvite = (id: string, accept: boolean, browser?: string) =>
   host<AnswerResult>([

@@ -6,7 +6,7 @@ import { decode, encode } from './protocol.mjs';
 import { ClockEstimator } from './clock.mjs';
 import { DriftController } from './drift.mjs';
 import { MediaAdapter, bufferedAround } from './media.mjs';
-import { CursorOverlay } from './overlay.mjs';
+import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
 import { Room } from './room.mjs';
 import {
   GrantBook,
@@ -118,6 +118,7 @@ export function createRoomClient({
     appReceived: 0,
     appDropped: 0,
     lastApp: null,
+    lastMediaAction: null,
     hostId,
     hostMigrations: 0,
   };
@@ -132,12 +133,24 @@ export function createRoomClient({
   const grants = new GrantBook({ now });
   let remoteGrant = false;
   let batcher = null;
+  // Trusted batches reach the browser one at a time. The last send has to land
+  // before the next begins, or a slow one lets its letters interleave.
+  let trustedQueue = Promise.resolve();
   let lastInputFlush = -Infinity;
-  // The last trusted pointer position in viewport coordinates. Presence reuses
-  // it so a peer sees the mouse, not a placeholder at the origin.
+  // The last trusted pointer position as a share of the viewport. Presence
+  // reuses it so a peer sees the mouse, not a placeholder at the origin.
   let lastPointer = null;
+  // The same pointer in raw client pixels. A share of an old window goes stale
+  // the moment that window changes size, so the pixels are kept to work the
+  // share out again.
+  let lastPointerClient = null;
+  // The last point of every peer on this page, as a share. A resize places each
+  // cursor again from these, because the pixels it drew at are gone.
+  const peerPoints = new Map();
   // The page that point belongs to. A cursor shows only on that page.
   let lastPointerUrl = null;
+  // The last frame that reached this tab, so a change can be named once.
+  let lastMediaFrame = null;
 
   // The host can change. A room elects a successor when the host leaves, so
   // both the role and the host id stay mutable inside the client.
@@ -270,26 +283,65 @@ export function createRoomClient({
 
     const tabId = (input && input.tabId) || 'tab';
     const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
-    const applied = replayInput(message.records, {
-      root: doc,
-      // A peer that laid out the page differently sends a point that lands
-      // elsewhere here. Drop the record and say so.
-      layoutMatches: !stats.layoutMismatch,
-      allowed: (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind }),
-      onDrop: (reason) => {
-        stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
-      },
-    });
-    if (applied.reasons.layout) {
-      stats.layoutNotice = {
-        at: Math.round(now()),
-        peerId: message.peerId,
-        dropped: applied.reasons.layout,
+    const allowed = (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind });
+    const replay = () => {
+      const applied = replayInput(message.records, {
+        root: doc,
+        // A peer that laid out the page differently sends a point that lands
+        // elsewhere here. Drop the record and say so.
+        layoutMatches: !stats.layoutMismatch,
+        allowed,
+        onDrop: (reason) => {
+          stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
+        },
+      });
+      if (applied.reasons.layout) {
+        stats.layoutNotice = {
+          at: Math.round(now()),
+          peerId: message.peerId,
+          dropped: applied.reasons.layout,
+        };
+      }
+      stats.inputApplied += applied.applied;
+      stats.inputDropped += applied.dropped;
+      return { ok: true, ...applied };
+    };
+
+    // A trusted room applies the batch in the browser's own input pipeline.
+    // The records arrive already placed against this layout, so the synthetic
+    // path is the fallback and not the first choice. A refusal replays, so a
+    // closed agent or a stale token never swallows a click silently.
+    if (input && typeof input.trusted === 'function') {
+      const sendable = message.records.filter(allowed);
+      if (!sendable.length) {
+        stats.inputDropped += message.records.length;
+        stats.inputReasons.grant = (stats.inputReasons.grant || 0) + message.records.length;
+        return { ok: true, applied: 0, dropped: message.records.length, trusted: true };
+      }
+      // Two batches used to be in flight at once, and a slow one let the next
+      // overtake it, so a word arrived with its letters swapped. Each send now
+      // waits for the browser to apply the batch before it.
+      const dispatch = async () => {
+        try {
+          const answer = await input.trusted(sendable);
+          if (!answer || !answer.ok) {
+            replay();
+            return;
+          }
+          stats.inputApplied += Number(answer.applied) || sendable.length;
+          const skipped = Number(answer.skipped) || 0;
+          if (skipped) {
+            stats.inputDropped += skipped;
+            stats.inputReasons.kind = (stats.inputReasons.kind || 0) + skipped;
+          }
+        } catch {
+          replay();
+        }
       };
+      trustedQueue = trustedQueue.then(dispatch);
+      return { ok: true, trusted: true, sent: sendable.length };
     }
-    stats.inputApplied += applied.applied;
-    stats.inputDropped += applied.dropped;
-    return { ok: true, ...applied };
+    return replay();
   }
 
   function setupInput() {
@@ -316,9 +368,20 @@ export function createRoomClient({
           button: event.button,
           canvas: canvasFraction(event.target, event),
         });
+        // A click is a whole act, and a click on a link unloads this page. A
+        // queued record would leave with the page still holding it, so the
+        // click goes out now instead of on the next tick.
+        batcher.flush();
       },
       true
     );
+
+    // A page can leave without a click, and the last keys still belong to the
+    // room. One flush on the way out keeps the tail of the input.
+    const flushOut = () => batcher.flush();
+    if (typeof doc.defaultView?.addEventListener === 'function') {
+      doc.defaultView.addEventListener('pagehide', flushOut, { passive: true });
+    }
 
     doc.addEventListener(
       'keydown',
@@ -351,6 +414,54 @@ export function createRoomClient({
       },
       { passive: true, capture: true }
     );
+
+    // A synthetic key event inserts no character, so typing travels as the
+    // field value instead. The receiver writes it through the native setter,
+    // which is what React and Vue read. A password or credential field never
+    // reaches this record.
+    doc.addEventListener(
+      'input',
+      (event) => {
+        if (skip(event) || !remoteGrant) return;
+        const target = event.target;
+        const tag = String((target && target.tagName) || '').toLowerCase();
+        if (!['input', 'textarea', 'select'].includes(tag)) return;
+        if (isSensitiveField(target)) return;
+        batcher.push({
+          kind: 'text',
+          path: cssPath(target),
+          value: String(target.value ?? ''),
+        });
+      },
+      true
+    );
+  }
+
+  // Presence travels as a share of the viewport, so two window sizes put a
+  // cursor on the same part of the page. The overlay eases and jumps in pixels,
+  // so the share becomes pixels once, here, and the overlay never reads the
+  // wire form. One unit at the edge keeps the rest of the file honest.
+  function viewSize() {
+    const view = doc && doc.defaultView;
+    return {
+      width: Math.max(1, Number(view && view.innerWidth) || 1),
+      height: Math.max(1, Number(view && view.innerHeight) || 1),
+    };
+  }
+
+  function sharePoint(point) {
+    const x = Number(point && point.x);
+    const y = Number(point && point.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
+    return {
+      x: Math.round(Math.max(0, Math.min(1, x)) * 10000) / 10000,
+      y: Math.round(Math.max(0, Math.min(1, y)) * 10000) / 10000,
+    };
+  }
+
+  function pointPixels(point) {
+    const size = viewSize();
+    return { x: point.x * size.width, y: point.y * size.height };
   }
 
   function applyPeers() {
@@ -374,11 +485,13 @@ export function createRoomClient({
       }
     }
     state.join({ id: message.peerId, name: message.name, colour: message.colour });
+    const point = sharePoint(message.point);
     const position = {
       id: message.peerId,
       name: message.name,
       colour: message.colour,
-      point: message.point,
+      // The share, because a tab that hands the cursor on needs the wire form.
+      point,
       url: message.url,
     };
     // Only the room tab holds a socket, so it is the one that shares a cursor
@@ -395,9 +508,11 @@ export function createRoomClient({
     // that same page, so a pointer never lands on an unrelated tab.
     const here = pageUrl ? pageUrl() : '';
     if (!message.url || !here || message.url !== here) {
+      peerPoints.delete(message.peerId);
       cursor.removePeer(message.peerId);
     } else {
-      cursor.setPeer(position);
+      peerPoints.set(message.peerId, position);
+      cursor.setPeer({ ...position, point: pointPixels(point) });
     }
     stats.cursors = cursor.stats().peers;
   }
@@ -427,12 +542,35 @@ export function createRoomClient({
     }
     const expected =
       message.position + (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+    // The notice names a person, not a socket id. The room knows the name the
+    // peer chose when it joined.
+    const actor =
+      (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
+    // The panel and the film tab share one reading of the change. The expected
+    // position is what this tab assumes the frame means, so a seek is measured
+    // against the frame that came before it.
+    const action = mediaAction(lastMediaFrame, { ...message, position: expected }, local);
+    lastMediaFrame = {
+      key: message.key,
+      position: expected,
+      playing: Boolean(message.playing),
+      rate: Number(message.rate || 1),
+      at: local,
+    };
+    if (action) {
+      stats.lastMediaAction = {
+        name: actor,
+        action,
+        text: actionText({ name: actor, action, position: expected, rate: message.rate }),
+        at: Math.round(local),
+      };
+    }
     // The host's room tab holds no player. A granted peer drives the film
     // through the tab that does, and the host keeps sending its own anchor.
     if (isHost()) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
@@ -447,7 +585,7 @@ export function createRoomClient({
     if (!read) {
       if (!onMedia) return { ok: false, reason: 'no-media' };
       try {
-        if (onMedia({ ...message, expected, at: local }) === false) {
+        if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
@@ -716,7 +854,10 @@ export function createRoomClient({
     }
     if (typeof view.scroll !== 'number') return;
     if (Math.abs(view.scroll - state.scroll) <= SCROLL_EPSILON) return;
-    state.applyView({ scroll: view.scroll, fingerprint: view.fingerprint });
+    // This tab is the reference the peer follows. Its own resize is not a
+    // mismatch with a peer, and treating it as one would drop every click the
+    // peer sends from then on.
+    state.applyView({ scroll: view.scroll });
     stats.scroll = state.scroll;
     sendMessage({
       type: 'view',
@@ -724,6 +865,32 @@ export function createRoomClient({
       fingerprint: view.fingerprint,
       roomTime: local,
     });
+  }
+
+  // A resize changes what a share means in pixels. This page's pointer keeps
+  // its place in the window, so its share is worked out again, and every peer
+  // cursor is placed again from the share that peer last sent. Without this a
+  // cursor sits where the old window size put it.
+  function resizePointers() {
+    if (lastPointerClient) {
+      const size = viewSize();
+      lastPointer = sharePoint({
+        x: lastPointerClient.x / size.width,
+        y: lastPointerClient.y / size.height,
+      });
+    }
+    if (!cursor) return;
+    const here = pageUrl ? pageUrl() : '';
+    for (const [id, entry] of peerPoints) {
+      if (entry.url && here && entry.url !== here) continue;
+      cursor.setPeer({ ...entry, id, point: pointPixels(entry.point) });
+    }
+  }
+
+  function setupResize() {
+    const view = doc && doc.defaultView;
+    if (!view || typeof view.addEventListener !== 'function') return;
+    view.addEventListener('resize', resizePointers, { passive: true });
   }
 
   function setupPointer() {
@@ -736,7 +903,9 @@ export function createRoomClient({
         const x = Number(event.clientX);
         const y = Number(event.clientY);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        lastPointer = { x: Math.round(x), y: Math.round(y) };
+        const size = viewSize();
+        lastPointerClient = { x, y };
+        lastPointer = sharePoint({ x: x / size.width, y: y / size.height });
         lastPointerUrl = pageUrl ? pageUrl() : null;
       },
       { passive: true, capture: true }
@@ -750,7 +919,7 @@ export function createRoomClient({
     const x = Number(point.x);
     const y = Number(point.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    lastPointer = { x: Math.round(x), y: Math.round(y) };
+    lastPointer = sharePoint({ x, y });
     if (url) lastPointerUrl = String(url);
     return true;
   }
@@ -863,6 +1032,7 @@ export function createRoomClient({
       lastControl: stats.lastControl,
       controls: stats.controls,
       controlHistory: stats.sentControls,
+      lastMediaAction: stats.lastMediaAction,
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,
@@ -879,11 +1049,13 @@ export function createRoomClient({
   }
 
   setupPointer();
+  setupResize();
   setupInput();
 
-  if (isHost() && input && input.grantTo) {
-    grants.grant(input.grantTo, { tabId: input.tabId || 'tab', origin: input.origin || '' });
-  }
+  // A room opened with a grant names the peer it trusts. The peer needs the
+  // same frame the panel sends, or it never starts capturing, so this grant
+  // goes out on the wire through the one path that also grants here.
+  if (isHost() && input && input.grantTo) setGrant(input.grantTo, true);
 
   return {
     role: currentRole,

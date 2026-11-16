@@ -13,6 +13,8 @@ import {
   decodeKey,
   inviteLink,
   readInvite,
+  sha256,
+  hkdfSha256,
   SEAL,
 } from '../seal.mjs';
 
@@ -121,6 +123,21 @@ test('a frame from another key does not open', () => {
   assert.throws(() => openFrame(other, sealed, { room: 'demo' }), /did not open/);
 });
 
+// Two invites for one room derive different keys, so a link shared with the
+// wrong person joins the socket and still reads nothing.
+test('an invite with the wrong key cannot open the room frames', async () => {
+  const right = await roomKey(newRoomKey());
+  const wrong = await roomKey(newRoomKey());
+  const sealed = sealFrame(right, text(JSON.stringify({ type: 'hello', peerId: 'p1' })), {
+    room: 'demo',
+  });
+  assert.throws(() => openFrame(wrong, sealed, { room: 'demo' }), /did not open/);
+  assert.equal(
+    new TextDecoder().decode(openFrame(right, sealed, { room: 'demo' })),
+    JSON.stringify({ type: 'hello', peerId: 'p1' })
+  );
+});
+
 test('a short or wrong sized frame is refused before the cipher runs', () => {
   const key = hex(HCHACHA_SUBKEY);
   assert.throws(() => openFrame(key, new Uint8Array(8)), /too short/);
@@ -148,6 +165,74 @@ test('HKDF expands the invite key to the 32 byte cipher key', async () => {
   assert.notEqual(asHex(first), asHex(padded), 'HKDF is not zero padding');
   const other = await roomKey(newRoomKey());
   assert.notEqual(asHex(first), asHex(other));
+});
+
+// A room page on a LAN or tailnet address has no crypto.subtle, so the whole
+// derivation has to run in plain JavaScript. These vectors pin the hash and
+// HKDF the seal now uses.
+test('SHA-256 matches FIPS 180-4', () => {
+  assert.equal(
+    asHex(sha256(text('abc'))),
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+  );
+  assert.equal(
+    asHex(sha256(new Uint8Array(0))),
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+  );
+});
+
+test('HKDF-SHA256 matches RFC 5869 case 1', () => {
+  const okm = hkdfSha256(
+    hex('0b'.repeat(22)),
+    hex('000102030405060708090a0b0c'),
+    hex('f0f1f2f3f4f5f6f7f8f9'),
+    42
+  );
+  assert.equal(
+    asHex(okm),
+    '3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865'
+  );
+});
+
+test('the JavaScript derivation agrees with WebCrypto', async () => {
+  const invite = newRoomKey();
+  const ours = await roomKey(invite);
+  if (!globalThis.crypto?.subtle) return;
+  const material = await globalThis.crypto.subtle.importKey(
+    'raw',
+    decodeKey(invite),
+    'HKDF',
+    false,
+    ['deriveBits']
+  );
+  const bits = await globalThis.crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: text('brosr/v1'),
+      info: text('room frame key'),
+    },
+    material,
+    SEAL.subkeyBytes * 8
+  );
+  assert.equal(asHex(ours), asHex(new Uint8Array(bits)), 'the two derivations differ');
+});
+
+test('a page without WebCrypto still derives the room key', async () => {
+  const invite = newRoomKey();
+  const want = await roomKey(invite);
+  const saved = globalThis.crypto;
+  // This is the shape a browser gives an insecure origin: getRandomValues is
+  // there and subtle is not.
+  Object.defineProperty(globalThis, 'crypto', {
+    configurable: true,
+    value: { getRandomValues: saved.getRandomValues.bind(saved) },
+  });
+  try {
+    assert.equal(asHex(await roomKey(invite)), asHex(want));
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: saved });
+  }
 });
 
 test('an invite keeps the key in the fragment and out of the query', () => {

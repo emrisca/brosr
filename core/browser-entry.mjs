@@ -16,13 +16,25 @@ import {
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
+import { ActionNotice, mediaAction } from './overlay.mjs';
+import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
 
-// The panel button stays off unrelated pages. A room page is a fixture whose
-// name starts with one of the room words, which is what the panel looks for.
-const ROOM_PAGE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// The panel button stays off unrelated pages. A room page is the landing page
+// opened with room params, or a fixture whose name starts with one of the room
+// words. This stays in step with isRoomPage() in bridge/background.js.
+const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+function isRoomPage(href) {
+  try {
+    const url = new URL(href);
+    if (url.searchParams.has('room') && url.searchParams.has('peer')) return true;
+  } catch {
+    return false;
+  }
+  return ROOM_FIXTURE.test(href);
+}
 
 // A viewer report rides the room's app channel. Each one says where this
 // browser's own tab has the film, so every panel can show who is in sync.
@@ -58,10 +70,117 @@ function cursorKey(href) {
   }
 }
 
+const CURSOR_APP = 'cursor';
+const CURSOR_TICK_MS = 80;
+const CURSOR_TTL_MS = 3000;
+
+function startCursorBridge(send) {
+  const runtime = api && api.runtime;
+  if (!runtime || !runtime.onMessage || window.__brosrCursors) return;
+  // A page that draws its own cursors says so in its head. One owner per page
+  // keeps a second dot from landing beside the first.
+  if (document.querySelector('meta[name="brosr-cursors"][content="page"]')) return;
+  window.__brosrCursors = true;
+
+  let layer = null;
+  let last = 0;
+  const held = new Map();
+
+  const layerFor = () => {
+    if (layer && layer.isConnected) return layer;
+    layer = document.createElement('div');
+    layer.id = 'brosr-cursors';
+    layer.setAttribute('aria-hidden', 'true');
+    layer.style.cssText =
+      'position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:2147483646';
+    document.documentElement.append(layer);
+    return layer;
+  };
+
+  const draw = (message) => {
+    const id = String(message.from || message.name || 'peer');
+    let entry = held.get(id);
+    if (!entry) {
+      const box = document.createElement('div');
+      box.style.cssText =
+        'position:absolute;transform:translate(-50%,-50%);' +
+        'transition:left 80ms linear,top 80ms linear';
+      const dot = document.createElement('div');
+      dot.style.cssText =
+        'width:9px;height:9px;border-radius:50%;background:#3f86e2;' +
+        'box-shadow:0 0 0 2px rgb(255 255 255 / 70%)';
+      const label = document.createElement('div');
+      label.style.cssText =
+        'position:absolute;left:12px;top:-3px;padding:1px 5px;border-radius:4px;' +
+        'background:rgb(0 0 0 / 80%);color:#fff;white-space:nowrap;' +
+        'font:11px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif';
+      box.append(dot, label);
+      layerFor().append(box);
+      entry = { box, label, at: 0 };
+      held.set(id, entry);
+    }
+    entry.at = Date.now();
+    entry.label.textContent = String(message.name || '').slice(0, 24);
+    entry.box.style.left = Math.round(message.x * 1000) / 10 + '%';
+    entry.box.style.top = Math.round(message.y * 1000) / 10 + '%';
+  };
+
+  // The point is kept in client pixels, so a resize changes its share even
+  // when the pointer has not moved.
+  let lastAt = null;
+  const publish = () => {
+    if (!lastAt) return;
+    send({
+      type: 'brosr:cursor-out',
+      page: cursorKey(location.href),
+      x: Math.min(1, Math.max(0, lastAt.x / Math.max(1, window.innerWidth))),
+      y: Math.min(1, Math.max(0, lastAt.y / Math.max(1, window.innerHeight))),
+    }).catch(() => {});
+  };
+
+  window.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!document.hasFocus() || document.visibilityState !== 'visible') return;
+      if (event.clientX < 0 || event.clientY < 0) return;
+      const now = Date.now();
+      if (now - last < CURSOR_TICK_MS) return;
+      last = now;
+      lastAt = { x: event.clientX, y: event.clientY };
+      publish();
+    },
+    { passive: true }
+  );
+
+  window.addEventListener('resize', publish);
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of held) {
+      if (now - entry.at <= CURSOR_TTL_MS) continue;
+      entry.box.remove();
+      held.delete(id);
+    }
+  }, 1000);
+
+  runtime.onMessage.addListener((message) => {
+    if (!message || message.type !== 'brosr:cursor-draw') return undefined;
+    const x = Number(message.x);
+    const y = Number(message.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
+    draw({ ...message, x, y });
+    return undefined;
+  });
+}
+
 // A tab outside the room can still hold the film, and the room tab holds the
-// socket. Only media crosses that gap now. A cursor on a page the room did not
-// open made no sense on a site like YouTube, so no pointer and no roster reach
-// a plain tab.
+// socket. Media and one cursor cross that gap. A cursor on a page the room did
+// not open goes nowhere, because the background sends it only to tabs that show
+// that page.
+
+// A shared tab has no socket, so the room tab carries its pointer. The page
+// reports fractions of its viewport, so one point lands in the same place on
+// two window sizes, and an overlay draws what the room sends back.
 async function startPageMedia() {
   const runtime = api && api.runtime;
   if (!runtime || typeof runtime.sendMessage !== 'function' || !runtime.onMessage) {
@@ -92,11 +211,38 @@ async function startPageMedia() {
   const publishRelay = () => {
     document.documentElement.dataset.brosrRelay = JSON.stringify(relay);
   };
+  // A frame that reaches this tab is remote by contract: the room tab drops
+  // this browser's own report before it relays anything. The notice names the
+  // person behind the change, and a skipped frame resets the baseline so the
+  // end of an ad never reads as a person seeking.
+  const notice = new ActionNotice({ document });
+  let lastApplied = null;
   runtime.onMessage.addListener((message) => {
     if (!message || message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
-    relay.last = remote.handle(message);
+    const result = remote.handle(message);
+    relay.last = result;
     publishRelay();
+    if (!result || !result.ok || result.skipped) {
+      lastApplied = null;
+      return undefined;
+    }
+    const action = message.action || mediaAction(lastApplied, message);
+    if (action && message.notices !== false) {
+      notice.show({
+        action,
+        name: message.name || message.from,
+        position: message.position,
+        rate: message.rate,
+      });
+    }
+    lastApplied = {
+      key: message.key,
+      position: Number(message.position || 0),
+      playing: Boolean(message.playing),
+      rate: Number(message.rate || 1),
+      at: Date.now(),
+    };
     return undefined;
   });
 
@@ -116,6 +262,10 @@ async function startPageMedia() {
     publishRelay();
     send({ type: 'brosr:media-out', state }).catch(() => {});
   }, RELAY_TICK_MS);
+
+  // A cursor inside an embedded frame belongs to that frame, so only the top
+  // page reports one or draws one.
+  if (window.top === window) startCursorBridge(send);
 
   return { started: true, role: 'media', room: null, peerId: null };
 }
@@ -152,11 +302,14 @@ export async function start() {
         name: params.get('name') || params.get('peer') || 'peer',
         bias: Number(params.get('bias') || 0),
         relayPort: params.get('relay') || '8787',
-        capture: params.get('capture') === '1',
         grant: params.get('grant') || null,
         // The key travels in the fragment. sessionStorage keeps it across the
         // navigation a peer follows, so the next page stays sealed.
         key: params.get('k') || hashParams.get('k') || null,
+        // The trusted token is the fragment's other half. It belongs to this
+        // browser's helper, so a peer link never carries it.
+        trustToken: hashParams.get('t') || null,
+        trustPort: hashParams.get('tp') || params.get('tp') || null,
         openPanel: params.get('panel') === '1',
         selftest: params.get('selftest') === '1',
       }
@@ -170,7 +323,7 @@ export async function start() {
   }
   // A tab with no room of its own is a plain tab. It carries a film to the room
   // and nothing else, so the mouse never follows anyone to another tab.
-  if (!fresh && !stored && !ROOM_PAGE.test(location.href)) return startPageMedia();
+  if (!fresh && !stored && !isRoomPage(location.href)) return startPageMedia();
   const role = config.role === 'host' ? 'host' : 'peer';
   const room = config.room || 'spike';
   const peerId = config.peerId;
@@ -181,6 +334,15 @@ export async function start() {
   const source =
     api && api.runtime && api.runtime.id ? 'content-script' : 'page';
   const started = performance.now();
+  // A room started with a trusted channel holds the client in memory. The
+  // token stays out of the page's own URLs and out of the relay.
+  const trust =
+    config.trustToken && config.trustPort
+      ? createTrustClient({
+          url: `http://127.0.0.1:${config.trustPort}`,
+          token: config.trustToken,
+        })
+      : null;
   let socket = null;
   let panelState = null;
   let lastCommand = null;
@@ -198,6 +360,10 @@ export async function start() {
   let sealKey = null;
   let sealState = 'off';
   let sealError = null;
+  // The tab the room panel chose for trusted typing. The helper reads this
+  // from the status this page publishes, so the choice travels beside the
+  // grant without another channel.
+  let trustTarget = null;
   let sealedOut = 0;
   let sealedIn = 0;
 
@@ -311,6 +477,24 @@ export async function start() {
         });
         return;
       }
+      // A cursor rides the app channel under its own name. The room tab hands
+      // it to the browser, which knows which tabs show that page.
+      if (message.name === CURSOR_APP) {
+        if (message.from === peerId) return;
+        const data = message.data && typeof message.data === 'object' ? message.data : {};
+        if (!api || !api.runtime || !api.runtime.sendMessage) return;
+        api.runtime
+          .sendMessage({
+            type: 'brosr:cursor-apply',
+            page: String(data.page || ''),
+            x: Number(data.x),
+            y: Number(data.y),
+            name: String(data.name || message.from || ''),
+            from: String(message.from || ''),
+          })
+          .catch(() => {});
+        return;
+      }
       // Tabs need the browser, so this side asks its own background instead of
       // forwarding the frame to the page.
       if (message.name === TAB_APP) {
@@ -371,21 +555,32 @@ export async function start() {
       api.runtime
         .sendMessage({
           type: 'brosr:media-apply',
+          from: message.peerId || null,
+          name: message.name || null,
+          action: message.action || null,
           key: message.key,
           position: message.expected,
           playing: Boolean(message.playing),
           rate: Number(message.rate || 1),
           volume: Number(message.volume ?? 1),
+          // The ad belongs to the host's film. A viewer tab has to know, so it
+          // can wait instead of seeking to the ad's own clock.
+          ad: Boolean(message.ad),
           at: Date.now(),
         })
         .catch(() => {});
       return true;
     },
     input: {
-      capture: Boolean(config.capture),
+      // A grant arrives on the socket long after this page loaded, so the
+      // listeners are installed now and every record waits for the grant.
+      capture: true,
       grantTo: config.grant || null,
       tabId: peerId,
       origin: location.origin,
+      // A granted peer's records reach the browser pipeline instead of the
+      // DOM. The client falls back to synthetic replay if the agent refuses.
+      trusted: trust ? (records) => trust.send(prepareRecords(records, document)) : null,
     },
     // One time base for the clock, the media ticks and the presence stamps.
     // The exchange compares stamps from two machines, so it needs the wall
@@ -490,6 +685,8 @@ export async function start() {
     mediaEchoLocal: echoMedia,
     viewers: panelViewers(),
     socket: socket ? socket.readyState : -1,
+    trust: trust ? { url: trust.url, ...trust.stats } : null,
+    trustTarget,
     elapsed: Math.round(performance.now() - started),
     location: location.href,
     reconnects,
@@ -603,6 +800,9 @@ export async function start() {
       // page and scroll instead of starting over.
       client.hello();
       client.tick(Date.now());
+      // A grant frame sent before the socket opened went nowhere. The room
+      // opened with a grant is sent again now, so the peer can start capturing.
+      if (isHost() && input && input.grantTo) client.setGrant(input.grantTo, true);
       publish();
     };
     socket.onerror = () => publish();
@@ -683,7 +883,7 @@ export async function start() {
   // A room page cannot reach the browser chrome. One small button asks for the
   // panel, and the reply says whether the popup opened, so a harness can read
   // the outcome.
-  if (source === 'content-script' && ROOM_PAGE.test(location.href)) {
+  if (source === 'content-script' && isRoomPage(location.href)) {
     const style = document.createElement('style');
     style.textContent = `
       #brosr-panel-button {
@@ -775,6 +975,17 @@ export async function start() {
         if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
         return reply({ ok: client.sendMedia(state), granted: true });
       }
+      if (message.type === 'brosr:cursor-send') {
+        // A shared tab moved its pointer. The room only needs the page, the
+        // point and who it belongs to.
+        client.sendApp(CURSOR_APP, {
+          page: String(message.page || ''),
+          x: Number(message.x),
+          y: Number(message.y),
+          name,
+        });
+        return reply({ ok: true });
+      }
       if (message.type === 'brosr:tabs-announce') {
         // The background saw a tab this person chose to share. It goes out on
         // the room socket like any other app message.
@@ -784,6 +995,15 @@ export async function start() {
           key: message.key === undefined || message.key === null ? null : String(message.key),
         });
         return reply({ ok: true });
+      }
+      if (message.type === 'brosr:trust-target') {
+        // The helper resolves the URL on this browser and keeps this tab when
+        // no tab shows it, so a stale choice never becomes a silent dead end.
+        if (!trust) return reply({ ok: false, reason: 'no-trust' });
+        const url = String(message.url || '');
+        trustTarget = /^https?:\/\//i.test(url) ? url : null;
+        publish();
+        return reply({ ok: true, url: trustTarget });
       }
       if (message.type === 'brosr:command') {
         lastCommand = String(message.command || '');

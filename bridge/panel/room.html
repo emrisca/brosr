@@ -133,11 +133,21 @@
         </button>
       </div>
 
+      <p class="watch-action" id="watch-action" hidden></p>
+
       <ul class="watch-viewers" id="watch-viewers"></ul>
     </section>
 
     <section class="control" id="control" hidden>
       <p class="section-title">Control</p>
+
+      <label class="tabs-auto" for="trust-target">
+        <input type="checkbox" id="trust-target" />
+
+        <span>Trusted typing</span>
+      </label>
+
+      <p class="tabs-note" id="trust-note">Typing goes to this room tab.</p>
 
       <ul class="history" id="history"></ul>
     </section>
@@ -154,6 +164,12 @@
       </div>
 
       <p class="tabs-note" id="playback-note">This browser follows the room playhead.</p>
+
+      <label class="tabs-auto tabs-notice" for="notice-media">
+        <input type="checkbox" id="notice-media" />
+
+        <span>Action notices</span>
+      </label>
     </section>
 
     <section class="tabs" id="tabs-section" aria-labelledby="tabs-label">

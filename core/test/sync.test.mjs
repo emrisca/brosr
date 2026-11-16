@@ -101,11 +101,15 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   const peer = createRoomClient({
     role: 'peer',
     peerId: 'brave',
+    name: 'Bob',
     hostId: 'host',
     now: () => local,
     send: (text) => host.receive(text, local),
     overlay: false,
   });
+
+  // The notice names a person, so the host needs the name the peer chose.
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
 
   // The host sees the same film, so only the sender can tell the two apart.
   host.setGrant('brave', true);
@@ -119,6 +123,15 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   assert.equal(relayed[0].key, KEY);
   assert.equal(relayed[0].playing, true);
   assert.equal(relayed[0].expected, 12);
+  assert.equal(relayed[0].name, 'Bob');
+
+  // A second frame that stops the film names the person and the action, and
+  // the panel reads the same sentence as the film tab.
+  assert.equal(host.publish().lastMediaAction, null);
+  assert.equal(peer.sendMedia({ key: KEY, position: 12, playing: false, rate: 1 }), true);
+  assert.equal(relayed[1].action, 'pause');
+  assert.equal(host.publish().lastMediaAction.name, 'Bob');
+  assert.equal(host.publish().lastMediaAction.text, 'Bob paused the video');
 
   // A host frame for its own film is an echo and never reaches the handler.
   const echo = host.receive(
@@ -127,7 +140,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   );
   assert.equal(echo.ignored, 'self');
   assert.equal(host.stats.mediaEcho, 1);
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 
   // A revoked peer keeps its own playhead.
   host.setGrant('brave', false);
@@ -137,7 +150,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   );
   assert.equal(peer.isGranted(), false);
   assert.equal(peer.sendMedia({ key: KEY, position: 40, playing: false }), false);
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 
   // A late frame from that peer is ignored even if it reaches the host.
   const stale = host.receive(
@@ -145,7 +158,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
     local
   );
   assert.equal(stale.ignored, 'no-grant');
-  assert.equal(relayed.length, 1);
+  assert.equal(relayed.length, 2);
 });
 
 test('one large drift causes one seek, and the next message does not stack another', () => {
@@ -422,7 +435,9 @@ test('the published layout notice clears once the layouts agree again', () => {
   );
   assert.equal(client.publish().layoutMismatch, true);
 
-  const click = client.receive(
+  // A click names its target, so another window size cannot misplace it. The
+  // room applies it even while the two layouts differ.
+  const named = client.receive(
     encode({
       type: 'input',
       peerId: 'p2',
@@ -432,7 +447,21 @@ test('the published layout notice clears once the layouts agree again', () => {
     }),
     1000
   );
-  assert.equal(click.reasons.layout, 1, 'the click was dropped for the layout');
+  assert.equal(named.reasons.layout, undefined, 'a named target is not dropped for the layout');
+
+  // A record with no address is placed by coordinates, and a mismatch still
+  // drops that one. The notice stays, so the receiver is never silent.
+  const click = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 2,
+      records: [{ kind: 'click' }],
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(click.reasons.layout, 1, 'the blind click was dropped for the layout');
   const noticed = client.publish().layoutNotice;
   assert.equal(noticed.peerId, 'p2');
   assert.equal(noticed.dropped, 1);
@@ -459,13 +488,46 @@ test('the published layout notice clears once the layouts agree again', () => {
     encode({
       type: 'input',
       peerId: 'p2',
-      seq: 2,
-      records: [{ kind: 'click', path: '#go' }],
+      seq: 3,
+      records: [{ kind: 'click' }],
       roomTime: 1400,
     }),
     1400
   );
   assert.equal(client.publish().layoutNotice.at, 1400);
+});
+
+test('a host resize is not a layout mismatch, so a granted click still lands', () => {
+  let fingerprint = { innerWidth: 1000, innerHeight: 700, scrollWidth: 1000 };
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 1000,
+    send: () => {},
+    document: { location: { href: 'http://x/a.html', origin: 'http://x' } },
+    overlay: false,
+    viewport: () => ({ url: 'http://x/a.html', scroll: 0, fingerprint }),
+  });
+  client.setGrant('p2', true);
+
+  // The host widens its own window. It is the reference, so this is not a peer
+  // that laid the page out differently.
+  fingerprint = { innerWidth: 1600, innerHeight: 700, scrollWidth: 1600 };
+  client.tick(2000);
+  assert.equal(client.publish().layoutMismatch, false);
+
+  const click = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'p2',
+      seq: 1,
+      records: [{ kind: 'click', path: '#go' }],
+      roomTime: 2000,
+    }),
+    2000
+  );
+  assert.equal(click.reasons.layout, undefined, 'the click was not dropped for the layout');
 });
 
 test('two peers in a room report their ids, so a count is never a guess', () => {
@@ -578,26 +640,27 @@ test('a remote cursor reaches the browser, and a relayed pointer drives presence
       peerId: 'p2',
       name: 'P',
       colour: '#fff',
-      point: { x: 5, y: 6 },
+      point: { x: 0.35, y: 0.42 },
       url: 'https://example.com/',
       roomTime: 0,
     }),
     0
   );
   // The room tab hands this to its browser so every other tab can draw it.
+  // The point stays a viewport share, because that is the wire form.
   assert.deepEqual(shared.at(-1), {
     id: 'p2',
     name: 'P',
     colour: '#fff',
-    point: { x: 5, y: 6 },
+    point: { x: 0.35, y: 0.42 },
     url: 'https://example.com/',
   });
 
-  // A pointer that lives on another tab arrives as a point, not an event.
+  // A pointer that lives on another tab arrives as a share, not an event.
   assert.equal(client.setPointer({ point: 'no' }), false);
-  assert.equal(client.setPointer({ x: 40.4, y: 12.6 }, 'https://example.com/'), true);
+  assert.equal(client.setPointer({ x: 0.404, y: 0.126 }, 'https://example.com/'), true);
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 40, y: 13 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.404, y: 0.126 });
   assert.equal(sent.at(-1).url, 'https://example.com/');
 });
 
@@ -653,20 +716,118 @@ test('a cursor draws only on the page it belongs to', () => {
 
   // A peer on another page draws nothing here, so the pointer never lands on
   // an unrelated tab.
-  client.receive(presence('https://www.youtube.com/watch?v=1', 9), 0);
+  client.receive(presence('https://www.youtube.com/watch?v=1', 0.1), 0);
   assert.equal(client.publish().cursors, 0);
 
-  client.receive(presence('https://example.com/', 10), 0);
+  client.receive(presence('https://example.com/', 0.2), 0);
   assert.equal(client.publish().cursors, 1);
 
   // The peer moves to another page, so the cursor leaves this one.
-  client.receive(presence('https://www.youtube.com/watch?v=2', 11), 0);
+  client.receive(presence('https://www.youtube.com/watch?v=2', 0.3), 0);
   assert.equal(client.publish().cursors, 0);
+});
+
+test('a presence share lands the cursor at the same place in any window', () => {
+  const document = cursorDocument();
+  document.defaultView = { innerWidth: 1000, innerHeight: 500 };
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document,
+    pageUrl: () => 'https://example.com/',
+    send: () => {},
+  });
+
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      // 40% across and 35% down, the same share the landing page sends.
+      point: { x: 0.4, y: 0.35 },
+      url: 'https://example.com/',
+      roomTime: 0,
+    }),
+    0
+  );
+
+  // A 1000 by 500 window puts the arrow at 400 by 175 pixels, not at 0.4.
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(400px, 175px, 0)'
+  );
+});
+
+test('a resize moves the cursor with the window instead of leaving it behind', () => {
+  const events = new Map();
+  const on = (type, fn) => {
+    const list = events.get(type) || [];
+    list.push(fn);
+    events.set(type, list);
+  };
+  const fire = (type, event) => {
+    for (const fn of events.get(type) || []) fn(event);
+  };
+  const view = { innerWidth: 1000, innerHeight: 500, addEventListener: on };
+  const document = cursorDocument();
+  document.defaultView = view;
+  document.addEventListener = on;
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document,
+    pageUrl: () => 'https://example.com/',
+    send: (frame) => sent.push(decode(frame)),
+  });
+
+  // The peer sits 40% across and 35% down, which is 400 by 175 here.
+  client.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.4, y: 0.35 },
+      url: 'https://example.com/',
+      roomTime: 0,
+    }),
+    0
+  );
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(400px, 175px, 0)'
+  );
+
+  // The window grows. The peer has not moved, so the cursor keeps the same
+  // share of the new window instead of staying at the old pixels.
+  view.innerWidth = 1500;
+  view.innerHeight = 700;
+  fire('resize', {});
+  assert.equal(
+    client.cursor.nodes.get('p2').wrap.style.transform,
+    'translate3d(600px, 245px, 0)'
+  );
+
+  // A local pointer keeps its client pixels, so the share it publishes
+  // follows the window it sits in, even when the mouse has not moved.
+  fire('pointermove', { isTrusted: true, clientX: 500, clientY: 350 });
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 0.3333, y: 0.5 });
+
+  view.innerWidth = 2000;
+  fire('resize', {});
+  client.presence();
+  assert.deepEqual(sent.at(-1).point, { x: 0.25, y: 0.5 });
 });
 
 test('presence carries the last trusted pointer position', () => {
   const listeners = new Map();
   const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500 },
     addEventListener(type, fn) {
       const list = listeners.get(type) || [];
       list.push(fn);
@@ -686,14 +847,116 @@ test('presence carries the last trusted pointer position', () => {
     send: (frame) => sent.push(decode(frame)),
   });
 
+  // The wire carries a share of this window, never a raw pixel.
   doc.dispatch('pointermove', { isTrusted: true, clientX: 321.4, clientY: 222.6 });
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
 
   // Replayed remote input is synthetic, so it is not this page's pointer.
   doc.dispatch('pointermove', { isTrusted: false, clientX: 10, clientY: 10 });
   client.presence();
-  assert.deepEqual(sent.at(-1).point, { x: 321, y: 223 });
+  assert.deepEqual(sent.at(-1).point, { x: 0.3214, y: 0.4452 });
+});
+
+test('a granted click leaves at once, before a link can unload the page', () => {
+  const listeners = new Map();
+  const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500, addEventListener() {} },
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    input: { capture: true, tabId: 'peer', origin: 'https://example.com' },
+    send: (frame) => sent.push(decode(frame)),
+  });
+  const tile = {
+    tagName: 'A',
+    getAttribute: () => '',
+    closest: () => null,
+  };
+
+  // Without the grant the click stays local.
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+  assert.equal(sent.filter((message) => message.type === 'input').length, 0);
+
+  client.receive(
+    encode({
+      type: 'control',
+      peerId: 'peer',
+      allowed: true,
+      tabId: 'peer',
+      origin: 'https://example.com',
+    }),
+    0
+  );
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+
+  // No tick: the click is already on the wire because it flushed itself. A
+  // queued record would be lost when the link unloads the page.
+  const batches = sent.filter((message) => message.type === 'input');
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].records[0].kind, 'click');
+});
+
+test('a granted peer types into a field, and no text leaves without the grant', () => {
+  const listeners = new Map();
+  const doc = {
+    defaultView: { innerWidth: 1000, innerHeight: 500 },
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    input: { capture: true, tabId: 'peer', origin: 'https://example.com' },
+    send: (frame) => sent.push(decode(frame)),
+  });
+  // A field the page owns, named the way cssPath() walks it.
+  const field = {
+    tagName: 'INPUT',
+    type: 'text',
+    value: 'hello',
+    getAttribute: () => '',
+    closest: () => null,
+  };
+
+  // Without a grant the field stays local.
+  doc.dispatch('input', { isTrusted: true, target: field });
+  client.tick(1000);
+  assert.equal(
+    sent.filter((message) => message.type === 'input').length,
+    0,
+    'no text leaves before the grant'
+  );
+
+  client.receive(encode({ type: 'control', peerId: 'peer', allowed: true }), 0);
+  doc.dispatch('input', { isTrusted: true, target: field });
+  client.tick(1100);
+  const frame = sent.find((message) => message.type === 'input');
+  assert.ok(frame, 'the text record left the page');
+  assert.deepEqual(frame.records.at(-1), { kind: 'text', path: 'html', value: 'hello' });
 });
 
 test('the peer path reads and writes only through the adapter', () => {

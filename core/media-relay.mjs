@@ -21,6 +21,10 @@ export const RELAY_DRIFT_SECONDS = 1;
 export const RELAY_NUDGE_SECONDS = 0.25;
 // A seek takes a moment to land. Another one before it lands fights the first.
 export const RELAY_SEEK_SETTLE_MS = 700;
+// A paused or unbuffered element can hold a seek open. The drift then stays
+// large, so the seek branch would win every tick and the film would sit at the
+// old point for the whole room. A fresh seek is what frees it.
+export const RELAY_SEEK_TIMEOUT_MS = 8000;
 export const RELAY_NUDGE_RATE = 1.05;
 
 const YT_HOST = /(^|\.)(youtube\.com|youtu\.be)$/i;
@@ -303,7 +307,9 @@ export class RemoteMediaSync {
     this.hostname = hostname;
     this.now = now;
     this.lastSeekAt = -Infinity;
-    this.stats = { applied: 0, seeks: 0, skips: 0, last: null };
+    this.seekIssuedAt = -Infinity;
+    this.lastSeekTarget = null;
+    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, last: null };
   }
 
   video() {
@@ -331,6 +337,14 @@ export class RemoteMediaSync {
     const yt = isYouTubeHost(this.pageHostname());
     const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
+    // The host sits in an ad, so its frame names the ad clock and not the film.
+    // Applying it would drag this tab off the film and back again on every
+    // tick. The ad lasts seconds, so the tab waits it out and the room resumes.
+    if (frame.ad) {
+      this.stats.skips += 1;
+      this.stats.last = 'host-ad';
+      return { ok: true, skipped: 'host-ad' };
+    }
     const ad = yt ? adPlayingFrom(this.doc.querySelector(AD_ROOT)) : false;
     if (ad || Number(video.readyState ?? 0) < 2) {
       this.stats.skips += 1;
@@ -348,14 +362,59 @@ export class RemoteMediaSync {
     const actual = Number(video.currentTime || 0);
     const drift = actual - expected;
 
+    // The room's play or pause comes before any correction. A seek branch that
+    // returns first skips this on every tick, and that is two failures in one:
+    // a paused room left the video moving, and a seek that never landed left
+    // the film paused for the whole room, because the drift stayed large and
+    // every tick returned from the seek. So the room change lands first, and
+    // the seek follows it.
+    if (!frame.playing) {
+      if (!video.paused) video.pause();
+    } else if (video.paused) {
+      const started = video.play();
+      if (started && typeof started.catch === 'function') {
+        // A tab the room opened has no gesture of its own, so the browser can
+        // refuse an unmuted start. Muting is the retry that works, and the
+        // viewer can raise the volume again.
+        started.catch(() => {
+          video.muted = true;
+          const retry = video.play();
+          if (retry && typeof retry.catch === 'function') retry.catch(() => {});
+        });
+      }
+    }
+
     // A paused room has no clock to nudge against. A small gap there is a seek,
     // because a rate change on a paused video only leaves a slow rate behind
     // for the moment the room resumes.
     const paused = !frame.playing;
     const seekLimit = paused ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
-    if (Math.abs(drift) > seekLimit && now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS) {
+    // A seek that never lands keeps the drift large, and this branch would win
+    // every tick, so the film would never catch up. The retry is the one write
+    // that frees the element, and the count says it happened.
+    if (
+      video.seeking &&
+      this.lastSeekTarget !== null &&
+      now - this.seekIssuedAt > RELAY_SEEK_TIMEOUT_MS
+    ) {
       video.currentTime = expected;
       this.lastSeekAt = now;
+      this.seekIssuedAt = now;
+      this.lastSeekTarget = expected;
+      this.stats.stuckSeeks += 1;
+      this.stats.applied += 1;
+      this.stats.last = 'seek-retry';
+      return { ok: true, action: 'seek', retry: true, drift: Math.round(drift * 1000) / 1000 };
+    }
+    if (
+      Math.abs(drift) > seekLimit &&
+      !video.seeking &&
+      now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS
+    ) {
+      video.currentTime = expected;
+      this.lastSeekAt = now;
+      this.seekIssuedAt = now;
+      this.lastSeekTarget = expected;
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';
@@ -372,21 +431,6 @@ export class RemoteMediaSync {
 
     // The room leaves the viewer volume alone. A shared playhead does not need
     // a shared volume, and one viewer's headphones are not another's.
-    if (frame.playing && video.paused) {
-      const started = video.play();
-      if (started && typeof started.catch === 'function') {
-        // A tab the room opened has no gesture of its own, so the browser can
-        // refuse an unmuted start. Muting is the retry that works, and the
-        // viewer can raise the volume again.
-        started.catch(() => {
-          video.muted = true;
-          const retry = video.play();
-          if (retry && typeof retry.catch === 'function') retry.catch(() => {});
-        });
-      }
-    }
-    if (!frame.playing && !video.paused) video.pause();
-
     this.stats.applied += 1;
     this.stats.last = 'tick';
     return { ok: true, action: 'tick', drift: Math.round(drift * 1000) / 1000 };

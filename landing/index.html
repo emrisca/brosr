@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brosr</title>
+  <meta name="brosr-cursors" content="page">
+  <link rel="stylesheet" href="./landing.css">
+</head>
+<body>
+  <a class="skip" href="#tiles">Skip to the apps</a>
+
+  <header class="bar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="3" y="7" width="26" height="18" rx="5" fill="none" stroke="currentColor" stroke-width="2"></rect>
+        <path d="M3 12h26" fill="none" stroke="currentColor" stroke-width="2"></path>
+        <circle cx="9" cy="9.5" r="1.2" fill="currentColor"></circle>
+        <circle cx="13" cy="9.5" r="1.2" fill="currentColor"></circle>
+      </svg>
+      <span class="brand-name">Brosr</span>
+    </div>
+    <p class="room-state" id="room-state">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="room-state-text">Room open on this device</span>
+    </p>
+  </header>
+
+  <main class="page">
+    <section class="intro">
+      <h1>Every page in this room, in one place.</h1>
+      <p>These apps are built for a shared browser. Open one and it joins the room you already have.</p>
+    </section>
+
+    <h2 id="tiles" class="section-title">Apps</h2>
+
+    <ul class="tiles">
+      <li>
+        <a class="tile tile-live" href="./canvas/">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
+              <path d="M13.5 5.5l4 4"></path>
+            </svg>
+          </span>
+          <span class="tile-body">
+            <span class="tile-name">Canvas</span>
+            <span class="tile-note">Draw on one surface. Every stroke lands for the room.</span>
+          </span>
+          <span class="tile-state is-live">Live</span>
+        </a>
+      </li>
+
+      <li>
+        <div class="tile is-soon">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <rect x="3" y="5" width="18" height="14" rx="3"></rect>
+              <path d="M10.5 9.5l4.5 2.5-4.5 2.5v-5z"></path>
+            </svg>
+          </span>
+          <span class="tile-body">
+            <span class="tile-name">Watch</span>
+            <span class="tile-note">One playhead for everyone, with pause and seek shared.</span>
+          </span>
+          <span class="tile-state">Soon</span>
+        </div>
+      </li>
+
+      <li>
+        <div class="tile is-soon">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M9 18V6l10-2v12"></path>
+              <circle cx="6.5" cy="18" r="2.5"></circle>
+              <circle cx="16.5" cy="16" r="2.5"></circle>
+            </svg>
+          </span>
+          <span class="tile-body">
+            <span class="tile-name">Listen</span>
+            <span class="tile-note">A shared queue that stays on the same track.</span>
+          </span>
+          <span class="tile-state">Soon</span>
+        </div>
+      </li>
+
+      <li>
+        <div class="tile is-soon">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M7 8h10a4 4 0 0 1 0 8H9l-3 3v-4a4 4 0 0 1 1-7z"></path>
+              <circle cx="9.5" cy="12" r="1"></circle>
+              <circle cx="14.5" cy="12" r="1"></circle>
+            </svg>
+          </span>
+          <span class="tile-body">
+            <span class="tile-name">Play</span>
+            <span class="tile-note">Turn based and canvas games, driven by both players.</span>
+          </span>
+          <span class="tile-state">Soon</span>
+        </div>
+      </li>
+
+      <li>
+        <div class="tile is-soon">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <path d="M5 4h10l4 4v12H5V4z"></path>
+              <path d="M8 10h8M8 14h8M8 18h5"></path>
+            </svg>
+          </span>
+          <span class="tile-body">
+            <span class="tile-name">Notes</span>
+            <span class="tile-note">A page that edits itself as everyone types.</span>
+          </span>
+          <span class="tile-state">Soon</span>
+        </div>
+      </li>
+
+      <li>
+        <div class="tile tile-url">
+          <span class="tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="12" cy="12" r="8"></circle>
+              <path d="M4 12h16"></path>
+              <path d="M12 4c2.3 2.2 3.5 4.9 3.5 8S14.3 17.8 12 20c-2.3-2.2-3.5-4.9-3.5-8S9.7 6.2 12 4z"></path>
+            </svg>
+          </span>
+          <form class="tile-body tile-link" id="url-form" novalidate>
+            <label class="tile-name" for="url-field">Open a link</label>
+            <span class="tile-note">Any address opens in a new tab. That tab is shared with the room.</span>
+            <span class="tile-link-row">
+              <input class="tile-link-input" id="url-field" name="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="example.com" aria-describedby="url-error">
+              <button class="tile-link-button" type="submit">Open</button>
+            </span>
+            <p class="tile-link-error" id="url-error" role="status"></p>
+          </form>
+          <span class="tile-state is-live">Live</span>
+        </div>
+      </li>
+
+      <li>
+        <div class="tile is-soon tile-slot">
+          <span class="tile-body">
+            <span class="tile-name">Next app</span>
+            <span class="tile-note">A tile is waiting for the next page built for a room.</span>
+          </span>
+          <span class="tile-state">Slot</span>
+        </div>
+      </li>
+    </ul>
+  </main>
+
+  <footer class="foot">
+    <p>A room stays on your own network. The relay forwards frames and keeps nothing.</p>
+  </footer>
+
+  <div class="cursors" id="cursors" aria-hidden="true"></div>
+
+  <script>
+    // The relay already answers /status, so the page reads the live count with
+    // no new transport. A room with nobody in it is a normal state, not an
+    // error, and a failed read only means the page is on its own.
+    (function () {
+      var text = document.getElementById('room-state-text');
+      var box = document.getElementById('room-state');
+      var room = new URLSearchParams(location.search).get('room') || 'default';
+
+      function render(peers) {
+        box.classList.toggle('is-offline', peers === null);
+        if (peers === null) {
+          text.textContent = 'Room status is offline';
+        } else if (peers === 0) {
+          text.textContent = 'No app is open in this room yet';
+        } else if (peers === 1) {
+          text.textContent = '1 app open in this room';
+        } else {
+          text.textContent = peers + ' apps open in this room';
+        }
+      }
+
+      function read() {
+        fetch('/status?room=' + encodeURIComponent(room), { cache: 'no-store' })
+          .then(function (res) {
+            return res.ok ? res.json() : Promise.reject(new Error('status'));
+          })
+          .then(function (body) {
+            render(Number(body.peers) || 0);
+          })
+          .catch(function () {
+            render(null);
+          });
+      }
+
+      read();
+      setInterval(read, 5000);
+
+      // The address tile opens a tab, and the bridge shares that tab with the
+      // room. This page does not rewrite the address, so the site keeps its
+      // own page.
+      var form = document.getElementById('url-form');
+      var field = document.getElementById('url-field');
+      var error = document.getElementById('url-error');
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        var raw = field.value.trim();
+        if (!raw) {
+          error.textContent = 'Type an address first.';
+          field.focus();
+          return;
+        }
+        var address = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw;
+        var target;
+        try {
+          target = new URL(address);
+        } catch (err) {
+          error.textContent = 'That is not an address this browser can open.';
+          field.focus();
+          return;
+        }
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+          error.textContent = 'Only http and https addresses open here.';
+          field.focus();
+          return;
+        }
+        error.textContent = '';
+        // A noopener window returns no handle, so the tab looks blocked on
+        // every browser. Open plainly and cut the opener link here.
+        var opened = window.open(target.href, '_blank');
+        if (!opened) {
+          error.textContent = 'The browser blocked the new tab. Allow pop-ups for this page.';
+          return;
+        }
+        opened.opener = null;
+        field.value = '';
+      });
+
+      // The landing page draws a cursor for every other landing page in the
+      // room, so a person can point at the tile to open. This page holds its
+      // own socket, and the meta tag above names the page as the owner, so the
+      // bridge leaves the drawing to it and one cursor has one owner.
+      //
+      // A room tab is the other case. The core joins the room there, so the
+      // core draws the cursors and this page leaves its socket shut. The test
+      // below matches the one core/browser-entry.mjs makes for a room tab.
+      var cursorParams = new URLSearchParams(location.search);
+      var cursorStored = null;
+      try {
+        cursorStored = sessionStorage.getItem('brosr-room');
+      } catch (err) {
+        cursorStored = null;
+      }
+      var cursorOwned =
+        cursorParams.has('room') || cursorParams.has('peer') || Boolean(cursorStored);
+      var cursorLayer = document.getElementById('cursors');
+      var cursorPeer = 'landing-' + Math.random().toString(16).slice(2, 8);
+      var cursorName = (cursorParams.get('name') || 'Guest').trim().slice(0, 24) || 'Guest';
+      // Room params name the tab, not the page, so the key drops them. This
+      // stays in step with cursorKey() in core/browser-entry.mjs.
+      var cursorPage = location.origin + location.pathname;
+      var cursorDots = new Map();
+      var cursorLast = 0;
+      var cursorSocket = null;
+      var cursorNextAt = 0;
+
+      function cursorColour(id) {
+        var sum = 0;
+        for (var i = 0; i < id.length; i += 1) sum = (sum * 31 + id.charCodeAt(i)) % 360;
+        return 'hsl(' + sum + ' 62% 46%)';
+      }
+
+      function drawCursor(from, x, y, name) {
+        var dot = cursorDots.get(from);
+        if (!dot) {
+          var box = document.createElement('div');
+          box.className = 'cursor';
+          var mark = document.createElement('span');
+          mark.className = 'cursor-dot';
+          mark.style.background = cursorColour(from);
+          var label = document.createElement('span');
+          label.className = 'cursor-name';
+          box.append(mark, label);
+          cursorLayer.append(box);
+          dot = { box: box, label: label, at: 0 };
+          cursorDots.set(from, dot);
+        }
+        dot.at = Date.now();
+        dot.label.textContent = name;
+        dot.box.style.left = Math.round(x * 1000) / 10 + '%';
+        dot.box.style.top = Math.round(y * 1000) / 10 + '%';
+      }
+
+      function pruneCursors() {
+        var now = Date.now();
+        cursorDots.forEach(function (dot, from) {
+          if (now - dot.at <= 3000) return;
+          dot.box.remove();
+          cursorDots.delete(from);
+        });
+      }
+
+      function openCursors() {
+        if (cursorOwned || !cursorLayer || cursorSocket) return;
+        if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+        if (Date.now() < cursorNextAt) return;
+        var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        var socket;
+        try {
+          socket = new WebSocket(scheme + location.host + '/room?room=' + encodeURIComponent(room));
+        } catch (err) {
+          cursorNextAt = Date.now() + 2000;
+          return;
+        }
+        cursorSocket = socket;
+        socket.addEventListener('open', function () {
+          cursorNextAt = 0;
+        });
+        socket.addEventListener('message', function (event) {
+          if (typeof event.data !== 'string') return;
+          var frame;
+          try {
+            frame = JSON.parse(event.data);
+          } catch (err) {
+            return;
+          }
+          if (!frame || frame.type !== 'app' || frame.name !== 'cursor') return;
+          if (frame.peerId === cursorPeer) return;
+          var data = frame.data;
+          if (!data || data.page !== cursorPage) return;
+          var x = Number(data.x);
+          var y = Number(data.y);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          drawCursor(
+            String(frame.peerId || 'landing'),
+            Math.min(1, Math.max(0, x)),
+            Math.min(1, Math.max(0, y)),
+            String(data.name || 'Guest').slice(0, 24)
+          );
+        });
+        socket.addEventListener('close', function () {
+          if (cursorSocket === socket) cursorSocket = null;
+          cursorNextAt = Date.now() + 2000;
+        });
+        socket.addEventListener('error', function () {
+          if (cursorSocket === socket) cursorSocket = null;
+          cursorNextAt = Date.now() + 2000;
+        });
+      }
+
+      function sendCursor(x, y) {
+        if (!cursorSocket || cursorSocket.readyState !== 1) return;
+        cursorSocket.send(
+          JSON.stringify({
+            v: 1,
+            type: 'app',
+            peerId: cursorPeer,
+            name: 'cursor',
+            data: { page: cursorPage, x: x, y: y, name: cursorName },
+          })
+        );
+      }
+
+      // The point is kept in client pixels. A resize changes the share those
+      // pixels make, and a pointer that has not moved would otherwise keep
+      // sending the share of the old window.
+      var cursorAt = null;
+
+      function sendCursorAt() {
+        if (!cursorAt) return;
+        sendCursor(
+          Math.min(1, Math.max(0, cursorAt.x / Math.max(1, window.innerWidth))),
+          Math.min(1, Math.max(0, cursorAt.y / Math.max(1, window.innerHeight)))
+        );
+      }
+
+      window.addEventListener(
+        'pointermove',
+        function (event) {
+          if (!document.hasFocus() || document.visibilityState !== 'visible') return;
+          var now = Date.now();
+          if (now - cursorLast < 80) return;
+          cursorLast = now;
+          cursorAt = { x: event.clientX, y: event.clientY };
+          sendCursorAt();
+        },
+        { passive: true }
+      );
+
+      window.addEventListener('resize', sendCursorAt);
+
+      openCursors();
+      setInterval(function () {
+        openCursors();
+        pruneCursors();
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>

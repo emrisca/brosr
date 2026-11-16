@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RELAY_SEEK_TIMEOUT_MS,
   RELAY_TICK_MS,
   RelayMediaAdapter,
   RemoteMediaSync,
@@ -28,6 +29,7 @@ function fakeVideo({
     currentTime,
     paused,
     ended: false,
+    seeking: false,
     readyState,
     playbackRate,
     volume,
@@ -64,6 +66,51 @@ const ytKey = 'youtube:abc123';
 
 const adRoot = { classList: { contains: (name) => name === 'ad-showing' } };
 const cleanRoot = { classList: { contains: () => false } };
+
+test('a playing room starts a paused film even when the seek cannot land', () => {
+  const video = fakeVideo({ currentTime: 0, paused: true });
+  const now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+  // The anchor is 120 s away, so this tick takes the seek branch. The play has
+  // to land first, or a seek that never settles keeps the film paused and the
+  // room never hears from it again.
+  const result = sync.handle({ key: ytKey, position: 120, playing: true, rate: 1, at: now });
+  assert.equal(result.action, 'seek');
+  assert.equal(video.paused, false);
+  assert.equal(video.plays, 1);
+});
+
+test('a seek that never lands is retried, not stacked, and not left holding the film', () => {
+  const video = fakeVideo({ currentTime: 0, paused: false });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+  const first = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(first.action, 'seek');
+  // The element takes the seek and never finishes it. A second write inside
+  // the timeout would fight the first, so the tick leaves it alone.
+  video.seeking = true;
+  now += 500;
+  const held = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(held.action, 'tick');
+  assert.equal(sync.stats.seeks, 1);
+  // Past the timeout the seek is stuck, and one fresh seek frees it.
+  now += RELAY_SEEK_TIMEOUT_MS;
+  const retry = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(retry.action, 'seek');
+  assert.equal(retry.retry, true);
+  assert.equal(sync.stats.stuckSeeks, 1);
+  assert.equal(video.currentTime, 100);
+});
 
 test('a YouTube tab reads its own player and names the film', () => {
   const video = fakeVideo({ currentTime: 12.5, paused: false, volume: 0.8 });
@@ -181,6 +228,21 @@ test('a small gap gets a rate nudge instead of a seek', () => {
   assert.equal(sync.stats.seeks, 0);
 });
 
+test('a paused room stops a moving video before a drift seek', () => {
+  const video = fakeVideo({ currentTime: 100, paused: false });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+  const result = sync.handle({ key: ytKey, position: 50, playing: false, rate: 1, at: 10000 });
+  assert.equal(video.paused, true);
+  assert.equal(video.pauses, 1);
+  assert.equal(video.currentTime, 50);
+  assert.equal(result.action, 'seek');
+});
+
 test('a tab near the anchor keeps the room rate and follows play and pause', () => {
   const video = fakeVideo({ currentTime: 100.05, paused: false, playbackRate: 1.25 });
   const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => 10000 });
@@ -206,6 +268,21 @@ test('a tab on another film, an ad or a starved element ignores the frame', () =
   const adSync = new RemoteMediaSync({ document: fakeDoc(video, adRoot), href: ytHref, hostname: ytHost, now: () => 10000 });
   assert.equal(adSync.handle({ key: ytKey, position: 100, playing: true, at: 10000 }).skipped, 'ad');
   assert.equal(sync.stats.seeks, 0);
+});
+
+test('a host ad frame waits instead of moving the film', () => {
+  const video = fakeVideo({ currentTime: 50 });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+  const result = sync.handle({ key: ytKey, position: 0, playing: true, ad: true, at: 10000 });
+  assert.equal(result.skipped, 'host-ad');
+  assert.equal(video.currentTime, 50);
+  assert.equal(sync.stats.seeks, 0);
+  assert.equal(sync.stats.last, 'host-ad');
 });
 
 test('a non-YouTube page names its film by source and skips the ad probe', () => {

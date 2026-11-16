@@ -13,6 +13,7 @@ script and a Node test drive the same modules.
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
 | `overlay.mjs` | Cursor overlay inside one closed shadow root |
 | `input.mjs` | Batcher, grants, origin allowlist, sensitive fields, targeting, replay |
+| `trust.mjs` | Record to BiDi action mapping and the page-side trusted client |
 | `seal.mjs` | Room key, HKDF-SHA256 expansion, XChaCha20-Poly1305 frames, invite link |
 | `sync.mjs` | The client that wires the rest, relays app messages, with an injected transport |
 | `browser-entry.mjs` | Content-script entry: relay socket, reconnect, ticks, `dataset.brosr` |
@@ -63,4 +64,5 @@ instead of trusting it. A key that fails to derive refuses the connection rather
 back to plain text.
 
 Nothing here opens a socket, draws outside the shadow root, or reads a cookie. Input and grants
-live in `input.mjs`, and the trusted actuator is M7.
+live in `input.mjs`. `trust.mjs` turns one record into one browser action, and `host/trust.mjs`
+owns the loopback agent that applies it while a grant is active.
