@@ -123,6 +123,21 @@ test('a frame from another key does not open', () => {
   assert.throws(() => openFrame(other, sealed, { room: 'demo' }), /did not open/);
 });
 
+// Two invites for one room derive different keys, so a link shared with the
+// wrong person joins the socket and still reads nothing.
+test('an invite with the wrong key cannot open the room frames', async () => {
+  const right = await roomKey(newRoomKey());
+  const wrong = await roomKey(newRoomKey());
+  const sealed = sealFrame(right, text(JSON.stringify({ type: 'hello', peerId: 'p1' })), {
+    room: 'demo',
+  });
+  assert.throws(() => openFrame(wrong, sealed, { room: 'demo' }), /did not open/);
+  assert.equal(
+    new TextDecoder().decode(openFrame(right, sealed, { room: 'demo' })),
+    JSON.stringify({ type: 'hello', peerId: 'p1' })
+  );
+});
+
 test('a short or wrong sized frame is refused before the cipher runs', () => {
   const key = hex(HCHACHA_SUBKEY);
   assert.throws(() => openFrame(key, new Uint8Array(8)), /too short/);

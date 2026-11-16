@@ -655,7 +655,7 @@ try {
   // A plain HTTP page on a private address has no crypto.subtle, so this key
   // path runs the seal's own HKDF. The key stays in the fragment, so the relay
   // never sees it in a request line.
-  const inviteKey = !chromeLane && !ORIGIN_SECURE ? newRoomKey() : null;
+  const inviteKey = !ORIGIN_SECURE ? newRoomKey() : null;
   const hostUrl =
     `http://${ORIGIN}:${RELAY_PORT}/?role=host&room=${ROOM}&peer=host&name=Host` +
     `&relay=${RELAY_PORT}&grant=${PEER}#${inviteKey ? `k=${inviteKey}&` : ''}t=${TOKEN}&tp=${agent.port}`;
@@ -717,6 +717,45 @@ try {
     process.stderr.write(
       `[brosr] the sealed room did not open: ${JSON.stringify(out.steps.seal)}\n`
     );
+  }
+
+  // A wrong key must open nothing. The tab seals its own frames, so it can
+  // read its own echo, but the host and its granted guest must stay invisible
+  // to it and it must stay invisible to them. Checking both directions keeps a
+  // one-sided relay echo from passing as a joined room.
+  if (inviteKey) {
+    const wrongKey = newRoomKey();
+    const wrongUrl =
+      `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=wrong-1&name=Wrong&relay=${RELAY_PORT}` +
+      `#k=${wrongKey}`;
+    const wrongPage = await openGuest(wrongUrl);
+    const wrongSealed = await until(async () => {
+      const s = await wrongPage.read();
+      return s && s.socket === 1 && s.seal && s.seal.mode === 'on' ? s : null;
+    }, 'the wrong key tab', 20000).catch(() => null);
+    await sleep(1500);
+    const wrongState = (await wrongPage.read().catch(() => null)) || wrongSealed;
+    const hostNow = (await hostPage.read().catch(() => null)) || hostSees;
+    const hostSeesWrong = (hostNow.peerList || []).some((p) => p.id === 'wrong-1');
+    const wrongPeers = ((wrongState && wrongState.peerList) || []).map((p) => p.id);
+    const wrongOk =
+      Boolean(wrongState) &&
+      Boolean(wrongState.seal && wrongState.seal.mode === 'on') &&
+      !hostSeesWrong &&
+      !wrongPeers.includes('host') &&
+      !wrongPeers.includes(PEER);
+    out.steps.wrongKey = {
+      peer: 'wrong-1',
+      openedFrames: wrongState && wrongState.seal ? wrongState.seal.in : null,
+      peers: wrongPeers,
+      hostSeesWrong,
+      ok: wrongOk,
+    };
+    if (!wrongOk) {
+      process.stderr.write(
+        `[brosr] the wrong key opened a room: ${JSON.stringify(out.steps.wrongKey)}\n`
+      );
+    }
   }
 
   // Both pages are live here, so this reads the object a person would get by
@@ -784,10 +823,12 @@ try {
   }, 'the applied trust count', 10000).catch(() => null);
   const hostTrust = settled || (await hostPage.read());
   out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
+  const wrongKeyOk = out.steps.wrongKey ? out.steps.wrongKey.ok : true;
   out.ok =
     shipped.ok &&
     signed.ok &&
     sealOk &&
+    wrongKeyOk &&
     out.steps.contract.ok &&
     typed.value === 'trusted' &&
     keys.length >= 7 &&
