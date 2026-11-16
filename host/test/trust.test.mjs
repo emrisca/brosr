@@ -255,6 +255,49 @@ test('a granted batch goes to the trusted sink, and a refusal replays', async ()
   assert.equal(client.publish().inputReasons.target, 1);
 });
 
+test('a slow trusted batch holds the next one, so typing keeps its order', async () => {
+  const origin = 'http://127.0.0.1:8787';
+  const doc = {
+    location: { href: `${origin}/form.html`, origin },
+    querySelectorAll: () => [],
+    activeElement: null,
+    defaultView: {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const applied = [];
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    document: doc,
+    overlay: false,
+    now: () => 1000,
+    input: {
+      capture: true,
+      grantTo: 'peer',
+      tabId: 'host',
+      origin,
+      trusted: async (records) => {
+        // The first batch takes long enough for a second one to overtake it.
+        if (records[0].key === 'a') await sleep(40);
+        applied.push(records[0].key);
+        return { ok: true, applied: records.length };
+      },
+    },
+  });
+  client.receive(
+    encode({ type: 'input', peerId: 'peer', seq: 1, records: [{ kind: 'key', key: 'a' }] }),
+    1000
+  );
+  client.receive(
+    encode({ type: 'input', peerId: 'peer', seq: 2, records: [{ kind: 'key', key: 'b' }] }),
+    1001
+  );
+  await sleep(100);
+  assert.deepEqual(applied, ['a', 'b']);
+  assert.equal(client.publish().inputApplied, 2);
+});
+
 test('a trust target resolves to the tab that shows it, not the room', async () => {
   const bidi = fakeBidi();
   bidi.cmd = async (method) => {

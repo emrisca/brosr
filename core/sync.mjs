@@ -133,6 +133,9 @@ export function createRoomClient({
   const grants = new GrantBook({ now });
   let remoteGrant = false;
   let batcher = null;
+  // Trusted batches reach the browser one at a time. The last send has to land
+  // before the next begins, or a slow one lets its letters interleave.
+  let trustedQueue = Promise.resolve();
   let lastInputFlush = -Infinity;
   // The last trusted pointer position as a share of the viewport. Presence
   // reuses it so a peer sees the mouse, not a placeholder at the origin.
@@ -315,8 +318,12 @@ export function createRoomClient({
         stats.inputReasons.grant = (stats.inputReasons.grant || 0) + message.records.length;
         return { ok: true, applied: 0, dropped: message.records.length, trusted: true };
       }
-      Promise.resolve(input.trusted(sendable))
-        .then((answer) => {
+      // Two batches used to be in flight at once, and a slow one let the next
+      // overtake it, so a word arrived with its letters swapped. Each send now
+      // waits for the browser to apply the batch before it.
+      const dispatch = async () => {
+        try {
+          const answer = await input.trusted(sendable);
           if (!answer || !answer.ok) {
             replay();
             return;
@@ -327,8 +334,11 @@ export function createRoomClient({
             stats.inputDropped += skipped;
             stats.inputReasons.kind = (stats.inputReasons.kind || 0) + skipped;
           }
-        })
-        .catch(() => replay());
+        } catch {
+          replay();
+        }
+      };
+      trustedQueue = trustedQueue.then(dispatch);
       return { ok: true, trusted: true, sent: sendable.length };
     }
     return replay();
