@@ -375,7 +375,8 @@ a {
   transition: transform 200ms ease;
 }
 
-.tile-canvas:hover .tile-open svg {
+.tile-canvas:hover .tile-open svg,
+.tile-notes:hover .tile-open svg {
   transform: translate(2px, -2px);
 }
 

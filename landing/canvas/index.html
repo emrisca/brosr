@@ -105,6 +105,18 @@
           </button>
         </div>
       </section>
+      <section class="group">
+        <h2>Files <output id="docs-count"></output></h2>
+        <input id="doc-name" class="name-input" type="text" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Untitled canvas" aria-label="Canvas name">
+        <div class="doc-actions">
+          <button id="doc-new" type="button">New</button>
+          <label class="store-row" for="doc-store">
+            <input id="doc-store" type="checkbox" checked>
+            <span>Store in Brosr</span>
+          </label>
+        </div>
+        <ul id="doc-list" class="doc-list" aria-label="Saved canvases"></ul>
+      </section>
     </aside>
 
     <main class="stage">
@@ -127,6 +139,7 @@
     <span class="hint">Space drags the sheet. Wheel zooms. Cmd Z undoes.</span>
   </footer>
 
+  <script src="/docs-client.js"></script>
   <script src="./canvas.js"></script>
 </body>
 </html>

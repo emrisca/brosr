@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes, Brosr</title>
+  <link rel="stylesheet" href="./notes.css">
+</head>
+<body>
+  <header class="top">
+    <a class="back" href="../">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span>Brosr</span>
+    </a>
+    <h1>Notes</h1>
+    <input id="doc-name" class="doc-name" type="text" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Untitled note" aria-label="Note name">
+    <span id="doc-state" class="doc-state">Saved</span>
+    <div class="actions">
+      <label class="store-row" for="doc-store">
+        <input id="doc-store" type="checkbox" checked>
+        <span>Store in Brosr</span>
+      </label>
+      <button id="export" type="button" class="ghost">Export HTML</button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="files" aria-label="Saved notes">
+      <div class="files-head">
+        <h2>Files <output id="docs-count">0</output></h2>
+        <button id="doc-new" type="button">New</button>
+      </div>
+      <ul id="doc-list" class="doc-list"></ul>
+      <p class="files-foot">Notes are kept on the host computer and come back with the next room.</p>
+    </aside>
+
+    <main class="editor-wrap">
+      <div class="toolbar" role="toolbar" aria-label="Formatting">
+        <select id="font-size" aria-label="Font size">
+          <option value="1">12</option>
+          <option value="2">14</option>
+          <option value="3" selected>16</option>
+          <option value="4">20</option>
+          <option value="5">26</option>
+          <option value="6">34</option>
+          <option value="7">48</option>
+        </select>
+        <span class="tool-sep" aria-hidden="true"></span>
+        <button type="button" data-cmd="bold" title="Bold (Cmd B)"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="Italic (Cmd I)"><i>I</i></button>
+        <button type="button" data-cmd="underline" title="Underline (Cmd U)"><u>U</u></button>
+        <button type="button" data-cmd="hiliteColor" title="Highlight" aria-pressed="false">Highlight</button>
+        <span class="tool-sep" aria-hidden="true"></span>
+        <button type="button" data-block="h1" title="Heading 1">H1</button>
+        <button type="button" data-block="h2" title="Heading 2">H2</button>
+        <button type="button" data-block="p" title="Body text">Text</button>
+        <span class="tool-sep" aria-hidden="true"></span>
+        <button type="button" data-cmd="insertUnorderedList" title="Bulleted list">List</button>
+        <button type="button" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+        <button type="button" data-cmd="removeFormat" title="Clear formatting">Clear</button>
+        <span class="tool-sep" aria-hidden="true"></span>
+        <button type="button" data-cmd="undo" title="Undo (Cmd Z)">Undo</button>
+        <button type="button" data-cmd="redo" title="Redo (Cmd Shift Z)">Redo</button>
+      </div>
+
+      <div id="editor" class="editor" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true" data-placeholder="Start typing. Cmd B, I and U format the selection."></div>
+
+      <footer class="status" aria-live="polite">
+        <span id="word-count">0 words</span>
+        <span id="room-state">Solo</span>
+        <span class="hint">The host saves as you type.</span>
+      </footer>
+    </main>
+  </div>
+
+  <script src="/docs-client.js"></script>
+  <script src="./notes.js"></script>
+</body>
+</html>

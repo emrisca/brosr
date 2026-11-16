@@ -102,6 +102,22 @@ const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
 const nameInput = document.getElementById('name');
 
+// The host keeps the library on its own disk. A guest reads the room's copy, so
+// a peer on the LAN needs no token and no path to the host folder.
+const ROLE = new URLSearchParams(location.search).get('role') || 'guest';
+const docs = {
+  api: window.BrosrDocs || null,
+  host: ROLE === 'host' && Boolean(window.BrosrDocs),
+  list: [],
+  active: '',
+  name: 'Untitled canvas',
+  at: 0,
+  stored: true,
+  hidden: false,
+  saveTimer: 0,
+  sentAt: 0,
+};
+
 // ---------------------------------------------------------------------------
 // Painting
 
@@ -584,6 +600,7 @@ function commit(stroke) {
   state.redo.length = 0;
   sendStroke(stroke);
   showHistory();
+  touchDocument();
 }
 
 function undo() {
@@ -602,6 +619,7 @@ function undo() {
   }
   redraw();
   showHistory();
+  touchDocument();
 }
 
 function redo() {
@@ -620,6 +638,7 @@ function redo() {
   }
   redraw();
   showHistory();
+  touchDocument();
 }
 
 function showHistory() {
@@ -628,6 +647,401 @@ function showHistory() {
   // The room line carries the sheet count, so it follows a local commit or an
   // undo at once instead of waiting for the next poll.
   if (room.socket && room.socket.readyState === WebSocket.OPEN) showRoomState();
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+
+const docNameInput = document.getElementById('doc-name');
+const docListEl = document.getElementById('doc-list');
+const docCountEl = document.getElementById('docs-count');
+const docStoreInput = document.getElementById('doc-store');
+const docNewButton = document.getElementById('doc-new');
+
+function docLabel(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
+function shortDate(ms) {
+  if (!ms) return 'new';
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return 'new';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function docStrokes() {
+  return state.layers.reduce((sum, layer) => sum + layer.strokes.length, 0);
+}
+
+function emptyBody() {
+  return {
+    layers: state.layers.map((layer) => ({ name: layer.name, visible: true, strokes: [] })),
+    activeLayer: 1,
+  };
+}
+
+function docBody() {
+  return {
+    layers: state.layers.map((layer) => ({
+      name: layer.name,
+      visible: layer.visible !== false,
+      strokes: layer.strokes,
+    })),
+    activeLayer: state.activeLayer,
+  };
+}
+
+// A document swap clears the sheet and every record that would let an old
+// stroke answer for the new canvas.
+function resetDocument() {
+  for (const layer of state.layers) layer.strokes = [];
+  state.history.length = 0;
+  state.redo.length = 0;
+  room.seen.clear();
+  room.received.clear();
+  room.parts.clear();
+  room.inflight.clear();
+  markInk();
+  redraw();
+  showHistory();
+}
+
+// A stored stroke is untrusted like a wire one, so it takes the same checks and
+// then a full point list before it goes on the sheet.
+function storedStroke(raw, layerIndex) {
+  if (!raw || typeof raw !== 'object') return null;
+  const stroke = cleanStroke({ ...raw, layer: layerIndex });
+  if (!stroke) return null;
+  if (!Array.isArray(raw.points) || raw.points.length < 1) return null;
+  for (const point of raw.points) {
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  }
+  stroke.points = raw.points.map(clampPoint);
+  room.seen.add(stroke.id);
+  return stroke;
+}
+
+function applyDocument(doc) {
+  if (!doc || typeof doc.id !== 'string') return;
+  resetDocument();
+  docs.active = doc.id;
+  docs.name = docLabel(doc.name) || 'Untitled canvas';
+  docs.at = Number(doc.at) || Date.now();
+  docs.stored = doc.stored !== false;
+  docs.hidden = doc.hidden === true;
+  const layers = doc.body && Array.isArray(doc.body.layers) ? doc.body.layers : [];
+  state.layers.forEach((layer, index) => {
+    const source = layers[index];
+    layer.strokes = [];
+    if (!source) return;
+    if (typeof source.name === 'string' && source.name) layer.name = source.name.slice(0, 20);
+    layer.visible = source.visible !== false;
+    if (!Array.isArray(source.strokes)) return;
+    for (const raw of source.strokes) {
+      const stroke = storedStroke(raw, index);
+      if (stroke) layer.strokes.push(stroke);
+    }
+  });
+  markInk();
+  redraw();
+  showHistory();
+  showDocuments();
+}
+
+function showDocuments() {
+  if (!docListEl) return;
+  docListEl.textContent = '';
+  const visible = docs.list.filter((item) => docs.host || !item.hidden);
+  if (docCountEl) docCountEl.textContent = String(visible.length);
+  if (!visible.length) {
+    const empty = document.createElement('li');
+    empty.className = 'doc-empty';
+    empty.textContent = docs.host ? 'No saved canvas yet.' : 'Nothing shared yet.';
+    docListEl.append(empty);
+  }
+  for (const item of visible) {
+    const row = document.createElement('li');
+    row.className = 'doc-row';
+    if (item.id === docs.active) row.classList.add('is-active');
+    if (item.hidden) row.classList.add('is-hidden');
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'doc-open';
+    const title = document.createElement('span');
+    title.className = 'doc-title';
+    title.textContent = item.name;
+    const meta = document.createElement('span');
+    meta.className = 'doc-meta';
+    meta.textContent =
+      shortDate(item.at) + ' · ' + (item.preview || 'empty') + (item.hidden ? ' · hidden' : '');
+    open.append(title, meta);
+    open.addEventListener('click', () => requestDocument(item.id));
+    row.append(open);
+
+    if (docs.host) {
+      const hide = document.createElement('button');
+      hide.type = 'button';
+      hide.className = 'doc-tool';
+      hide.textContent = item.hidden ? 'Show' : 'Hide';
+      hide.title = item.hidden ? 'Let the room see this canvas' : 'Keep this canvas to yourself';
+      hide.addEventListener('click', () => toggleDocumentHidden(item));
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'doc-tool';
+      del.textContent = 'Delete';
+      del.title = 'Delete this canvas from the host';
+      del.addEventListener('click', () => deleteDocument(item));
+      row.append(hide, del);
+    }
+    docListEl.append(row);
+  }
+
+  if (docNameInput) {
+    docNameInput.value = docs.active ? docs.name : '';
+    docNameInput.disabled = !docs.host || !docs.active;
+  }
+  if (docStoreInput) {
+    docStoreInput.checked = docs.stored;
+    docStoreInput.disabled = !docs.host || !docs.active;
+  }
+}
+
+async function saveDocument() {
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = 0;
+  if (!docs.host || !docs.api || !docs.active || !docs.stored) return;
+  const doc = {
+    id: docs.active,
+    kind: 'canvas',
+    name: docs.name,
+    at: Date.now(),
+    hidden: docs.hidden,
+    stored: true,
+    body: docBody(),
+  };
+  docs.at = doc.at;
+  try {
+    await docs.api.put(doc);
+  } catch {
+    return;
+  }
+  const preview = docStrokes() === 1 ? '1 stroke' : docStrokes() + ' strokes';
+  const entry = { id: doc.id, name: doc.name, at: doc.at, hidden: doc.hidden, stored: true, preview };
+  const index = docs.list.findIndex((item) => item.id === doc.id);
+  if (index >= 0) docs.list[index] = entry;
+  else docs.list.unshift(entry);
+  docs.list.sort((a, b) => b.at - a.at);
+  showDocuments();
+  if (Date.now() - docs.sentAt > 4000) {
+    docs.sentAt = Date.now();
+    broadcastDocuments();
+  }
+}
+
+// Drawing settles for 700 ms and then the host writes. A stroke burst during
+// that window costs one write, not one per point.
+function touchDocument() {
+  if (!docs.host || !docs.active || !docs.stored) return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = setTimeout(saveDocument, 700);
+}
+
+function documentsFrame() {
+  return {
+    op: 'docs',
+    docs: docs.list
+      .filter((item) => !item.hidden)
+      .map((item) => ({ id: item.id, name: item.name, at: item.at, preview: item.preview })),
+  };
+}
+
+function broadcastDocuments() {
+  if (!docs.host) return;
+  docs.sentAt = Date.now();
+  send(documentsFrame());
+}
+
+// The relay fans a frame out to the room, so a reply for one page carries the
+// peer it is for and every other page drops it.
+function sendDirect(peer, data) {
+  send({ ...data, to: peer });
+}
+
+async function refreshDocuments() {
+  if (!docs.host || !docs.api) {
+    showDocuments();
+    return;
+  }
+  try {
+    const list = await docs.api.list('canvas');
+    docs.list = Array.isArray(list) ? list : [];
+  } catch {
+    docs.list = Array.isArray(docs.list) ? docs.list : [];
+  }
+  showDocuments();
+  broadcastDocuments();
+}
+
+async function openDocument(id) {
+  if (!docs.host) {
+    send({ op: 'doc-want', id });
+    return;
+  }
+  if (!docs.api || typeof id !== 'string') return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = 0;
+  if (docs.active && docs.active !== id) await saveDocument();
+  let doc = null;
+  try {
+    doc = await docs.api.get(id);
+  } catch {
+    doc = null;
+  }
+  if (!doc) return;
+  applyDocument(doc);
+  send({ op: 'doc-open', id: doc.id, name: docs.name, at: docs.at });
+  announce();
+}
+
+function requestDocument(id) {
+  if (docs.host) openDocument(id);
+  else send({ op: 'doc-want', id });
+}
+
+async function newDocument() {
+  if (!docs.host) {
+    send({ op: 'doc-new' });
+    return;
+  }
+  if (!docs.api) return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = 0;
+  if (docs.active) await saveDocument();
+  const doc = {
+    id: docs.api.id(),
+    kind: 'canvas',
+    name: 'Canvas ' + (docs.list.length + 1),
+    at: Date.now(),
+    hidden: false,
+    stored: docs.stored,
+    body: emptyBody(),
+  };
+  applyDocument(doc);
+  if (doc.stored) {
+    try {
+      await docs.api.put(doc);
+    } catch {
+      // A failed first save leaves the canvas in the room only.
+    }
+    docs.list.unshift({
+      id: doc.id,
+      name: doc.name,
+      at: doc.at,
+      hidden: false,
+      stored: true,
+      preview: '0 strokes',
+    });
+    docs.list.sort((a, b) => b.at - a.at);
+    showDocuments();
+    broadcastDocuments();
+  }
+  send({ op: 'doc-open', id: doc.id, name: doc.name, at: doc.at });
+}
+
+async function toggleDocumentHidden(entry) {
+  if (!docs.host || !docs.api) return;
+  let doc = null;
+  try {
+    doc = await docs.api.get(entry.id);
+  } catch {
+    doc = null;
+  }
+  if (!doc) return;
+  doc.hidden = !(doc.hidden === true);
+  try {
+    await docs.api.put(doc);
+  } catch {
+    return;
+  }
+  if (docs.active === doc.id) docs.hidden = doc.hidden;
+  await refreshDocuments();
+}
+
+async function deleteDocument(entry) {
+  if (!docs.host || !docs.api) return;
+  if (!window.confirm('Delete "' + entry.name + '" for good?')) return;
+  try {
+    await docs.api.remove(entry.id);
+  } catch {
+    return;
+  }
+  docs.list = docs.list.filter((item) => item.id !== entry.id);
+  if (docs.active === entry.id) {
+    docs.active = '';
+    docs.name = 'Untitled canvas';
+    docs.stored = true;
+    docs.hidden = false;
+    resetDocument();
+    if (docs.list.length) await openDocument(docs.list[0].id);
+    else await newDocument();
+  }
+  showDocuments();
+  broadcastDocuments();
+}
+
+async function startDocuments() {
+  document.body.classList.toggle('is-guest', !docs.host);
+  if (!docs.host || !docs.api) {
+    showDocuments();
+    return;
+  }
+  await refreshDocuments();
+  // The newest canvas comes back with the next room, so a host that starts a
+  // room lands on the sheet it was last using.
+  if (docs.list.length) await openDocument(docs.list[0].id);
+  else await newDocument();
+}
+
+if (docNewButton) docNewButton.addEventListener('click', () => newDocument());
+
+if (docNameInput) {
+  docNameInput.addEventListener('change', () => {
+    if (!docs.host || !docs.active) return;
+    docs.name = docLabel(docNameInput.value) || 'Untitled canvas';
+    const entry = docs.list.find((item) => item.id === docs.active);
+    if (entry) entry.name = docs.name;
+    showDocuments();
+    touchDocument();
+    broadcastDocuments();
+  });
+}
+
+if (docStoreInput) {
+  docStoreInput.addEventListener('change', async () => {
+    if (!docs.host || !docs.active) return;
+    docs.stored = docStoreInput.checked;
+    if (docs.stored) {
+      await saveDocument();
+      return;
+    }
+    clearTimeout(docs.saveTimer);
+    docs.saveTimer = 0;
+    if (docs.api) {
+      try {
+        await docs.api.remove(docs.active);
+      } catch {
+        // The file may never have been written.
+      }
+    }
+    docs.list = docs.list.filter((item) => item.id !== docs.active);
+    showDocuments();
+    broadcastDocuments();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -850,12 +1264,14 @@ function cleanStroke(data) {
 function handle(from, data) {
   if (typeof from !== 'string' || !from || from === PEER) return;
   if (!data || typeof data !== 'object') return;
+  if (data.to && data.to !== PEER) return;
 
   if (data.op === 'here') {
     const name = cleanName(data.name);
     if (!name) return;
     // The heartbeat replaces the name and keeps the last point unless the
     // frame carries one, so a move between two beats never blinks out.
+    const fresh = !room.here.has(from);
     const entry = room.here.get(from) || { pointer: null };
     entry.name = name;
     entry.at = Date.now();
@@ -863,6 +1279,14 @@ function handle(from, data) {
     room.here.set(from, entry);
     glideTo(from);
     showRoomState();
+    // A page that arrives after the host already opened a canvas gets the
+    // library and the open sheet, so it never waits for the next change.
+    if (fresh && docs.host) {
+      sendDirect(from, documentsFrame());
+      if (docs.active) {
+        sendDirect(from, { op: 'doc-open', id: docs.active, name: docs.name, at: docs.at });
+      }
+    }
     redraw();
     return;
   }
@@ -876,6 +1300,51 @@ function handle(from, data) {
     entry.pointer = data.gone === true ? null : cleanPointer(data);
     glideTo(from);
     redraw();
+    return;
+  }
+
+  if (data.op === 'docs' && Array.isArray(data.docs)) {
+    if (docs.host) return;
+    docs.list = data.docs
+      .filter((item) => item && typeof item.id === 'string')
+      .map((item) => ({
+        id: item.id,
+        name: docLabel(item.name) || 'Canvas',
+        at: Number(item.at) || 0,
+        preview: typeof item.preview === 'string' ? item.preview.slice(0, 80) : '',
+        hidden: false,
+      }));
+    showDocuments();
+    return;
+  }
+
+  if (data.op === 'docs-ask') {
+    if (docs.host) broadcastDocuments();
+    return;
+  }
+
+  if (data.op === 'doc-want' && typeof data.id === 'string') {
+    if (!docs.host) return;
+    const entry = docs.list.find((item) => item.id === data.id);
+    if (!entry || entry.hidden) return;
+    openDocument(data.id);
+    return;
+  }
+
+  if (data.op === 'doc-new') {
+    if (docs.host) newDocument();
+    return;
+  }
+
+  if (data.op === 'doc-open' && typeof data.id === 'string') {
+    if (docs.host) return;
+    resetDocument();
+    docs.active = data.id;
+    docs.name = docLabel(data.name) || 'Canvas';
+    docs.at = Number(data.at) || Date.now();
+    docs.stored = false;
+    docs.hidden = false;
+    showDocuments();
     return;
   }
 
@@ -994,6 +1463,12 @@ function connect() {
     // Announce what this page holds, then ask for the rest of the sheet. The
     // name goes first, so a joiner is named while its strokes arrive.
     sendHere();
+    if (docs.host) {
+      broadcastDocuments();
+      if (docs.active) {
+        send({ op: 'doc-open', id: docs.active, name: docs.name, at: docs.at });
+      }
+    }
     announce();
     requestSheet();
     readPeers();
@@ -1259,6 +1734,7 @@ for (const button of document.querySelectorAll('.layer')) {
       event.target.dataset.on = layer.visible ? 'on' : 'off';
       markInk();
       redraw();
+      touchDocument();
       return;
     }
     state.activeLayer = Number(button.dataset.layer);
@@ -1281,6 +1757,7 @@ document.getElementById('clear').addEventListener('click', () => {
   for (const stroke of strokes) sendRemove(stroke);
   redraw();
   showHistory();
+  touchDocument();
 });
 
 document.getElementById('export').addEventListener('click', () => {
@@ -1297,7 +1774,11 @@ document.getElementById('export').addEventListener('click', () => {
     if (!blob) return;
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = 'brosr-canvas.png';
+    link.download =
+      (docLabel(docs.name) || 'canvas')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') + '.png';
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 2000);
   }, 'image/png');
@@ -1398,3 +1879,4 @@ showHistory();
 sendHere();
 setInterval(sendHere, HERE_MS);
 connect();
+startDocuments();

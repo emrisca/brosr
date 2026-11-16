@@ -312,6 +312,7 @@ export function roomUrl({
   peer = 'host',
   panel = true,
   trust = null,
+  docs = null,
 }) {
   // The landing page is the front door of a room. The room params below are
   // what mark it as the room tab, so no second fixture page is needed.
@@ -331,6 +332,9 @@ export function roomUrl({
   if (trust && trust.port && trust.token) {
     fragment.push(`t=${trust.token}`, `tp=${trust.port}`);
   }
+  // The docs token lets the host tab read and write the canvas and note
+  // library. A guest invite never carries it, so a peer only sees the room copy.
+  if (docs) fragment.push(`dt=${docs}`);
   url.hash = fragment.join('&');
   return url.toString();
 }
@@ -506,6 +510,10 @@ export async function start(options = {}) {
   const room = options.room || roomId();
   const name = options.name || 'Host';
   const key = newRoomKey();
+  // The docs folder holds the host canvas and note library. It sits beside the
+  // run file, which is the app data folder in a packaged run.
+  const docsDir = ensureDir(path.join(STATE, 'docs'));
+  const docsToken = crypto.randomBytes(24).toString('base64url');
   // Trusted input follows the browser family. Gecko opens a BiDi session and
   // Chromium a CDP one, and the helper picks its client from the family.
   const trust = options.trusted
@@ -519,7 +527,13 @@ export async function start(options = {}) {
   // written. A cold first run then costs the larger of the two legs, not both.
   const relay = spawn(process.execPath, [RELAY], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), HOST: host },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: host,
+      BROSR_DOCS_DIR: docsDir,
+      BROSR_DOCS_TOKEN: docsToken,
+    },
     detached: true,
     stdio: 'ignore',
   });
@@ -541,7 +555,7 @@ export async function start(options = {}) {
   }
   const relayAt = Date.now();
 
-  const url = roomUrl({ host, port, room, key, name, trust });
+  const url = roomUrl({ host, port, room, key, name, trust, docs: docsToken });
   const args = launchArgs(browser, {
     profile: prepared.profile,
     url,
@@ -578,6 +592,7 @@ export async function start(options = {}) {
     name,
     host,
     port,
+    docsDir,
     url,
     invite: guestInvite({ host, port, room, key }),
     profile: prepared.profile,

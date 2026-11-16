@@ -172,7 +172,7 @@
         </span>
       </a>
 
-      <article class="tile tile-notes" aria-labelledby="notes-title">
+      <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -183,12 +183,17 @@
             </span>
             <div class="tile-copy">
               <h2 class="tile-name" id="notes-title">Notes</h2>
-              <p class="tile-note">A page that edits itself as everyone types.</p>
+              <p class="tile-note">A page for the room, saved on the host.</p>
             </div>
           </div>
-          <span class="tile-state">Soon</span>
         </div>
-      </article>
+        <span class="tile-open">
+          Open notes
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M7 17 17 7M8 7h9v9"></path>
+          </svg>
+        </span>
+      </a>
     </section>
   </main>
 
@@ -390,6 +395,17 @@
         openCursors();
         pruneCursors();
       }, 1000);
+    })();
+    // The room, name and docs token ride this page URL, so each tile link
+    // carries them on. Without this a canvas or notes tab opens in its own
+    // room and the host token never arrives.
+    (function () {
+      var carry = location.search + location.hash;
+      if (!carry) return;
+      var links = document.querySelectorAll('a.tile-canvas, a.tile-notes');
+      for (var i = 0; i < links.length; i += 1) {
+        links[i].href = links[i].getAttribute('href') + carry;
+      }
     })();
     // The core writes the room state onto the document, and the Listen tile
     // reads the music player out of it. A track title replaces the note, and

@@ -30,6 +30,17 @@ const stats = { forwarded: 0, text: 0, binary: 0 };
 // because a capture holds every frame the room carried.
 const CAPTURE = process.env.RELAY_CAPTURE || '';
 
+// Documents. A canvas or a note is one small JSON file in this folder, which
+// lives on the host machine. The host tab reads the library over this API. A
+// guest never calls it: the room carries the library, so a peer needs no token.
+const DOCS_DIR = process.env.BROSR_DOCS_DIR
+  ? path.resolve(process.env.BROSR_DOCS_DIR)
+  : path.join(__dirname, '.runtime', 'docs');
+const DOCS_TOKEN = process.env.BROSR_DOCS_TOKEN || '';
+const DOC_KINDS = new Set(['canvas', 'note']);
+const DOC_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const DOC_MAX = 4 * 1024 * 1024;
+
 function capture(room, opcode, payload) {
   if (!CAPTURE) return;
   fs.appendFileSync(
@@ -96,6 +107,24 @@ const server = http.createServer((req, res) => {
       'access-control-allow-origin': '*',
     });
     res.end(body);
+    return;
+  }
+  // The docs client and the notes app ship beside the canvas, so one relay
+  // serves every room app without a second front door.
+  if (url.pathname === '/docs-client.js') {
+    serve(path.join(__dirname, '..', 'landing', 'docs-client.js'), res);
+    return;
+  }
+  if (url.pathname === '/notes' || url.pathname.startsWith('/notes/')) {
+    const name =
+      url.pathname === '/notes' || url.pathname === '/notes/'
+        ? 'index.html'
+        : path.basename(url.pathname);
+    serve(path.join(__dirname, '..', 'landing', 'notes', name), res);
+    return;
+  }
+  if (url.pathname === '/docs' || url.pathname.startsWith('/docs/')) {
+    handleDocs(req, res, url);
     return;
   }
   // Any clip in the runtime folder, so a long fixture needs no new route.
@@ -171,6 +200,200 @@ function serveMedia(file, req, res) {
     });
     fs.createReadStream(file).pipe(res);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+
+function docsDir() {
+  fs.mkdirSync(DOCS_DIR, { recursive: true });
+  return DOCS_DIR;
+}
+
+// A token is set by the app. Without one, only a request from this machine can
+// read the library, so a bare dev relay still keeps the folder to the host.
+function docsAllowed(req, url) {
+  if (DOCS_TOKEN) return url.searchParams.get('token') === DOCS_TOKEN;
+  const raw = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  return raw === '127.0.0.1' || raw === '::1';
+}
+
+function docsAnswer(res, status, body) {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end(JSON.stringify(body));
+}
+
+function docFile(id) {
+  return path.join(docsDir(), id + '.json');
+}
+
+function docRead(id) {
+  if (!DOC_ID.test(String(id || ''))) return null;
+  try {
+    return JSON.parse(fs.readFileSync(docFile(id), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function docLabel(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
+function docText(html) {
+  return String(html || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function docPreview(doc) {
+  if (doc.kind === 'note') return docText(doc.body).slice(0, 140);
+  const layers = doc.body && Array.isArray(doc.body.layers) ? doc.body.layers : [];
+  let count = 0;
+  for (const layer of layers) {
+    if (layer && Array.isArray(layer.strokes)) count += layer.strokes.length;
+  }
+  return count === 1 ? '1 stroke' : count + ' strokes';
+}
+
+// The list reads every file, which is cheap for a personal library and keeps
+// the preview honest without a second index to fall out of step.
+function docList(kind) {
+  const out = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(docsDir());
+  } catch {
+    names = [];
+  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const doc = docRead(name.slice(0, -5));
+    if (!doc || !DOC_KINDS.has(doc.kind)) continue;
+    if (kind && doc.kind !== kind) continue;
+    out.push({
+      id: doc.id,
+      kind: doc.kind,
+      name: docLabel(doc.name) || 'Untitled',
+      at: Number(doc.at) || 0,
+      hidden: doc.hidden === true,
+      stored: doc.stored !== false,
+      preview: docPreview(doc),
+    });
+  }
+  out.sort((a, b) => b.at - a.at);
+  return out;
+}
+
+// A temp file then a rename, so a page that saves every second never leaves a
+// half written document behind a crash.
+function docWrite(doc) {
+  const file = docFile(doc.id);
+  const tmp = file + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(doc), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+
+function readBody(req, limit, done) {
+  const chunks = [];
+  let size = 0;
+  let closed = false;
+  req.on('data', (chunk) => {
+    if (closed) return;
+    size += chunk.length;
+    if (size > limit) {
+      closed = true;
+      done(new Error('too large'));
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (closed) return;
+    closed = true;
+    try {
+      done(null, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    } catch (error) {
+      done(error);
+    }
+  });
+  req.on('error', (error) => {
+    if (closed) return;
+    closed = true;
+    done(error);
+  });
+}
+
+function handleDocs(req, res, url) {
+  if (!docsAllowed(req, url)) {
+    docsAnswer(res, 403, { ok: false, error: 'forbidden' });
+    return;
+  }
+  const rest = url.pathname === '/docs' ? '' : url.pathname.slice('/docs/'.length);
+  const id = rest ? decodeURIComponent(rest) : '';
+
+  if (req.method === 'GET' && !id) {
+    docsAnswer(res, 200, { ok: true, docs: docList(url.searchParams.get('kind') || '') });
+    return;
+  }
+  if (req.method === 'GET' && id) {
+    const doc = docRead(id);
+    if (!doc) {
+      docsAnswer(res, 404, { ok: false, error: 'not found' });
+      return;
+    }
+    docsAnswer(res, 200, { ok: true, doc });
+    return;
+  }
+  if (req.method === 'PUT' && id) {
+    if (!DOC_ID.test(id)) {
+      docsAnswer(res, 400, { ok: false, error: 'bad id' });
+      return;
+    }
+    readBody(req, DOC_MAX, (error, body) => {
+      if (error || !body || typeof body !== 'object') {
+        docsAnswer(res, 400, { ok: false, error: 'bad body' });
+        return;
+      }
+      const doc = {
+        id,
+        kind: DOC_KINDS.has(body.kind) ? body.kind : 'note',
+        name: docLabel(body.name) || 'Untitled',
+        at: Number(body.at) || Date.now(),
+        hidden: body.hidden === true,
+        stored: body.stored !== false,
+        body: body.body === undefined ? null : body.body,
+      };
+      try {
+        docWrite(doc);
+      } catch {
+        docsAnswer(res, 500, { ok: false, error: 'write failed' });
+        return;
+      }
+      docsAnswer(res, 200, { ok: true, id });
+    });
+    return;
+  }
+  if (req.method === 'DELETE' && id) {
+    try {
+      fs.unlinkSync(docFile(id));
+    } catch {
+      // A file that is already gone is the state the caller wanted.
+    }
+    docsAnswer(res, 200, { ok: true });
+    return;
+  }
+  docsAnswer(res, 405, { ok: false, error: 'method' });
 }
 
 function serve(file, res) {
