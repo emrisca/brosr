@@ -112,8 +112,10 @@ fs.rmSync(out, { recursive: true, force: true });
 
 let count = 0;
 let bytes = 0;
+const copied = [];
 for (const relative of FILES) {
   bytes += copy(relative);
+  copied.push(relative);
   count += 1;
 }
 
@@ -122,7 +124,9 @@ for (const { dir, test } of GLOBS) {
   if (!fs.existsSync(full)) stop(`missing source ${dir}`);
   for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
     if (!entry.isFile() || !test(entry.name)) continue;
-    bytes += copy(path.join(dir, entry.name));
+    const relative = path.join(dir, entry.name);
+    bytes += copy(relative);
+    copied.push(relative);
     count += 1;
   }
 }
@@ -131,6 +135,29 @@ for (const relative of TREES) {
   const tree = copyTree(relative);
   bytes += tree.size;
   count += tree.files;
+}
+
+// Every staged module can import another staged file, and the list above is
+// kept by hand. A missed entry ships a tree that only fails on a user's first
+// launch, so each relative import is resolved against the staged copy and a
+// target that never landed stops the build here.
+const IMPORT =
+  /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](\.[^'"]+)['"]/g;
+const SERVER_SIDE = ['host/', 'core/', 'zen/', 'spike/'];
+const holes = [];
+for (const relative of copied) {
+  if (!/\.(mjs|js)$/.test(relative)) continue;
+  if (!SERVER_SIDE.some((prefix) => relative.startsWith(prefix))) continue;
+  const file = path.join(out, relative);
+  for (const match of fs.readFileSync(file, 'utf8').matchAll(IMPORT)) {
+    const target = path.resolve(path.dirname(file), match[1]);
+    if (!target.startsWith(out + path.sep)) continue;
+    if (fs.existsSync(target)) continue;
+    holes.push(relative + ' imports ' + match[1]);
+  }
+}
+if (holes.length) {
+  stop('staged modules import files that did not land:\n  ' + holes.sort().join('\n  '));
 }
 
 // The app reads these names, so a bundle that lost one fails here.
