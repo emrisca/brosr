@@ -204,7 +204,6 @@ try {
         colour: COLOUR,
         size: 14,
         opacity: 1,
-        symmetry: 'off',
         part: 0,
         parts: 1,
         points: [

@@ -159,23 +159,6 @@ const INSPECT = `(() => {
     pointer: pointer ? { x: pointer.x, y: pointer.y } : null,
     pointerAt: pointerAt ? { x: pointerAt.x, y: pointerAt.y } : null,
     zoom: document.getElementById('zoom-out-value').textContent,
-    symmetry: (() => {
-      const picker = document.getElementById('symmetry');
-      if (!picker) return null;
-      const own = picker.getBoundingClientRect();
-      const panel = picker.closest('aside');
-      const panelRect = panel ? panel.getBoundingClientRect() : null;
-      return {
-        cx: own.left + own.width / 2,
-        cy: own.top + own.height / 2,
-        width: own.width,
-        inPanel: Boolean(panel),
-        panelRight: panelRect ? panelRect.right : null,
-        overStage: Boolean(document.querySelector('.stage #symmetry')),
-        options: picker.options.length,
-        value: picker.value,
-      };
-    })(),
   };
 })()`;
 
@@ -620,35 +603,7 @@ try {
   assert.equal(afterPress.total, beforePress.total, 'a press on the desk started a stroke');
   console.log('  a press on the desk drew nothing');
 
-  // 12. The symmetry control lives in the left panel, left of the sheet, so it
-  // never sits where a mirror line looks like it runs on screen.
-  const layout = await a.eval(INSPECT);
-  assert.ok(layout.symmetry, 'the symmetry control is missing from the page');
-  assert.ok(layout.symmetry.inPanel, 'the symmetry control is not in the side panel');
-  assert.ok(!layout.symmetry.overStage, 'the symmetry control still sits over the stage');
-  assert.ok(
-    layout.symmetry.cx < layout.rect.left,
-    `the symmetry control sits at ${round(layout.symmetry.cx)} against a canvas that starts at ${round(layout.rect.left)}`
-  );
-  assert.equal(layout.symmetry.options, 4, 'the symmetry select lost an option');
-  console.log(
-    `  the symmetry control sits in the panel at ${Math.round(layout.symmetry.cx)}, left of a canvas that starts at ${Math.round(layout.rect.left)}`
-  );
-
-  // 13. A pick in the panel still reaches the stroke model, so the control stays
-  // wired from the place it now sits.
-  const pickSymmetry = (value) => `(() => {
-    const select = document.getElementById('symmetry');
-    select.value = ${JSON.stringify(value)};
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    return state.symmetry;
-  })()`;
-  assert.equal(await a.eval(pickSymmetry('vertical')), 'vertical', 'a vertical pick did not reach the model');
-  assert.equal(await a.eval(pickSymmetry('quad')), 'quad', 'a quad pick did not reach the model');
-  assert.equal(await a.eval(pickSymmetry('off')), 'off', 'the model kept a mode after Off');
-  console.log('  a symmetry pick reaches the stroke model from the panel');
-
-  // 14. A crowded sheet keeps a cheap frame. The single stroke path is what a
+  // 12. A crowded sheet keeps a cheap frame. The single stroke path is what a
   // full repaint costs, and the page paints a frame from its ink bitmap.
   const perf = await a.eval(`(() => {
     const layer = state.layers[0];
@@ -667,7 +622,6 @@ try {
         colour: '#18181b',
         size: 4,
         opacity: 1,
-        symmetry: 'off',
         points,
       });
     }
@@ -715,7 +669,6 @@ try {
       colour: '#18181b',
       size: 4,
       opacity: 1,
-      symmetry: 'off',
       points: [],
     };
     for (let j = 0; j < 120; j++) {
@@ -739,7 +692,7 @@ try {
     `  ${perf.strokes} strokes: full repaint ${perf.fullMs} ms, cached frame ${perf.frameMs} ms, frame with a live line ${perf.liveMs} ms`
   );
 
-  // 15. Two thousand strokes is a sheet nobody draws by hand, and a frame still
+  // 13. Two thousand strokes is a sheet nobody draws by hand, and a frame still
   // has to land inside one refresh. The whole sheet is painted once for the
   // baseline, so a frame that scaled with the count would show up here.
   const stress = await a.eval(`(() => {
@@ -759,7 +712,6 @@ try {
         colour: '#18181b',
         size: 4,
         opacity: 1,
-        symmetry: 'off',
         points,
       });
     }
@@ -805,7 +757,6 @@ try {
       colour: '#18181b',
       size: 4,
       opacity: 1,
-      symmetry: 'off',
       points: [],
     };
     for (let j = 0; j < 160; j++) {

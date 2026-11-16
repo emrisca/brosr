@@ -1,6 +1,6 @@
 'use strict';
 // Canvas. A paper sheet drawn on one canvas, with a small stroke model so undo,
-// symmetry, layers, the room and a PNG export all read from the same record.
+// layers, the room and a PNG export all read from the same record.
 
 // The sheet is a square. Ink is clipped to it on every pass, so the desk around
 // it stays empty no matter where a hand ends up.
@@ -26,7 +26,6 @@ const state = {
   size: 4,
   opacity: 1,
   stabilizer: 0.35,
-  symmetry: 'off',
   activeLayer: 1,
   layers: [
     { name: 'Sketch', strokes: [], visible: true },
@@ -105,36 +104,6 @@ function hexAlpha(hex, alpha) {
   const g = parseInt(full.slice(2, 4), 16);
   const b = parseInt(full.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-// A mirror is applied to whichever surface is painting, not to the screen
-// canvas alone, because the committed ink is painted into its own bitmap.
-function mirrorTransforms(g, mode) {
-  const cx = PAPER.width / 2;
-  const cy = PAPER.height / 2;
-  const list = [() => {}];
-  const flipX = () => {
-    g.translate(PAPER.width, 0);
-    g.scale(-1, 1);
-  };
-  const flipY = () => {
-    g.translate(0, PAPER.height);
-    g.scale(1, -1);
-  };
-  if (mode === 'vertical' || mode === 'quad') list.push(flipX);
-  if (mode === 'horizontal' || mode === 'quad') list.push(flipY);
-  if (mode === 'quad') {
-    list.push(() => {
-      g.translate(PAPER.width, PAPER.height);
-      g.scale(-1, -1);
-    });
-  }
-  // The transforms must land around the sheet centre.
-  return list.map((apply) => () => {
-    g.translate(cx, cy);
-    apply();
-    g.translate(-cx, -cy);
-  });
 }
 
 function paintShape(g, stroke) {
@@ -222,12 +191,7 @@ function paintStroke(g, stroke) {
     paintShape(g, stroke);
     return;
   }
-  for (const apply of mirrorTransforms(g, stroke.symmetry)) {
-    g.save();
-    apply();
-    paintFreehand(g, stroke);
-    g.restore();
-  }
+  paintFreehand(g, stroke);
   g.globalAlpha = 1;
 }
 
@@ -702,7 +666,6 @@ function sendStroke(stroke) {
       colour: stroke.colour,
       size: stroke.size,
       opacity: stroke.opacity,
-      symmetry: stroke.symmetry,
       part,
       parts,
       points: stroke.points.slice(part * PART_POINTS, (part + 1) * PART_POINTS).map(wirePoint),
@@ -760,7 +723,6 @@ function sendLive(stroke, force) {
     colour: stroke.colour,
     size: stroke.size,
     opacity: stroke.opacity,
-    symmetry: stroke.symmetry,
     shape,
     points: fresh.map(wirePoint),
   });
@@ -784,7 +746,6 @@ function cleanStroke(data) {
   const opacity = Number(data.opacity);
   if (!Number.isFinite(size) || size <= 0 || size > 200) return null;
   if (!Number.isFinite(opacity) || opacity <= 0 || opacity > 1) return null;
-  if (!['off', 'vertical', 'horizontal', 'quad'].includes(data.symmetry)) return null;
   return {
     id: data.id,
     layer,
@@ -792,7 +753,6 @@ function cleanStroke(data) {
     colour: data.colour,
     size,
     opacity,
-    symmetry: data.symmetry,
     points: [],
   };
 }
@@ -1007,7 +967,6 @@ function startStroke(point) {
       colour: state.colour,
       size: state.size,
       opacity: state.opacity,
-      symmetry: state.symmetry,
       layer: state.activeLayer,
       points: [point],
     },
@@ -1190,10 +1149,6 @@ document.getElementById('opacity').addEventListener('input', (event) => {
 document.getElementById('stabilizer').addEventListener('input', (event) => {
   state.stabilizer = Number(event.target.value) / 100;
   document.getElementById('stabilizer-out').textContent = Math.round(state.stabilizer * 100) + '%';
-});
-
-document.getElementById('symmetry').addEventListener('change', (event) => {
-  state.symmetry = event.target.value;
 });
 
 for (const button of document.querySelectorAll('.swatch')) {
