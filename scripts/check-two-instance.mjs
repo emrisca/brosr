@@ -3,9 +3,10 @@
 // same relay in a second browser, the host grants it through the URL, and the
 // guest's keys travel to the host form through the browser's input pipeline.
 //
-// The bridge is built from this tree into a temp file, so a stale or incomplete
-// XPI cannot pass this check. That is the failure this check found: the packaged
-// bundle was missing the trust module the room entry imports.
+// The Zen lane installs what a room actually loads: the signed copy when it
+// matches this tree, otherwise a bundle built from the tree into a temp file. A
+// signed copy that lags the tree fails the run, because that is the artifact the
+// profile resolver would hand to the browser.
 //
 // Two lanes share the flow. The default lane uses two Zen profiles. The
 // --chrome lane loads the unpacked Chromium build in two windows. Branded
@@ -295,6 +296,38 @@ function chromiumBuild() {
   );
 }
 
+// One reader for a bundle on disk: its version, the AMO signature, and every
+// name that is missing from this tree or differs in bytes.
+function bundleState(file) {
+  const raw = zipEntry(file, 'manifest.json');
+  if (!raw) return { error: 'no manifest.json' };
+  const manifest = JSON.parse(raw.toString('utf8'));
+  const source = JSON.parse(fs.readFileSync(path.join(root, 'bridge', 'manifest.json'), 'utf8'));
+  const entries = bridgeEntries();
+  const missing = [];
+  const changed = [];
+
+  for (const entry of entries) {
+    // AMO rewrites the manifest while signing, so only payload files are
+    // compared byte for byte. The version and id are read from the manifest.
+    if (entry.name === 'manifest.json') continue;
+    const held = zipEntry(file, entry.name);
+    if (!held) missing.push(entry.name);
+    else if (!held.equals(Buffer.from(entry.data))) changed.push(entry.name);
+  }
+
+  return {
+    version: manifest.version,
+    id: manifest.browser_specific_settings?.gecko?.id || null,
+    want: source.version,
+    wantId: source.browser_specific_settings?.gecko?.id || null,
+    files: entries.length,
+    missing,
+    changed,
+    signature: Boolean(zipEntry(file, 'META-INF/mozilla.rsa')),
+  };
+}
+
 // The profile installs zen/.runtime/bridge.xpi, not the file this check builds.
 // A stale copy can pass every lane here while the browser gets a bundle that is
 // one module short, which is the failure this check exists for. So compare what
@@ -302,31 +335,54 @@ function chromiumBuild() {
 function shippedBridge() {
   const file = path.join(root, 'zen', '.runtime', 'bridge.xpi');
   if (!fs.existsSync(file)) return { ok: true, skipped: 'zen/.runtime/bridge.xpi is absent' };
-
-  const raw = zipEntry(file, 'manifest.json');
-  if (!raw) return { ok: false, reason: 'the shipped bridge has no manifest.json' };
-
-  const version = JSON.parse(raw.toString('utf8')).version;
-  const source = JSON.parse(fs.readFileSync(path.join(root, 'bridge', 'manifest.json'), 'utf8'));
-  const entries = bridgeEntries();
-  const missing = [];
-  const changed = [];
-
-  for (const entry of entries) {
-    const held = zipEntry(file, entry.name);
-    if (!held) missing.push(entry.name);
-    else if (!held.equals(Buffer.from(entry.data))) changed.push(entry.name);
+  try {
+    const state = bundleState(file);
+    if (state.error) return { ok: false, reason: `the shipped bridge has ${state.error}` };
+    return {
+      file: path.relative(root, file),
+      ...state,
+      ok:
+        state.version === state.want &&
+        state.id === state.wantId &&
+        state.missing.length === 0 &&
+        state.changed.length === 0,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `the shipped bridge is unreadable: ${String(error.message || error)}`,
+    };
   }
+}
 
-  return {
-    file: path.relative(root, file),
-    version,
-    want: source.version,
-    files: entries.length,
-    missing,
-    changed,
-    ok: version === source.version && missing.length === 0 && changed.length === 0,
-  };
+// The profile prefers the signed copy, so that file is what a room loads. It
+// has to carry the AMO signature and the same bytes as this tree, or the lane
+// would be proving something nobody installs.
+function signedBridge() {
+  const file = path.join(root, 'zen', '.runtime', 'bridge-signed.xpi');
+  if (!fs.existsSync(file)) {
+    return { ok: true, signed: false, skipped: 'zen/.runtime/bridge-signed.xpi is absent' };
+  }
+  try {
+    const state = bundleState(file);
+    if (state.error) return { ok: false, signed: false, reason: `the signed bridge has ${state.error}` };
+    return {
+      file: path.relative(root, file),
+      ...state,
+      ok:
+        state.signature &&
+        state.version === state.want &&
+        state.id === state.wantId &&
+        state.missing.length === 0 &&
+        state.changed.length === 0,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      signed: false,
+      reason: `the signed bridge is unreadable: ${String(error.message || error)}`,
+    };
+  }
 }
 
 let relay = null;
@@ -341,7 +397,9 @@ let extensionDir = null;
 let hostProfile = null;
 let guestProfile = null;
 let bridge = null;
+let bridgeTemp = false;
 let shipped = null;
+let signed = null;
 
 try {
   shipped = shippedBridge();
@@ -353,6 +411,20 @@ try {
         want: shipped.want,
         missing: shipped.missing,
         changed: shipped.changed,
+      })}\n`
+    );
+  }
+
+  signed = signedBridge();
+  out.steps.signed = signed;
+  if (!signed.ok) {
+    process.stderr.write(
+      `[brosr] the signed bridge does not match the tree: ${JSON.stringify({
+        version: signed.version,
+        want: signed.want,
+        signature: signed.signed,
+        missing: signed.missing,
+        changed: signed.changed,
       })}\n`
     );
   }
@@ -434,8 +506,28 @@ try {
     if (!zen) throw new Error('no Zen binary found. Pass --zen=<path>.');
     out.steps.lane = 'zen';
     out.steps.browser = 'Zen';
-    bridge = path.join(tmpdir(), `brosr-check-bridge-${process.pid}.xpi`);
-    buildXpi(bridge);
+    // The app installs the signed copy when the profile resolver prefers it, so
+    // the lane loads that exact file. This proves the shipped artifact instead
+    // of a rebuild of it. A missing signed copy falls back to the tree, and a
+    // lagging one already failed the guard above.
+    if (out.steps.signed.ok && !out.steps.signed.skipped) {
+      bridge = path.resolve(root, out.steps.signed.file);
+      out.steps.bridge = {
+        source: 'signed',
+        version: out.steps.signed.version,
+        signature: out.steps.signed.signature,
+      };
+    } else {
+      bridge = path.join(tmpdir(), `brosr-check-bridge-${process.pid}.xpi`);
+      bridgeTemp = true;
+      buildXpi(bridge);
+      out.steps.bridge = {
+        source: 'tree',
+        version: JSON.parse(
+          fs.readFileSync(path.join(root, 'bridge', 'manifest.json'), 'utf8')
+        ).version,
+      };
+    }
     hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-host-'));
     guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-guest-'));
     writeProfile(hostProfile, { bridge });
@@ -566,6 +658,7 @@ try {
   out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
   out.ok =
     shipped.ok &&
+    signed.ok &&
     typed.value === 'trusted' &&
     keys.length >= 7 &&
     keys.every((k) => k.trusted === true) &&
@@ -583,7 +676,7 @@ try {
   if (hostProfile) await rm(hostProfile, { recursive: true, force: true }).catch(() => {});
   if (guestProfile) await rm(guestProfile, { recursive: true, force: true }).catch(() => {});
   if (extensionDir) await rm(extensionDir, { recursive: true, force: true }).catch(() => {});
-  if (bridge) await rm(bridge, { force: true }).catch(() => {});
+  if (bridge && bridgeTemp) await rm(bridge, { force: true }).catch(() => {});
 }
 
 process.stdout.write(JSON.stringify(out, null, 2) + '\n');
