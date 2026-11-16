@@ -47,11 +47,15 @@ export class GrantBook {
 
   allows(peerId, { tabId = 'tab', origin = '', kind = 'click' } = {}) {
     if (FREE_KINDS.has(kind)) return true;
-    const key = this.key(peerId, tabId);
-    const grant = this.grants.get(key);
+    // A browser-wide grant names every tab with '*'. An exact tab entry wins,
+    // then the wildcard, so a per-tab grant keeps the meaning it had.
+    const exactKey = this.key(peerId, tabId);
+    const wildKey = this.key(peerId, '*');
+    const exact = this.grants.get(exactKey);
+    const grant = exact || this.grants.get(wildKey);
     if (!grant) return false;
     if (grant.expiresAt <= this.now()) {
-      this.grants.delete(key);
+      this.grants.delete(exact ? exactKey : wildKey);
       return false;
     }
     if (grant.origin && origin && grant.origin !== origin) return false;

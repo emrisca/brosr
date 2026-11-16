@@ -301,6 +301,46 @@ test('the host never corrects its own playhead', () => {
   assert.equal(video.currentTime, 1);
 });
 
+test('a host film report leaves at once, and a peer cannot send one', () => {
+  let local = 1200;
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sent.push(frame),
+    overlay: false,
+  });
+
+  assert.equal(
+    host.sendHostMedia({ key: KEY, position: 12.5, playing: true, rate: 1.5, volume: 0.8 }),
+    true
+  );
+  assert.equal(sent.length, 1, 'no tick was needed');
+  const frame = decode(sent[0]);
+  assert.equal(frame.type, 'media');
+  assert.equal(frame.peerId, 'host');
+  assert.equal(frame.key, KEY);
+  assert.equal(frame.position, 12.5);
+  assert.equal(frame.playing, true);
+  assert.equal(frame.rate, 1.5);
+  assert.equal(frame.volume, 0.8);
+  assert.equal(frame.roomTime, 1200);
+  assert.equal(host.publish().position, 12.5);
+  assert.equal(host.publish().playing, true);
+
+  assert.equal(host.sendHostMedia(null), false);
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+  });
+  assert.equal(peer.sendHostMedia({ key: KEY, position: 1, playing: true }), false);
+});
+
 test('samples only start after the window, and only when settled', () => {
   const video = fakeVideo();
   const { client, at, frame } = makeClient(video);

@@ -118,6 +118,7 @@ api.tabs.query({}).then((tabs) => {
 api.tabs.onRemoved.addListener((id) => {
   announced.delete(id);
   remoteTabs.delete(id);
+  remoteOrigins.delete(id);
   mediaTabs.delete(id);
   save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
@@ -184,12 +185,20 @@ const announced = new Map();
 // A shared tab keeps the host tab id that opened it. A later navigation in
 // that tab moves the copy here instead of opening another tab.
 const remoteKeys = new Map();
+// The key a tab arrived under. A mirrored tab keeps that key through a
+// navigation, so the other browser moves the same tab instead of opening a
+// second one.
+const remoteOrigins = new Map();
 
 state()
   .then((saved) => {
     const book = saved && saved.remoteKeyTabs;
     if (!book || typeof book !== 'object') return;
-    for (const [key, id] of Object.entries(book)) if (validId(id)) remoteKeys.set(key, id);
+    for (const [key, id] of Object.entries(book)) {
+      if (!validId(id)) continue;
+      remoteKeys.set(key, id);
+      remoteOrigins.set(id, key);
+    }
   })
   .catch(() => {});
 // Tabs with a player, keyed by the film each one shows. The room tab drives
@@ -258,7 +267,17 @@ async function shareTab(tab) {
   try {
     if (announced.get(tab.id) === tab.url) return false;
     announced.set(tab.id, tab.url);
-    return await announce(tab.url, tab.id);
+    // A tab that arrived from another browser goes out under the key it came
+    // with, so the other side navigates that same tab. A tab from this browser
+    // names itself.
+    const arrived = remoteOrigins.get(tab.id);
+    const key = arrived === undefined || arrived === null ? tab.id : arrived;
+    if (remoteKeys.get(String(key)) !== tab.id) {
+      remoteKeys.set(String(key), tab.id);
+      remoteOrigins.set(tab.id, key);
+      await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+    }
+    return await announce(tab.url, key);
   } finally {
     announcing.delete(tab.id);
   }
@@ -269,7 +288,9 @@ async function considerTab(tab) {
   if (!(await mayShare())) return;
   const seen = await state();
   if (tab.id === seen.roomTabId || isRoomPage(tab.url)) return;
-  if (remoteTabs.has(tab.id)) return;
+  // A mirrored tab is this browser's copy of another tab. Its navigation is
+  // still news to that browser, so it goes out under the key it arrived with.
+  // The per-tab URL record below stops the two copies from echoing.
   if (announced.get(tab.id) === tab.url) return;
   await loadPrefs();
   // A ticked tab goes out even when new tabs are off, which is what the panel
@@ -470,10 +491,14 @@ async function handle(message, sender) {
       // reloading it would restart the film.
       if (validId(known) && typeof api.tabs.update === 'function') {
         const copy = await api.tabs.get(known).catch(() => null);
-        if (copy && copy.url === message.url) return { ok: true, tabId: known, updated: false };
+        if (copy && copy.url === message.url) {
+          if (key !== null) remoteOrigins.set(known, key);
+          return { ok: true, tabId: known, updated: false };
+        }
         if (copy) {
           try {
             await api.tabs.update(known, { url: message.url });
+            if (key !== null) remoteOrigins.set(known, key);
             return { ok: true, tabId: known, updated: true };
           } catch {
             // The copy is gone, so the next step opens a fresh one.
@@ -490,13 +515,17 @@ async function handle(message, sender) {
       // error card, so the copy is the fault and not the film.
       const all = await api.tabs.query({}).catch(() => []);
       const shown = all.find((tab) => validId(tab.id) && tab.url === message.url);
-      if (shown) return { ok: true, tabId: shown.id, existing: true };
+      if (shown) {
+        if (key !== null) remoteOrigins.set(shown.id, key);
+        return { ok: true, tabId: shown.id, existing: true };
+      }
       try {
         const tab = await api.tabs.create({ url: message.url, active: false });
         if (tab && validId(tab.id)) {
           remoteTabs.add(tab.id);
           if (key !== null) {
             remoteKeys.set(key, tab.id);
+            remoteOrigins.set(tab.id, key);
             await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
           }
         }

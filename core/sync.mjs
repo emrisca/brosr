@@ -7,6 +7,7 @@ import { ClockEstimator } from './clock.mjs';
 import { DriftController } from './drift.mjs';
 import { MediaAdapter, bufferedAround } from './media.mjs';
 import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
+import { ROOM_COLOURS, cleanCursor, cleanRoomName, isColour, nextColour } from './cursor.mjs';
 import { Room } from './room.mjs';
 import {
   GrantBook,
@@ -47,6 +48,9 @@ export function createRoomClient({
   hostId = 'host',
   name = 'peer',
   colour = '#e2603f',
+  roomName = 'Room',
+  customCursor = null,
+  sharePointer = true,
   send = () => {},
   document: doc = null,
   mediaRoot = null,
@@ -78,7 +82,12 @@ export function createRoomClient({
   // check below, so the two never disagree about when a seek may land.
   const drift = new DriftController({ now });
   let media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
-  const state = new Room({ role, peerId, now });
+  const initialRoomName = cleanRoomName(roomName);
+  const state = new Room({ role, peerId, roomName: initialRoomName, now });
+  let currentColour = isColour(colour) ? colour : '#e2603f';
+  let currentRoomName = initialRoomName;
+  let currentCursor = cleanCursor(customCursor);
+  let sharingPointer = Boolean(sharePointer);
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
   const latencies = [];
@@ -171,8 +180,84 @@ export function createRoomClient({
     send(encode(message));
   }
 
+  // The host owns the roster. When a requested colour is already in use it
+  // sends a replacement, and every client puts that peer on the same colour.
+  function usedColours(exceptId = '') {
+    const used = new Set([currentColour.toLowerCase()]);
+    for (const peer of state.peers.values()) {
+      if (peer.id === exceptId || !isColour(peer.colour)) continue;
+      used.add(peer.colour.toLowerCase());
+    }
+    return used;
+  }
+
+  function reconcileColour(id, wanted) {
+    if (!isHost() || !id || id === peerId) return;
+    const wantedColour = isColour(wanted) ? wanted : '';
+    const used = usedColours(id);
+    let next = wantedColour;
+    if (!next || used.has(next.toLowerCase())) next = nextColour(used);
+    const peer = state.peers.get(id);
+    if (peer) peer.colour = next;
+    if (next.toLowerCase() !== wantedColour.toLowerCase()) {
+      sendMessage({ type: 'colour', peerId: id, colour: next, roomTime: roomTimeOf() });
+    }
+  }
+
+  function setColour(value) {
+    if (!isColour(value)) return false;
+    currentColour = value;
+    if (isHost()) {
+      for (const peer of state.peers.values()) {
+        if (peer.colour && peer.colour.toLowerCase() === currentColour.toLowerCase()) {
+          reconcileColour(peer.id, peer.colour);
+        }
+      }
+    }
+    presence();
+    return true;
+  }
+
+  function setRoomName(value) {
+    const next = cleanRoomName(value);
+    currentRoomName = next;
+    state.roomName = next;
+    sendMessage({
+      type: 'roomname',
+      peerId,
+      roomName: next,
+      roomTime: roomTimeOf(),
+    });
+    return next;
+  }
+
+  function setCursor(value) {
+    currentCursor = cleanCursor(value);
+    sendMessage({
+      type: 'cursor',
+      peerId,
+      cursor: currentCursor,
+      roomTime: roomTimeOf(),
+    });
+    return currentCursor;
+  }
+
+  function setSharePointer(on) {
+    sharingPointer = Boolean(on);
+    presence();
+    return sharingPointer;
+  }
+
   function hello() {
-    sendMessage({ type: 'hello', peerId, name, colour, roomTime: roomTimeOf() });
+    sendMessage({
+      type: 'hello',
+      peerId,
+      name,
+      colour: currentColour,
+      roomName: currentRoomName,
+      cursor: currentCursor,
+      roomTime: roomTimeOf(),
+    });
   }
 
   // A page names its own messages. An empty name or a non-object payload is
@@ -186,7 +271,32 @@ export function createRoomClient({
   }
 
   function sendSnapshot() {
-    sendMessage(state.snapshot());
+    // A cursor image is close to the frame ceiling on its own. Sending every
+    // peer's image inside one snapshot would overflow the frame, so the roster
+    // travels first and each image follows in its own frame.
+    const snapshot = state.snapshot();
+    snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
+    sendMessage(snapshot);
+    if (!isHost()) return;
+    // The host is not in its own roster, so a late guest would otherwise miss
+    // the host's cursor until it changed.
+    if (currentCursor) {
+      sendMessage({
+        type: 'cursor',
+        peerId,
+        cursor: currentCursor,
+        roomTime: roomTimeOf(),
+      });
+    }
+    for (const peer of state.peers.values()) {
+      if (!peer.cursor) continue;
+      sendMessage({
+        type: 'cursor',
+        peerId: peer.id,
+        cursor: peer.cursor,
+        roomTime: roomTimeOf(),
+      });
+    }
   }
 
   // The host left. Every peer holds the same list of live ids, so they all name
@@ -214,8 +324,11 @@ export function createRoomClient({
 
   function setGrant(peer, allowed) {
     if (!isHost()) return false;
-    const tabId = (input && input.tabId) || 'tab';
-    const origin = (input && input.origin) || (doc && doc.location ? doc.location.origin : '');
+    // A grant covers the browser, not one tab or one origin. The peer's
+    // actions can land on any page it can see, so the grant names every tab
+    // and no origin.
+    const tabId = '*';
+    const origin = '';
     if (allowed) grants.grant(peer, { tabId, origin });
     else grants.revoke(peer, tabId);
     sendMessage({ type: 'control', peerId: peer, allowed, tabId, origin, roomTime: roomTimeOf() });
@@ -251,6 +364,33 @@ export function createRoomClient({
       roomTime: roomTimeOf(),
     });
     stats.mediaSent += 1;
+    return true;
+  }
+
+  // A film tab's own report is fresher than the poll. The host sends it at
+  // once, and the tick below remains the fallback when no report arrives.
+  function sendHostMedia(state, local = now()) {
+    if (!isHost()) return false;
+    if (!state || typeof state !== 'object' || !state.key) return false;
+    const position = Number(state.position || 0);
+    stats.key = state.key;
+    stats.position = Math.round(position * 1000) / 1000;
+    stats.playing = Boolean(state.playing);
+    lastHostTick = local;
+    sendMessage({
+      type: 'media',
+      peerId,
+      key: state.key,
+      action: 'tick',
+      position,
+      playing: Boolean(state.playing),
+      rate: Number(state.rate || 1),
+      volume: Number(state.volume ?? 1),
+      buffering: Boolean(state.buffering),
+      ad: Boolean(state.ad),
+      // The host owns the room clock, so its local time is room time.
+      roomTime: local,
+    });
     return true;
   }
 
@@ -731,12 +871,19 @@ export function createRoomClient({
         clock.onPong(message, local);
         stats.rtt = clock.roundTrip();
         return { ok: true };
-      case 'hello':
-        state.join({ id: message.peerId, name: message.name, colour: message.colour });
+      case 'hello': {
+        const joined = { id: message.peerId, name: message.name, colour: message.colour };
+        if (message.cursor !== undefined) joined.cursor = cleanCursor(message.cursor);
+        state.join(joined);
+        if (!isHost() && message.roomName) {
+          currentRoomName = cleanRoomName(message.roomName);
+          state.roomName = currentRoomName;
+        }
         if (isHost()) {
-          sendSnapshot();
+          reconcileColour(message.peerId, message.colour);
           // A peer that follows a navigation reloads and says hello again. Send
           // the grant again, or the new page never learns it holds control.
+          sendSnapshot();
           const held = grants.active().find((grant) => grant.peerId === message.peerId);
           if (held) {
             sendMessage({
@@ -751,6 +898,7 @@ export function createRoomClient({
           if (input && input.grantTo === message.peerId) setGrant(message.peerId, true);
         }
         return { ok: true };
+      }
       case 'control':
         stats.controlReceived += 1;
         stats.controls.push({ peerId: message.peerId, allowed: Boolean(message.allowed) });
@@ -769,6 +917,10 @@ export function createRoomClient({
         return handleInput(message);
       case 'snapshot':
         state.applySnapshot(message);
+        if (!isHost() && message.roomName) {
+          currentRoomName = cleanRoomName(message.roomName);
+          state.roomName = currentRoomName;
+        }
         applyPeers();
         followSnapshot(message);
         return { ok: true };
@@ -788,6 +940,31 @@ export function createRoomClient({
       }
       case 'presence':
         applyPresence(message, local);
+        if (isHost() && message.peerId !== peerId) {
+          reconcileColour(message.peerId, message.colour);
+        }
+        return { ok: true };
+      case 'colour':
+        if (message.peerId && isColour(message.colour)) {
+          state.join({ id: message.peerId, colour: message.colour });
+          if (message.peerId === peerId) currentColour = message.colour;
+        }
+        return { ok: true };
+      case 'roomname': {
+        const next = cleanRoomName(message.roomName);
+        currentRoomName = next;
+        state.roomName = next;
+        // A guest can rename too. The host repeats the name so every other
+        // guest hears it, not only the host.
+        if (isHost() && message.peerId && message.peerId !== peerId) {
+          sendMessage({ ...message, roomTime: roomTimeOf() });
+        }
+        return { ok: true, roomName: next };
+      }
+      case 'cursor':
+        if (message.peerId && message.peerId !== peerId) {
+          state.join({ id: message.peerId, cursor: cleanCursor(message.cursor) });
+        }
         return { ok: true };
       case 'media':
         return applyMedia(message, local);
@@ -829,8 +1006,12 @@ export function createRoomClient({
       type: 'presence',
       peerId: peer.id || peerId,
       name: peer.name || name,
-      colour: peer.colour || colour,
-      point: peer.point || lastPointer || { x: 0, y: 0 },
+      colour: peer.colour || currentColour,
+      // A person can keep their pointer off every other screen. Presence still
+      // carries the identity and clock; a zero point only hides the cursor.
+      point: sharingPointer
+        ? peer.point || lastPointer || { x: 0, y: 0 }
+        : { x: 0, y: 0 },
       roomTime: roomTimeOf(),
     };
     // The page this cursor is on. Another tab draws it only when it shows that
@@ -1014,9 +1195,15 @@ export function createRoomClient({
         id: peer.id,
         name: peer.name || peer.id,
         colour: peer.colour || null,
+        cursor: peer.cursor || null,
         self: peer.id === peerId,
         granted: peer.id === peerId ? remoteGrant : grantedPeers.has(peer.id),
       })),
+      roomName: currentRoomName,
+      colour: currentColour,
+      cursor: currentCursor,
+      sharePointer: sharingPointer,
+      colours: ROOM_COLOURS,
       url: state.url,
       scroll: Math.round(state.scroll * 1000) / 1000,
       layoutMismatch: stats.layoutMismatch,
@@ -1066,10 +1253,15 @@ export function createRoomClient({
     grants,
     setGrant,
     sendMedia,
+    sendHostMedia,
     isGranted: () => remoteGrant,
     tick,
     presence,
     setPointer,
+    setColour,
+    setRoomName,
+    setCursor,
+    setSharePointer,
     hello,
     publish,
     roomState: state,
