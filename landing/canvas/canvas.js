@@ -83,15 +83,14 @@ let pointerSent = 0;
 // The last client point, kept so a zoom, a pan or a window resize can read the
 // paper under a hand that has not moved.
 let pointerAt = null;
-// A remote dot glides to the point it reports instead of jumping there, the way
-// the landing page cursors do. The eased point is what the sheet paints. A page
-// in the background paints no frames, so it snaps, and a dot seen for the first
-// time appears where it is.
-const GLIDE_TAU = 26;
-const GLIDE_DONE = 0.25;
+// A remote dot glides to the point it reports instead of jumping there. The
+// move is the same 80 ms linear one the landing page cursors take, so a short
+// hop and a long one both get their own glide. The eased point is what the sheet
+// paints. A page in the background paints no frames, so it snaps, and a dot seen
+// for the first time appears where it is.
+const GLIDE_MS = 80;
 const glide = new Map();
 let glideRaf = 0;
-let glidePrev = 0;
 
 function nextStrokeId() {
   strokeCount += 1;
@@ -435,34 +434,33 @@ function glideTarget(id) {
 
 function glideFrame(now) {
   glideRaf = 0;
-  const dt = glidePrev ? Math.min(64, now - glidePrev) : 16;
-  glidePrev = now;
-  const k = 1 - Math.exp(-dt / GLIDE_TAU);
   let moving = false;
   for (const [id, at] of glide) {
-    const target = glideTarget(id);
-    if (!target) {
+    if (!glideTarget(id)) {
       glide.delete(id);
       continue;
     }
-    const dx = target.x - at.x;
-    const dy = target.y - at.y;
-    if (Math.hypot(dx, dy) <= GLIDE_DONE) {
-      at.x = target.x;
-      at.y = target.y;
+    if (!at.t0) continue;
+    const p = Math.min(1, (now - at.t0) / GLIDE_MS);
+    if (p >= 1) {
+      at.x = at.tx;
+      at.y = at.ty;
+      at.t0 = 0;
       continue;
     }
-    at.x += dx * k;
-    at.y += dy * k;
+    at.x = at.sx + (at.tx - at.sx) * p;
+    at.y = at.sy + (at.ty - at.sy) * p;
     moving = true;
   }
   redraw();
   if (moving) glideRaf = requestAnimationFrame(glideFrame);
-  else glidePrev = 0;
 }
 
-// A report eases the dot toward the new point. The loop stops on its own once
-// every dot has arrived, so a resting sheet paints no extra frames.
+// A report starts the next 80 ms from wherever the dot is now, the way a new
+// CSS transition picks up from the current position. A report that lands
+// mid-glide therefore keeps the motion going instead of jumping ahead. The loop
+// stops on its own once every dot has arrived, so a resting sheet paints no
+// extra frames.
 function glideTo(id) {
   const target = glideTarget(id);
   if (!target) {
@@ -471,14 +469,24 @@ function glideTo(id) {
   }
   const at = glide.get(id);
   if (!at || document.hidden) {
-    glide.set(id, { x: target.x, y: target.y });
+    glide.set(id, {
+      x: target.x,
+      y: target.y,
+      sx: target.x,
+      sy: target.y,
+      tx: target.x,
+      ty: target.y,
+      t0: 0,
+    });
     return;
   }
-  if (at.x === target.x && at.y === target.y) return;
-  if (!glideRaf) {
-    glidePrev = 0;
-    glideRaf = requestAnimationFrame(glideFrame);
-  }
+  if (at.tx === target.x && at.ty === target.y) return;
+  const now = performance.now();
+  const p = at.t0 ? Math.min(1, (now - at.t0) / GLIDE_MS) : 1;
+  const x = at.sx + (at.tx - at.sx) * p;
+  const y = at.sy + (at.ty - at.sy) * p;
+  glide.set(id, { x, y, sx: x, sy: y, tx: target.x, ty: target.y, t0: now });
+  if (!glideRaf) glideRaf = requestAnimationFrame(glideFrame);
 }
 
 // A hidden page paints no frames, so a glide in flight is finished at once
@@ -490,12 +498,12 @@ document.addEventListener('visibilitychange', () => {
   }
   if (glideRaf) cancelAnimationFrame(glideRaf);
   glideRaf = 0;
-  glidePrev = 0;
   for (const [id, at] of glide) {
     const target = glideTarget(id);
     if (!target) continue;
-    at.x = target.x;
-    at.y = target.y;
+    at.x = at.sx = at.tx = target.x;
+    at.y = at.sy = at.ty = target.y;
+    at.t0 = 0;
   }
 });
 

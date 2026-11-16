@@ -6,6 +6,8 @@
 // zoom and every window size. The square sheet is checked too: a stroke that
 // leaves the paper has to stop at its edge, a press on the desk has to draw
 // nothing, and a sheet of 2000 strokes has to keep a frame inside one refresh.
+// A page in front has to glide its dot to a new point in about the 80 ms the
+// landing page cursors take, and not jump there.
 //
 // The app keeps its browser on port 9333, so this check uses its own port, its
 // own profile and its own relay.
@@ -390,7 +392,50 @@ try {
     `  page B resized from ${Math.round(zoomedB.rect.width)}x${Math.round(zoomedB.rect.height)} to ${Math.round(resizedB.rect.width)}x${Math.round(resizedB.rect.height)} and kept the dot`
   );
 
-  // 4. A zooms out around a corner while its hand stays still. The paper point
+  // 4. A dot glides to its point instead of jumping. A page in the background
+  // paints no frames, so B is held in front, the hand on A moves 600 sheet px
+  // and the check samples B until the tip is within 2 px of the point A sent.
+  await b.send('Page.bringToFront');
+  await sleep(200);
+  const glideFrom = (await b.eval(INSPECT)).tip;
+  const beforeGlide = pointerFrames().length;
+  await moveToSheet(a, { x: 1800, y: 1800 });
+  const glideWire = await waitFor(
+    () => (pointerFrames().length > beforeGlide ? lastPoint() : null),
+    'the pointer frame the glide reads',
+    4000
+  );
+  const glideStart = Date.now();
+  let landed = null;
+  while (Date.now() - glideStart < 1500) {
+    const now = await b.eval(INSPECT);
+    if (now && now.dot) {
+      const ex = (now.view.x + glideWire.x * now.view.z) * now.dpr;
+      const ey = (now.view.y + glideWire.y * now.view.z) * now.dpr;
+      if (Math.hypot(now.tip.x - ex, now.tip.y - ey) <= 2) {
+        landed = { ms: Date.now() - glideStart, state: now };
+        break;
+      }
+    }
+    await sleep(16);
+  }
+  assert.ok(landed, 'the front page never glided its dot to the point A sent');
+  const finalX = (landed.state.view.x + glideWire.x * landed.state.view.z) * landed.state.dpr;
+  const finalY = (landed.state.view.y + glideWire.y * landed.state.view.z) * landed.state.dpr;
+  const travel = Math.hypot(finalX - glideFrom.x, finalY - glideFrom.y);
+  assert.ok(travel > 40, `the glide moved the dot only ${round(travel)} px`);
+  // A jump would land on the first frame. The sample waits 16 ms between
+  // reads, so a glide is the only way the dot is still moving at 40 ms.
+  assert.ok(
+    landed.ms >= 40 && landed.ms <= 200,
+    `the dot reached its point in ${landed.ms} ms, which is not the 80 ms landing move`
+  );
+  console.log(`  the dot glided ${round(travel)} px and arrived within 2 px after ${landed.ms} ms`);
+  // Put the hand back where the lanes before this one left it.
+  await moveToSheet(a, held);
+  await sleep(150);
+
+  // 5. A zooms out around a corner while its hand stays still. The paper point
   // under the hand changes, so A has to send the new point without a move.
   const beforeZoomA = pointerFrames().length;
   console.log('  page A zooms out with a still hand');
@@ -417,7 +462,7 @@ try {
   moved('page A after its own zoom out', afterZoomA, held);
   await expectDot('page B for the zoomed point', b, afterZoomA);
 
-  // 5. A zooms in around the same corner. The point under a still hand moves
+  // 6. A zooms in around the same corner. The point under a still hand moves
   // again, and the dot has to land there.
   const beforeIn = pointerFrames().length;
   console.log('  page A zooms in with a still hand');
@@ -440,7 +485,7 @@ try {
   moved('page A after its own zoom in', afterIn, afterZoomA);
   await expectDot('page B for the zoomed in point', b, afterIn);
 
-  // 6. The zoom buttons change the view without a wheel, so they need the same
+  // 7. The zoom buttons change the view without a wheel, so they need the same
   // resend.
   for (const step of ['first', 'second']) {
     const before = pointerFrames().length;
@@ -464,7 +509,7 @@ try {
     await expectDot(`page B after zoom out click ${step}`, b, next);
   }
 
-  // 7. A changes window size with a zoomed view. A zoom is a choice, so the
+  // 8. A changes window size with a zoomed view. A zoom is a choice, so the
   // resize leaves the view alone and the paper point under the same client
   // place does not move.
   const beforeResize = await a.eval(INSPECT);
@@ -491,7 +536,7 @@ try {
   );
   await expectDot('page B after the window on A resized', b, still);
 
-  // 8. The other case is a sheet nobody zoomed: Fit, put the hand on the middle
+  // 9. The other case is a sheet nobody zoomed: Fit, put the hand on the middle
   // of the paper, then change the window. The sheet refits to the new shape and
   // the point under the hand is read again against the new view.
   await a.eval('fit()');
@@ -526,7 +571,7 @@ try {
   );
   await expectDot('page B after the refit', b, refit.pointer);
 
-  // 9. Leaving the paper has to clear the dot, so nothing draws on the desk.
+  // 10. Leaving the paper has to clear the dot, so nothing draws on the desk.
   const last = await a.eval(INSPECT);
   await a.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved',
@@ -541,7 +586,7 @@ try {
   await waitFor(async () => (await b.eval(INSPECT)).dot === 0, 'page B to drop the dot', 4000);
   console.log('  the dot left with the pointer');
 
-  // 10. Ink stops at the paper edge. The stroke starts on the sheet and the
+  // 11. Ink stops at the paper edge. The stroke starts on the sheet and the
   // hand leaves it, so every painted pixel has to sit inside the rectangle.
   const beforeInk = await a.eval(INSPECT);
   assert.equal(beforeInk.paper.width, beforeInk.paper.height, 'the sheet is not a square');
@@ -611,7 +656,7 @@ try {
     `  a stroke out of the sheet stopped at its edge: ink ${round(box.maxX - box.minX)}x${round(box.maxY - box.minY)} inside a ${round(paperRight - paperLeft)}x${round(paperBottom - paperTop)} paper`
   );
 
-  // 11. A press on the desk is not a stroke, so the model does not grow.
+  // 12. A press on the desk is not a stroke, so the model does not grow.
   const beforePress = await a.eval(INSPECT);
   await mouse(a, 'mousePressed', Math.round(beforePress.rect.left + 2), Math.round(beforePress.rect.top + 2), { clickCount: 1 });
   await mouse(a, 'mouseMoved', Math.round(beforePress.rect.left + 40), Math.round(beforePress.rect.top + 40), { buttons: 1 });
@@ -621,7 +666,7 @@ try {
   assert.equal(afterPress.total, beforePress.total, 'a press on the desk started a stroke');
   console.log('  a press on the desk drew nothing');
 
-  // 12. A crowded sheet keeps a cheap frame. The single stroke path is what a
+  // 13. A crowded sheet keeps a cheap frame. The single stroke path is what a
   // full repaint costs, and the page paints a frame from its ink bitmap.
   const perf = await a.eval(`(() => {
     const layer = state.layers[0];
@@ -710,7 +755,7 @@ try {
     `  ${perf.strokes} strokes: full repaint ${perf.fullMs} ms, cached frame ${perf.frameMs} ms, frame with a live line ${perf.liveMs} ms`
   );
 
-  // 13. Two thousand strokes is a sheet nobody draws by hand, and a frame still
+  // 14. Two thousand strokes is a sheet nobody draws by hand, and a frame still
   // has to land inside one refresh. The whole sheet is painted once for the
   // baseline, so a frame that scaled with the count would show up here.
   const stress = await a.eval(`(() => {
