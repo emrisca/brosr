@@ -486,6 +486,38 @@ h1 {
   color: var(--room-text);
 }
 
+/* A removed site waits under the list, so a row taken off the list can come
+   back without a visit to the site. */
+.cursor-sites-list .site-restore-head {
+  padding: 4px 2px 0;
+  color: var(--room-dim);
+  font-size: 11px;
+}
+
+.cursor-sites-list .site-restore-row {
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px dashed var(--room-border);
+  border-radius: var(--room-radius-sm);
+}
+
+.cursor-sites-list .site-restore-row .site-text {
+  flex: 1;
+}
+
+.cursor-sites-list .site-restore {
+  flex: none;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius-sm);
+  background: var(--room-card);
+  color: var(--room-text);
+  font: inherit;
+  font-size: 11px;
+}
+
 .cursor-sites-list .empty {
   display: block;
   padding: 0 2px;

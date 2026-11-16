@@ -224,6 +224,27 @@ function siteLabel(key) {
   return parts.path ? `${parts.host}${parts.path}` : parts.host;
 }
 
+// One address block for both lists. The address wraps instead of hiding its
+// tail, and the path takes its own line, so the canvas and notes rows never
+// read as the same site.
+function siteText(key) {
+  const parts = siteParts(key);
+  const text = document.createElement('span');
+  text.className = 'site-text';
+  text.title = key;
+  const host = document.createElement('span');
+  host.className = 'site-host';
+  host.textContent = parts.host;
+  text.append(host);
+  if (parts.path) {
+    const path = document.createElement('span');
+    path.className = 'site-path';
+    path.textContent = parts.path;
+    text.append(path);
+  }
+  return text;
+}
+
 function renderCursorSites(data) {
   const list = $('cursor-sites-list');
   if (!list) return;
@@ -237,15 +258,19 @@ function renderCursorSites(data) {
       return [];
     }
   })();
-  const forgotten = Array.isArray(data && data.cursorForgot) ? data.cursorForgot : [];
+  const forgotten = [
+    ...new Set(Array.isArray(data && data.cursorForgot) ? data.cursorForgot : []),
+  ];
   const keep = (key) => !forgotten.includes(key);
   const keys = [...new Set([...(policy || []), ...seen, ...defaults])].filter(keep);
   const active = (policy || defaults).filter(keep);
-  const signature = `${active.join(',')}|${keys.join(',')}`;
+  // A restore takes a row off the removed list, so that list is part of the
+  // signature and the two lists redraw together.
+  const signature = `${active.join(',')}|${keys.join(',')}|${forgotten.join(',')}`;
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   list.replaceChildren();
-  if (!keys.length) {
+  if (!keys.length && !forgotten.length) {
     const empty = document.createElement('li');
     empty.className = 'empty';
     empty.textContent = 'No sites yet. A site joins this list the first time someone visits it.';
@@ -264,27 +289,11 @@ function renderCursorSites(data) {
     const row = document.createElement('li');
     const label = document.createElement('label');
     label.className = 'switch-row';
-    const parts = siteParts(key);
-    const text = document.createElement('span');
-    text.className = 'site-text';
-    text.title = key;
-    const host = document.createElement('span');
-    host.className = 'site-host';
-    host.textContent = parts.host;
-    text.append(host);
-    // The path sits on its own line, so two long addresses on one host still
-    // read as different sites.
-    if (parts.path) {
-      const path = document.createElement('span');
-      path.className = 'site-path';
-      path.textContent = parts.path;
-      text.append(path);
-    }
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = active.includes(key);
     input.addEventListener('change', () => setCursorSite(key, input.checked));
-    label.append(text, input);
+    label.append(siteText(key), input);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'site-forget';
@@ -295,6 +304,31 @@ function renderCursorSites(data) {
     remove.addEventListener('click', () => forgetCursorSite(key));
     row.append(label, remove);
     list.append(row);
+  }
+  // A removed site waits below the list with one button to put it back, so a
+  // removal is a decision and not a dead end.
+  if (forgotten.length) {
+    const head = document.createElement('li');
+    head.className = 'site-restore-head';
+    head.textContent = 'Removed from this list';
+    list.append(head);
+    const byName = [...forgotten].sort((a, b) => siteLabel(a).localeCompare(siteLabel(b)));
+    for (const key of byName) {
+      const row = document.createElement('li');
+      row.className = 'site-restore-row';
+      const name = siteLabel(key);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'site-restore';
+      restore.title = `Put ${name} back on the list and switch it on`;
+      restore.setAttribute('aria-label', `Put ${name} back on the list and switch it on`);
+      restore.textContent = 'Restore';
+      // Switching a site on is the one path that clears a removal, so restore
+      // uses it and the list and the rule stay together.
+      restore.addEventListener('click', () => setCursorSite(key, true));
+      row.append(siteText(key), restore);
+      list.append(row);
+    }
   }
 }
 
