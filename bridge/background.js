@@ -330,8 +330,28 @@ async function considerTab(tab) {
   await shareTab(tab);
 }
 
+// The page a person is looking at names the site their cursor belongs to. The
+// room tab holds the socket and would otherwise name its own relay page for
+// the whole session, so the active tab is reported to it when it changes. A
+// room tab that comes to the front hands the name back to itself.
+async function reportActivePage(tab) {
+  const id = await roomTab();
+  if (!validId(id)) return;
+  const url = tab && tab.id !== id && shareable(tab.url) ? tab.url : null;
+  api.tabs.sendMessage(id, { type: 'brosr:active-page', url }).catch(() => {});
+}
+
+api.tabs.onActivated.addListener((info) => {
+  api.tabs.get(info.tabId).then((tab) => reportActivePage(tab)).catch(() => {});
+});
+
 // A new tab reports its URL on creation in Gecko and after a navigation in
 // Chromium, so both events ask the same question and the dedupe above holds.
+api.tabs.onUpdated.addListener((id, info, tab) => {
+  if (!info.url && info.status !== 'complete') return;
+  if (tab && tab.active) reportActivePage(tab).catch(() => {});
+});
+
 api.tabs.onUpdated.addListener((id, info, tab) => {
   if (!info.url && info.status !== 'complete') return;
   considerTab(tab || { id, url: info.url }).catch(() => {});

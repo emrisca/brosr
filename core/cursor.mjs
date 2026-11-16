@@ -19,7 +19,10 @@ export const ROOM_COLOURS = [
 
 const COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 // A presence frame is capped at 16 KB. Leave room for the rest of the frame.
-export const CURSOR_DATA_LIMIT = 12000;
+// An animated GIF keeps its own bytes, so the ceiling leaves about 1.8 KB for
+// the peer id, the name and the address. A smaller limit refused every frame
+// of a cursor that actually animates.
+export const CURSOR_DATA_LIMIT = 14200;
 
 export function isColour(value) {
   return typeof value === 'string' && COLOUR.test(value.trim());
@@ -139,8 +142,8 @@ export function cleanCursor(value) {
   const src = typeof value.src === 'string' ? value.src : '';
   if (!/^data:image\/(?:png|webp|gif|jpeg);base64,[a-z0-9+/=]+$/i.test(src)) return null;
   if (src.length > CURSOR_DATA_LIMIT) return null;
-  const width = Math.max(1, Math.min(64, Math.round(Number(value.w) || 32)));
-  const height = Math.max(1, Math.min(64, Math.round(Number(value.h) || 32)));
+  const width = Math.max(1, Math.min(96, Math.round(Number(value.w) || 32)));
+  const height = Math.max(1, Math.min(96, Math.round(Number(value.h) || 32)));
   const name = typeof value.name === 'string' ? value.name.replace(/\s+/g, ' ').trim() : '';
   return {
     src,

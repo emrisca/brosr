@@ -28,6 +28,7 @@ export async function holdChrome({ bin, args, dirs = [], state, waitMs = 25000 }
     detached: true,
     stdio: 'ignore',
     cwd: here,
+    windowsHide: true,
   });
   holder.unref();
 

@@ -172,7 +172,10 @@ function killTree(pid) {
   if (!alive(pid)) return false;
   try {
     if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
     } else {
       process.kill(-pid, 'SIGTERM');
     }
@@ -494,7 +497,11 @@ function bridgeVersion() {
 // other build takes the flags on the command line and is spawned here.
 async function launch(browser, args, dirs) {
   if (browser.family !== 'chromium' || !browser.branded) {
-    const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
+    const child = spawn(browser.path, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
     child.unref();
     return { pid: child.pid, holderPid: null, ids: null, errors: [] };
   }
@@ -549,6 +556,7 @@ export async function start(options = {}) {
     },
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
   });
   relay.unref();
 
@@ -592,7 +600,7 @@ export async function start(options = {}) {
         `--token=${trust.token}`,
         `--family=${browser.family}`,
       ],
-      { cwd: ROOT, detached: true, stdio: 'ignore' }
+      { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true }
     );
     helper.unref();
   }

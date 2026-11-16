@@ -263,6 +263,10 @@ async function startPageMedia() {
 
   const notice = new ActionNotice({ document });
   let lastApplied = null;
+  // A frame this tab applies moves its own player, and that player answers
+  // with play, pause and seek events. Those are not this person's acts, so the
+  // window keeps them from travelling back as a fresh command.
+  let remoteAppliedAt = 0;
   runtime.onMessage.addListener((message) => {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
@@ -289,6 +293,16 @@ async function startPageMedia() {
     const result = remote.handle(message);
     relay.last = result;
     publishRelay();
+    // Only a frame that carries an act, or a correction this tab had to issue,
+    // starts the echo window. A routine tick arrives four times a second, and a
+    // window that every tick refreshed never opened: a granted peer's own pause
+    // or seek was always inside it and never left the browser. A correction is
+    // the other case, because the seek would report itself as a person's act
+    // and pull the host's film back to this tab's own idea of the position.
+    const corrected = Boolean(result) && (result.action === 'seek' || result.action === 'seek-retry');
+    if (result && result.ok && !result.skipped && (message.action || corrected)) {
+      remoteAppliedAt = Date.now();
+    }
     if (!result || !result.ok || result.skipped) {
       lastApplied = null;
       return undefined;
@@ -321,9 +335,14 @@ async function startPageMedia() {
     if (typeof reply.names === 'boolean') showNames = reply.names;
     document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
   });
-  function reportMedia() {
+  function reportMedia(userAction = false) {
     const state = mediaStateFromDocument(document, pageHref(), location.hostname);
     if (!state) return;
+    // A person's play, pause, seek or rate change is an act. The four-a-second
+    // tick only reads the clock, and a granted peer that sent its own lag as
+    // an anchor pulled the host's playhead back and beat the host's own play
+    // and pause. An act crosses the room, a tick stays home.
+    state.action = Boolean(userAction);
     if (state.key !== relayKey) {
       relayKey = state.key;
       send({ type: 'brosr:media-hello', key: state.key }).catch(() => {});
@@ -339,9 +358,15 @@ async function startPageMedia() {
   setInterval(reportMedia, RELAY_TICK_MS);
 
   // A play, pause, seek or rate change is a whole act. It goes out at once,
-  // while the interval above catches the rest of the clock.
+  // while the interval above catches the rest of the clock. An act this tab
+  // just applied from the room is skipped, or two browsers answer each
+  // other's corrections forever.
+  const act = () => {
+    if (Date.now() - remoteAppliedAt < 600) return;
+    reportMedia(true);
+  };
   for (const type of ['play', 'pause', 'seeked', 'ratechange']) {
-    document.addEventListener(type, reportMedia, true);
+    document.addEventListener(type, act, true);
   }
 
   return { started: true, role: 'media', room: null, peerId: null };
@@ -1184,7 +1209,15 @@ export async function start() {
         if (role !== 'host') return reply({ ok: false, reason: 'not-host' });
         const key = cursorSiteOf(String(message.site || ''));
         if (!key) return reply({ ok: false, reason: 'bad-site' });
-        const next = new Set(client.publish().cursorSites || defaultCursorSites(location.href));
+        // A room with no policy yet allows every site. Switching one off has
+        // to remove only that site, so the base is every site this room has
+        // seen and not the two app defaults. The old base turned every other
+        // site off on the first click.
+        const published = client.publish();
+        const base = Array.isArray(published.cursorSites)
+          ? published.cursorSites
+          : [...(published.cursorSeen || []), ...defaultCursorSites(location.href)];
+        const next = new Set(base);
         if (message.on) next.add(key);
         else next.delete(key);
         cursorSites = client.setCursorSites([...next]) || [];
@@ -1225,6 +1258,12 @@ export async function start() {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
         return reply({ ok: Boolean(applied), granted: Boolean(message.allowed) });
       }
+      if (message.type === 'brosr:active-page') {
+        // The browser names the tab a person is looking at, so presence and
+        // the host's site list follow the site they browse and not only the
+        // room page that holds the socket.
+        return reply({ ok: client.setPageUrl(message.url || null) });
+      }
       if (message.type === 'brosr:media-state') {
         // A tab on this browser shows the film. The panel reads this copy as
         // the local position either way. Only the host room makes it the
@@ -1240,6 +1279,11 @@ export async function start() {
         // already stopped this report when playback sync is off, so the room
         // tab only has to put it on the socket under this peer's id.
         if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
+        // A granted peer drives the room with an act, never with its own
+        // clock. Its film may sit behind the anchor, and that lag sent four
+        // times a second dragged the host's film back and made the host's own
+        // play and pause lose to it.
+        if (!state.action) return reply({ ok: true, skipped: 'tick' });
         return reply({ ok: client.sendMedia(state), granted: true });
       }
       if (message.type === 'brosr:tabs-announce') {

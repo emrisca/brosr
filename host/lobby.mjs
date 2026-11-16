@@ -214,6 +214,7 @@ export async function ensureLobby() {
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
     env: { ...process.env, BROSR_LOBBY_PORT: String(LOBBY_PORT) },
   });
   child.unref();

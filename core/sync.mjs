@@ -1256,6 +1256,16 @@ export function createRoomClient({
     );
   }
 
+  // The page this browser is looking at. A tab that holds the film names the
+  // page with a pointer move, but a browser sitting still still has an active
+  // tab. The host needs that site for its list and its policy, or the room tab
+  // keeps naming its own relay page for the whole session.
+  function setPageUrl(url) {
+    lastPointerUrl = url ? String(url) : null;
+    noteSite(lastPointerUrl);
+    return true;
+  }
+
   // A cursor that lives on another tab of this browser reports here. Presence
   // publishes the newest point either way, so the room follows that tab.
   function setPointer(point, url) {
@@ -1439,6 +1449,7 @@ export function createRoomClient({
     tick,
     presence,
     setPointer,
+    setPageUrl,
     setColour,
     setRoomName,
     setCursor,

@@ -12,7 +12,7 @@ import {
   SEEK_TIMEOUT_MS,
 } from '../sync.mjs';
 import { RemoteMediaSync } from '../media-relay.mjs';
-import { cursorSiteOf, defaultCursorSites } from '../cursor.mjs';
+import { cleanCursor, cursorSiteOf, defaultCursorSites } from '../cursor.mjs';
 import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -706,6 +706,13 @@ test('a remote cursor reaches the browser, and a relayed pointer drives presence
   client.presence();
   assert.deepEqual(sent.at(-1).point, { x: 0.404, y: 0.126 });
   assert.equal(sent.at(-1).url, 'https://example.com/');
+
+  // The active tab names the page even before a pointer moves there. The site
+  // joins the host's list and presence carries the tab a person is reading.
+  assert.equal(client.setPageUrl('https://www.youtube.com/watch?v=abc'), true);
+  client.presence();
+  assert.equal(sent.at(-1).url, 'https://www.youtube.com/watch?v=abc');
+  assert.ok(client.publish().cursorSeen.includes('https://youtube.com'));
 });
 
 // The overlay only needs its own elements to place a cursor.
@@ -1284,6 +1291,20 @@ test('the host takes a site off the list, and a later visit does not bring it ba
   // A peer holds no list, so it cannot remove a row.
   const peer = createRoomClient({ role: 'peer', peerId: 'peer', hostId: 'host', now: () => 0 });
   assert.equal(peer.forgetSite('https://example.com/notes'), null);
+});
+
+test('a 96 px custom cursor keeps its size, and a larger one is clamped', () => {
+  // The panel serves an animated source up to 96 px, so the room must not
+  // shrink it back to 64 on the way in.
+  const image = (w, h) => ({ src: 'data:image/webp;base64,AAAA', name: 'star', w, h });
+  assert.equal(cleanCursor(image(96, 96)).w, 96);
+  assert.equal(cleanCursor(image(96, 96)).h, 96);
+  const big = cleanCursor(image(200, 180));
+  assert.equal(big.w, 96);
+  assert.equal(big.h, 96);
+  // A missing or zero size still falls back to 32.
+  assert.equal(cleanCursor({ src: 'data:image/webp;base64,AAAA' }).w, 32);
+  assert.equal(cleanCursor(image(0, 0)).w, 32);
 });
 
 test('a peer custom cursor and the name switch reach the drawn position', () => {

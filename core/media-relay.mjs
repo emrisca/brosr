@@ -371,6 +371,9 @@ export class RemoteMediaSync {
     this.lastSeekAt = -Infinity;
     this.seekIssuedAt = -Infinity;
     this.lastSeekTarget = null;
+    // A tab that has never applied a frame has no position of its own. Its
+    // first frame seeds the player, so it seeks rather than nudges.
+    this.primed = false;
     this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, last: null };
   }
 
@@ -450,8 +453,14 @@ export class RemoteMediaSync {
     // A paused room has no clock to nudge against. A small gap there is a seek,
     // because a rate change on a paused video only leaves a slow rate behind
     // for the moment the room resumes.
+    // A tab that just joined is the same case. It has no playhead to correct,
+    // only a place to start from, and a one percent nudge would spend a minute
+    // closing a gap the guest can see. The first frame seeks, and every frame
+    // after it keeps the room's own policy.
     const paused = !frame.playing;
-    const seekLimit = paused ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
+    const seed = !this.primed;
+    this.primed = true;
+    const seekLimit = paused || seed ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
     // A seek that never lands keeps the drift large, and this branch would win
     // every tick, so the film would never catch up. The retry is the one write
     // that frees the element, and the count says it happened.

@@ -245,8 +245,12 @@ test('a tab that shows the film seeks when the room is far ahead', () => {
 });
 
 test('a small gap gets a rate nudge instead of a seek', () => {
-  const video = fakeVideo({ currentTime: 100.5 });
+  const video = fakeVideo({ currentTime: 100 });
   const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => 10000 });
+  // The first frame seeds the tab, and a seeded tab keeps the room policy. The
+  // nudge below is the second frame, which is the case this test is about.
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: 10000 });
+  video.currentTime = 100.5;
   const result = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: 10000 });
   assert.equal(result.action, 'tick');
   assert.ok(Math.abs(video.playbackRate - 1 / 1.05) < 1e-9);
@@ -462,4 +466,28 @@ test('the room leaves the viewer volume alone', () => {
 
   assert.equal(reply.ok, true);
   assert.equal(video.volume, 0.35, 'the local volume stays where the viewer left it');
+});
+
+test('a tab that just joined seeks to the room instead of nudging', () => {
+  // A guest that opens the film lands wherever the room is. A gap under one
+  // second is a rate nudge for a tab that has been playing, but a fresh tab
+  // has no playhead to correct, only a place to start from.
+  const video = fakeVideo({ currentTime: 29.4, paused: false });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+
+  const reply = sync.handle({ key: ytKey, position: 30, playing: true, rate: 1, at: 10000 });
+  assert.equal(reply.action, 'seek');
+  assert.equal(video.currentTime, 30);
+  assert.equal(sync.primed, true);
+
+  // The next frame keeps the room policy, so the same small gap only nudges.
+  video.currentTime = 30.6;
+  const next = sync.handle({ key: ytKey, position: 30, playing: true, rate: 1, at: 10000 });
+  assert.equal(next.action, 'tick');
+  assert.ok(video.playbackRate < 1, 'a tab that is ahead slows down instead of seeking');
 });

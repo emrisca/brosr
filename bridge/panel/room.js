@@ -463,6 +463,19 @@ function renderCursorCards(cards) {
   }
 }
 
+// The room frame carries one image. This leaves room for the address and the
+// name that travel beside it.
+const CURSOR_MAX_DATA = 14000;
+
+function blobDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(reader.error || new Error('The cursor image did not read.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function cursorImage(preview) {
   const response = await fetchWithDeadline(preview, 8000, { credentials: 'include' });
   if (!response.ok) throw new Error('The preview did not load.');
@@ -470,6 +483,26 @@ async function cursorImage(preview) {
   if (!blob.type.startsWith('image/')) throw new Error('The preview is not an image.');
   if (blob.size > 500000) throw new Error('The cursor image is too large.');
   const bitmap = await createImageBitmap(blob);
+  // An animated cursor is a stack of frames. A canvas draws the first one and
+  // drops the rest, which is why an animated pick used to arrive as a still
+  // pointer. An image that carries its own motion keeps the bytes the site
+  // served, and a still image takes the smaller resize path below.
+  const animated = /^image\/(gif|webp)$/i.test(blob.type);
+  // The size is read before the bitmap closes. A closed bitmap reports a zero
+  // width, and a 96 px cursor would then reach the room as a 32 px one.
+  const width = Math.max(1, Math.min(96, bitmap.width || 32));
+  const height = Math.max(1, Math.min(96, bitmap.height || 32));
+  if (animated && bitmap.width <= 96 && bitmap.height <= 96) {
+    try {
+      const src = await blobDataUrl(blob);
+      if (src && src.length <= CURSOR_MAX_DATA) {
+        bitmap.close?.();
+        return { src, w: width, h: height };
+      }
+    } catch {
+      // A blob that will not read falls through to the resized still.
+    }
+  }
   for (const size of [32, 28, 24, 20]) {
     const canvas = document.createElement('canvas');
     canvas.width = size;
@@ -481,7 +514,7 @@ async function cursorImage(preview) {
     context.drawImage(bitmap, 0, 0, size, size);
     let src = canvas.toDataURL('image/webp', 0.82);
     if (!src.startsWith('data:image/webp')) src = canvas.toDataURL('image/png');
-    if (src.length <= 11800) {
+    if (src.length <= CURSOR_MAX_DATA) {
       bitmap.close?.();
       return { src, w: size, h: size };
     }

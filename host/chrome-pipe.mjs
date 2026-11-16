@@ -125,6 +125,7 @@ export function spawnPipe(bin, args, { cwd, env } = {}) {
     env,
     stdio: pipeStdio(),
     detached: true,
+    windowsHide: true,
   });
   const client = new PipeClient(child.stdio[PIPE_IN], child.stdio[PIPE_OUT]);
   return { child, client };
