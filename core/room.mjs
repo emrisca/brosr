@@ -1,5 +1,5 @@
 // Room state: who is here, what sequence the room is at, and the two rate
-// limits from Section 10 of ../plan.md. It holds no transport and no DOM.
+// limits from Section 10 of ../docs/plan.md. It holds no transport and no DOM.
 
 export const MAX_INPUT_PER_SECOND = 120;
 export const MAX_NAV_PER_SECOND = 1;

@@ -1,5 +1,5 @@
 // The seal for the transport: one room key, one random nonce per frame,
-// XChaCha20-Poly1305 over the frame bytes. Section 10, rule 4 of ../plan.md.
+// XChaCha20-Poly1305 over the frame bytes. Section 10, rule 4 of ../docs/plan.md.
 //
 // The cipher is plain JavaScript, not `node:crypto`, so the same module runs in
 // a content script and in a Node test. HKDF is plain JavaScript too, because a

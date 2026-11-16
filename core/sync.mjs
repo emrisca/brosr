@@ -69,8 +69,8 @@ export function createRoomClient({
   // A media frame for a film this tab does not hold. The room hands it to the
   // tab that does, and a false reply keeps the frame unhandled.
   onMedia = null,
-  // The page this tab shows. Presence carries it, and a cursor draws only on
-  // the tab that shows the same page.
+  // The page this tab shows. Presence carries it so another tab knows where
+  // the pointer is.
   pageUrl = null,
   now = () => Date.now(),
   overlay = true,
@@ -156,7 +156,7 @@ export function createRoomClient({
   // The last point of every peer on this page, as a share. A resize places each
   // cursor again from these, because the pixels it drew at are gone.
   const peerPoints = new Map();
-  // The page that point belongs to. A cursor shows only on that page.
+  // The page that point belongs to.
   let lastPointerUrl = null;
   // The last frame that reached this tab, so a change can be named once.
   let lastMediaFrame = null;
@@ -644,16 +644,11 @@ export function createRoomClient({
       }
     }
     if (!cursor) return;
-    // A cursor belongs to one page. A tab shows it only while the peer is on
-    // that same page, so a pointer never lands on an unrelated tab.
-    const here = pageUrl ? pageUrl() : '';
-    if (!message.url || !here || message.url !== here) {
-      peerPoints.delete(message.peerId);
-      cursor.removePeer(message.peerId);
-    } else {
-      peerPoints.set(message.peerId, position);
-      cursor.setPeer({ ...position, point: pointPixels(point) });
-    }
+    // A pointer shows on whatever site this person is reading, so a cursor is
+    // not tied to the page it was sent from. The share keeps it honest when
+    // the two windows differ in size.
+    peerPoints.set(message.peerId, position);
+    cursor.setPeer({ ...position, point: pointPixels(point) });
     stats.cursors = cursor.stats().peers;
   }
 
@@ -1014,8 +1009,8 @@ export function createRoomClient({
         : { x: 0, y: 0 },
       roomTime: roomTimeOf(),
     };
-    // The page this cursor is on. Another tab draws it only when it shows that
-    // same page.
+    // The page this cursor is on. The room tab forwards the frame, so the
+    // pointer can land on any site this browser has open.
     const here = peer.url || lastPointerUrl || (pageUrl ? pageUrl() : null);
     if (here) message.url = here;
     sendMessage(message);
@@ -1061,9 +1056,7 @@ export function createRoomClient({
       });
     }
     if (!cursor) return;
-    const here = pageUrl ? pageUrl() : '';
     for (const [id, entry] of peerPoints) {
-      if (entry.url && here && entry.url !== here) continue;
       cursor.setPeer({ ...entry, id, point: pointPixels(entry.point) });
     }
   }

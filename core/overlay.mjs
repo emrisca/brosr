@@ -1,4 +1,4 @@
-// The cursor overlay. Rule 1 in Section 4.3 of ../plan.md: it draws inside one
+// The cursor overlay. Rule 1 in Section 4.3 of ../docs/plan.md: it draws inside one
 // closed shadow root, pinned to the viewport, with pointer events off. It adds
 // no global CSS and no wrapper that a page style could reach.
 

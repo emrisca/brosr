@@ -1,5 +1,5 @@
 // Layer 4: input relay, control grants and the receiver-side guards.
-// Section 8 and Section 10 of ../plan.md are the specification.
+// Section 8 and Section 10 of ../docs/plan.md are the specification.
 
 import { encode, splitInput } from './protocol.mjs';
 

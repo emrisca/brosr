@@ -16,7 +16,7 @@ Status: the M0 spike passed and the M1 core runs. Nothing ships yet.
 
 | Path | Contents |
 | --- | --- |
-| `plan.md` | The design. What syncs, what cannot, the protocol, safety and the milestones. |
+| `docs/plan.md` | The design. What syncs, what cannot, the protocol, safety and the milestones. |
 | `core/` | The shared room code: protocol, clock, drift policy, media adapter, cursor overlay, input guards and the client. It holds no socket and no browser API. |
 | `bridge/` | The room extension: background script, content script and room panel. `zen/package.mjs` builds the Firefox XPI and the Chromium folder. |
 | `host/` | The room lifecycle: detect a browser, build a profile, run the relay, open the browser, and answer one JSON line per command. |
@@ -160,7 +160,7 @@ The `.runtime` directory stays out of git, because a run rebuilds it.
 
 ## Where to read the detail
 
-- [plan.md](plan.md) states the design and the limits, with the number each claim must meet.
+- [docs/plan.md](docs/plan.md) states the design and the limits, with the number each claim must meet.
 - [core/README.md](core/README.md) explains the modules and the five rules the code depends on.
 - [spike/README.md](spike/README.md) records the last run and the findings that changed the code.
 - [docs/m0-results.md](docs/m0-results.md) summarises the M0 measurements.

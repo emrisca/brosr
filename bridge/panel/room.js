@@ -278,7 +278,7 @@ function renderCursorCards(cards) {
 }
 
 async function cursorImage(preview) {
-  const response = await fetch(preview, { credentials: 'include' });
+  const response = await fetchWithDeadline(preview, 8000, { credentials: 'include' });
   if (!response.ok) throw new Error('The preview did not load.');
   const blob = await response.blob();
   if (!blob.type.startsWith('image/')) throw new Error('The preview is not an image.');
@@ -326,6 +326,78 @@ async function chooseCursor(card, button) {
   }
 }
 
+// A challenged request can hang instead of failing, so every read of the site
+// carries a deadline and the tab fallback takes over when it expires.
+async function fetchWithDeadline(url, ms, options) {
+  const control = new AbortController();
+  const timer = setTimeout(() => control.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: control.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The site answers an extension fetch with its bot check, so a tab that
+// already loaded the set hands over the page it rendered. With no such tab,
+// the set gets one of its own for as long as it takes to read the markup.
+async function cursorSetHtml(url) {
+  const readTab = async (tabId) => {
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      try {
+        const reply = await api.tabs.sendMessage(tabId, { type: 'brosr:cursor-set' });
+        if (reply && reply.ok && typeof reply.html === 'string') return reply.html;
+      } catch {
+        // The page may still be loading its content script.
+      }
+      try {
+        // A tab opened in the background does not always run its content
+        // script, and this read does not wait for one.
+        const results = await api.scripting.executeScript({
+          target: { tabId },
+          func: () => (document.documentElement ? document.documentElement.outerHTML : ''),
+        });
+        const html = results && results[0] ? results[0].result : '';
+        if (typeof html === 'string' && html.includes('cursor-set-link')) return html;
+      } catch {
+        // The tab may still be on its way to the set page.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return null;
+  };
+  try {
+    const response = await fetchWithDeadline(url, 4000, {
+      credentials: 'include',
+      redirect: 'follow',
+    });
+    if (response.ok) {
+      const html = await response.text();
+      if (!/Just a moment|challenge-platform|cf-chl/i.test(html)) return html;
+    }
+  } catch {
+    // Fall through to a tab.
+  }
+  try {
+    const prefix = url.origin + url.pathname;
+    const tabs = (await api.tabs.query({})).filter(usable);
+    const open = tabs.find((entry) => String(entry.url || '').startsWith(prefix));
+    if (open) return await readTab(open.id);
+    const created = await api.tabs.create({ url: url.toString(), active: false });
+    if (!created || created.id === undefined) return null;
+    const html = await readTab(created.id);
+    try {
+      await api.tabs.remove(created.id);
+    } catch {
+      // The tab is the browser's problem now.
+    }
+    return html;
+  } catch {
+    // No tab answered.
+  }
+  return null;
+}
+
 async function loadCursorSet() {
   const url = cursorSetUrl($('cursor-set').value);
   if (!url) {
@@ -337,10 +409,8 @@ async function loadCursorSet() {
   cursorBusy = true;
   setCursorStatus('Loading the set...');
   try {
-    const response = await fetch(url, { credentials: 'include', redirect: 'follow' });
-    if (!response.ok) throw new Error('The set did not load.');
-    const html = await response.text();
-    if (/Just a moment|challenge-platform|cf-chl/i.test(html)) {
+    const html = await cursorSetHtml(url);
+    if (!html) {
       throw new Error('cursors-4u is checking this browser. Open the set in a tab, then load it again.');
     }
     const cards = parseCursorSet(html, url);

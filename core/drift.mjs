@@ -1,4 +1,4 @@
-// The media policy from Section 7 of ../plan.md.
+// The media policy from Section 7 of ../docs/plan.md.
 // A seek costs a visible stutter, so it is the last resort. A rate nudge of
 // five percent is inaudible and closes small errors without one.
 

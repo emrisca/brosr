@@ -17,12 +17,26 @@ import {
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
-import { ActionNotice, mediaAction } from './overlay.mjs';
+import { ActionNotice, CursorOverlay, mediaAction } from './overlay.mjs';
 import { cleanCursor, cleanRoomName, isColour, randomColour } from './cursor.mjs';
 import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
+
+// The person who picked a cursor sees it on their own screen too. The image
+// goes on the document, so every site this browser opens carries it.
+const CURSOR_HOTSPOT = 0.12;
+function applyOwnCursor(cursor) {
+  const root = document.documentElement;
+  if (!root) return;
+  if (cursor && cursor.src) {
+    const hotspot = Math.max(0, Math.round((Number(cursor.w) || 32) * CURSOR_HOTSPOT));
+    root.style.setProperty('cursor', `url("${cursor.src}") ${hotspot} ${hotspot}, auto`);
+  } else {
+    root.style.removeProperty('cursor');
+  }
+}
 
 // The panel button stays off unrelated pages. A room page is the landing page
 // opened with room params, or a fixture whose name starts with one of the room
@@ -74,8 +88,8 @@ function cursorKey(href) {
 }
 
 // A tab outside the room can still hold the film, and the room tab holds the
-// socket. Only media crosses that gap. A cursor stays in the room tab, because
-// a pointer on a page the room did not open points at nothing.
+// socket. Media and pointers cross that gap: the room tab forwards every
+// cursor, so a peer pointer shows on whatever site this person reads.
 async function startPageMedia() {
   const runtime = api && api.runtime;
   if (!runtime || typeof runtime.sendMessage !== 'function' || !runtime.onMessage) {
@@ -118,10 +132,78 @@ async function startPageMedia() {
   // this browser's own report before it relays anything. The notice names the
   // person behind the change, and a skipped frame resets the baseline so the
   // end of an ad never reads as a person seeking.
+  // Cursors reach every tab of this browser, so a peer pointer lands on
+  // whatever site this person is reading. The room tab owns the socket and
+  // forwards each frame here.
+  const cursorLayer =
+    window.top === window ? new CursorOverlay({ document }).attach() : null;
+  const cursorPoints = new Map();
+  const pixelPoint = (point) => ({
+    x: Math.max(0, Math.min(1, Number(point && point.x) || 0)) * window.innerWidth,
+    y: Math.max(0, Math.min(1, Number(point && point.y) || 0)) * window.innerHeight,
+  });
+  const placeCursor = (entry) => {
+    if (!cursorLayer || !entry || !entry.id) return;
+    const share = entry.point || { x: 0, y: 0 };
+    cursorPoints.set(entry.id, { ...entry, point: share });
+    cursorLayer.setPeer({
+      id: entry.id,
+      name: entry.name,
+      colour: entry.colour,
+      cursor: entry.cursor || null,
+      point: pixelPoint(share),
+    });
+    // The overlay lives in a closed shadow root, so this count is the only
+    // readable proof that a peer pointer reached this page.
+    document.documentElement.dataset.brosrCursors = String(cursorPoints.size);
+  };
+  if (window.top === window && typeof window.addEventListener === 'function') {
+    window.addEventListener(
+      'resize',
+      () => {
+        for (const [id, entry] of cursorPoints) placeCursor({ ...entry, id });
+      },
+      { passive: true }
+    );
+  }
+
+  // A pointer on any site tells the room tab where this person is, so a peer
+  // sees the cursor move here and not only on the room page. Replayed input is
+  // skipped, because that pointer belongs to the other person.
+  if (window.top === window && typeof document.addEventListener === 'function') {
+    let lastPointAt = 0;
+    document.addEventListener(
+      'pointermove',
+      (event) => {
+        if (!event.isTrusted) return;
+        const at = Date.now();
+        if (at - lastPointAt < 50) return;
+        lastPointAt = at;
+        const width = Math.max(1, window.innerWidth);
+        const height = Math.max(1, window.innerHeight);
+        send({
+          type: 'brosr:presence-point',
+          point: { x: event.clientX / width, y: event.clientY / height },
+          url: location.href,
+        });
+      },
+      { passive: true, capture: true }
+    );
+  }
+
   const notice = new ActionNotice({ document });
   let lastApplied = null;
   runtime.onMessage.addListener((message) => {
-    if (!message || message.type !== 'brosr:media-apply') return undefined;
+    if (!message) return undefined;
+    if (message.type === 'brosr:presence-draw') {
+      placeCursor(message.position);
+      return undefined;
+    }
+    if (message.type === 'brosr:cursor-image') {
+      applyOwnCursor(message.cursor || null);
+      return undefined;
+    }
+    if (message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
     const result = remote.handle(message);
     relay.last = result;
@@ -262,6 +344,10 @@ export async function start() {
       return null;
     }
   })());
+  let ownCursor = savedCursor;
+  // A cursor chosen for the room is also the cursor this person uses. Apply it
+  // before the socket opens, so no page flickers back to the system arrow.
+  applyOwnCursor(ownCursor);
   const sharePointer = readSetting('brosr-share-pointer') !== '0';
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
@@ -300,6 +386,9 @@ export async function start() {
   let trustTarget = null;
   let sealedOut = 0;
   let sealedIn = 0;
+  // A forwarded pointer runs at most twenty times a second, which is enough
+  // for a cursor and cheap for every tab in this browser.
+  let lastPresenceSent = 0;
 
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
@@ -445,6 +534,18 @@ export async function start() {
     },
     // The room tab holds no player, so a frame for a film goes to the tab that
     // does. The tab applies the anchor against its own element.
+    // The room tab owns the socket, so it forwards each pointer to the rest of
+    // this browser. Every tab draws it, because a cursor is not tied to one
+    // site.
+    onPresence: (position) => {
+      if (!api || !api.runtime || !api.runtime.sendMessage) return;
+      const at = Date.now();
+      if (at - lastPresenceSent < 50) return;
+      lastPresenceSent = at;
+      api.runtime
+        .sendMessage({ type: 'brosr:presence-draw', position })
+        .catch(() => {});
+    },
     onMedia: (message) => {
       // The host's film is the anchor. Its own frame coming back would seek the
       // film against itself, and a page player answers a seek loop with an
@@ -778,7 +879,9 @@ export async function start() {
     // The panel cannot see this tab with tabs.query in a headless window, so
     // the tab registers itself instead.
     const hello = () =>
-      api.runtime.sendMessage({ type: 'brosr:room-hello', role }).catch(() => {});
+      api.runtime
+        .sendMessage({ type: 'brosr:room-hello', role, cursor: ownCursor })
+        .catch(() => {});
     hello();
     setInterval(hello, 2000);
     setInterval(async () => {
@@ -908,6 +1011,15 @@ export async function start() {
           `brosr-cursor:${room}`,
           next ? JSON.stringify(next) : null
         );
+        ownCursor = next || null;
+        applyOwnCursor(ownCursor);
+        // Every tab shows the same pointer, so the image has to leave this
+        // page as well as join the room.
+        if (api && api.runtime && api.runtime.sendMessage) {
+          api.runtime
+            .sendMessage({ type: 'brosr:own-cursor', cursor: ownCursor })
+            .catch(() => {});
+        }
         publish();
         return reply({ ok: true, cursor: next });
       }
@@ -916,6 +1028,20 @@ export async function start() {
         writeSetting('brosr-share-pointer', next ? '1' : '0');
         publish();
         return reply({ ok: true, sharePointer: next });
+      }
+      if (message.type === 'brosr:presence-point') {
+        // Another tab of this browser owns the mouse. Presence carries that
+        // point, so the room still shows one cursor for this person.
+        return reply({ ok: client.setPointer(message.point, message.url) });
+      }
+      if (message.type === 'brosr:cursor-set') {
+        // cursors-4u answers an extension fetch with its bot check, so the
+        // panel reads the page a real tab already rendered instead.
+        const here = String(location.href || '');
+        if (!/^https?:\/\/(www\.)?cursors-4u\.com\/cursor\//i.test(here)) {
+          return reply({ ok: false, reason: 'not-a-set-page' });
+        }
+        return reply({ ok: true, html: document.documentElement.outerHTML, url: here });
       }
       if (message.type === 'brosr:grant') {
         const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));

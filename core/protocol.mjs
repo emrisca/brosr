@@ -1,5 +1,5 @@
 // The Brosr wire protocol. One JSON message per frame, with a 16 KB ceiling.
-// Section 7 of ../plan.md is the specification this file implements.
+// Section 7 of ../docs/plan.md is the specification this file implements.
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 16 * 1024;

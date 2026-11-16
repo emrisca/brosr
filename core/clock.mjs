@@ -1,4 +1,4 @@
-// Room clock. The four-timestamp exchange from Section 7 of ../plan.md.
+// Room clock. The four-timestamp exchange from Section 7 of ../docs/plan.md.
 // The sample with the smallest round trip wins, because a small round trip
 // is the closest thing to a clean path that a pair of peers can observe.
 

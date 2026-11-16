@@ -733,7 +733,7 @@ function cursorDocument() {
   return { documentElement: make(), createElement: make, createElementNS: make };
 }
 
-test('a cursor draws only on the page it belongs to', () => {
+test('a cursor draws on every page this person reads', () => {
   const client = createRoomClient({
     role: 'peer',
     peerId: 'peer',
@@ -754,17 +754,17 @@ test('a cursor draws only on the page it belongs to', () => {
       roomTime: 0,
     });
 
-  // A peer on another page draws nothing here, so the pointer never lands on
-  // an unrelated tab.
+  // A peer on another site still points at this page, because a cursor is not
+  // tied to the page it was sent from.
   client.receive(presence('https://www.youtube.com/watch?v=1', 0.1), 0);
-  assert.equal(client.publish().cursors, 0);
+  assert.equal(client.publish().cursors, 1);
 
   client.receive(presence('https://example.com/', 0.2), 0);
   assert.equal(client.publish().cursors, 1);
 
-  // The peer moves to another page, so the cursor leaves this one.
+  // The peer moves again, and the cursor stays with the newest point.
   client.receive(presence('https://www.youtube.com/watch?v=2', 0.3), 0);
-  assert.equal(client.publish().cursors, 0);
+  assert.equal(client.publish().cursors, 1);
 });
 
 test('a presence share lands the cursor at the same place in any window', () => {

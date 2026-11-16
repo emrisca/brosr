@@ -1,6 +1,6 @@
 # M0 results
 
-Section 12 of [plan.md](../plan.md) asks four questions before design work starts. The spike
+Section 12 of [plan.md](plan.md) asks four questions before design work starts. The spike
 answers them on a real Firefox. It also exercises the M1, M3 and M4 work, because those layers
 share the harness. [spike/README.md](../spike/README.md) holds the full table and the findings
 that changed the code.

@@ -2,7 +2,7 @@
 
 ## The handoff bus
 
-The two machines talk through `handoff.mjs`. `HANDOFF.md` is a record and not a channel.
+The two machines talk through `handoff.mjs`. `docs/HANDOFF.md` is a record and not a channel.
 
 Start every turn with:
 
@@ -24,7 +24,7 @@ stay out of git.
 
 Syncthing writes `.syncthing.<name>.tmp` beside a file while it copies it. This Mac ran two
 Syncthing installs at once, so one instance orphaned a partial write. The duplicate is gone, and
-`SKILL.md` vanished a second time anyway, so a delete can also arrive from the other machine.
+`docs/SKILL.md` vanished a second time anyway, so a delete can also arrive from the other machine.
 Check that both folder roots map to `brosr/` before you trust a sync.
 
 Run `node handoff.mjs tidy` to clear temps older than 15 minutes. `tidy --dry-run` lists them

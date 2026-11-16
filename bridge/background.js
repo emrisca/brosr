@@ -343,6 +343,23 @@ async function handle(message, sender) {
         await save({ roomTabId: from, roomRole });
       }
     }
+    // A tab that opens later still gets the cursor this person picked. The
+    // room tab repeats this hello, so the image follows every new tab.
+    if (message.cursor !== undefined) {
+      const all = await api.tabs.query({}).catch(() => []);
+      await Promise.all(
+        all
+          .filter((tab) => validId(tab.id) && tab.id !== from && shareable(tab.url))
+          .map((tab) =>
+            api.tabs
+              .sendMessage(tab.id, {
+                type: 'brosr:cursor-image',
+                cursor: message.cursor || null,
+              })
+              .catch(() => {})
+          )
+      );
+    }
     return { ok: true };
   }
   if (message.type === 'brosr:room-tab') {
@@ -652,6 +669,64 @@ async function handle(message, sender) {
       )
     );
     return { ok: true, sent: results.filter(Boolean).length };
+  }
+  // A peer pointer is for every site this person reads, so the room tab hands
+  // each frame here and every other tab draws it.
+  if (message.type === 'brosr:presence-draw') {
+    const from = sender && sender.tab ? sender.tab.id : null;
+    const all = await api.tabs.query({}).catch(() => []);
+    await Promise.all(
+      all
+        .filter((tab) => validId(tab.id) && tab.id !== from && shareable(tab.url))
+        .map((tab) =>
+          api.tabs
+            .sendMessage(tab.id, {
+              type: 'brosr:presence-draw',
+              position: message.position,
+            })
+            .catch(() => {})
+        )
+    );
+    return { ok: true };
+  }
+  // A new cursor image goes to every tab, so the person sees their own pick
+  // wherever they are and not only on the room tab.
+  if (message.type === 'brosr:own-cursor') {
+    const from = sender && sender.tab ? sender.tab.id : null;
+    const all = await api.tabs.query({}).catch(() => []);
+    await Promise.all(
+      all
+        .filter((tab) => validId(tab.id) && tab.id !== from && shareable(tab.url))
+        .map((tab) =>
+          api.tabs
+            .sendMessage(tab.id, {
+              type: 'brosr:cursor-image',
+              cursor: message.cursor || null,
+            })
+            .catch(() => {})
+        )
+    );
+    return { ok: true };
+  }
+  // The mouse may sit on a tab that holds no socket. That tab reports the
+  // point here, and the room tab speaks for this person on the wire.
+  if (message.type === 'brosr:presence-point') {
+    const point = message.point && typeof message.point === 'object' ? message.point : null;
+    if (!point) return { ok: false, reason: 'point' };
+    const id = await roomTab();
+    if (!validId(id)) return { ok: false, reason: 'no-room-tab' };
+    const from = sender && sender.tab ? sender.tab.id : null;
+    if (id === from) return { ok: true, skipped: 'sender' };
+    try {
+      await api.tabs.sendMessage(id, {
+        type: 'brosr:presence-point',
+        point,
+        url: message.url || null,
+      });
+    } catch {
+      return { ok: false, reason: 'send' };
+    }
+    return { ok: true };
   }
   return undefined;
 }

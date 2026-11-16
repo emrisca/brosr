@@ -58,3 +58,7 @@ Thumbs.db
 desktop.ini
 .localized
 app/src-tauri/resources/
+/docs/plan.md
+/docs/HANDOFF.md
+/spike/results.json
+/spike/bridge/
