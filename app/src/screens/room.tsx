@@ -16,7 +16,11 @@ function Dot({ on, className }: { on: boolean; className?: string }) {
   return (
     <span
       aria-hidden="true"
-      className={cn('size-1.5 rounded-full', on ? 'bg-brand' : 'bg-muted-foreground', className)}
+      className={cn(
+        'size-1.5 shrink-0 rounded-full',
+        on ? 'bg-brand' : 'bg-muted-foreground',
+        className
+      )}
     />
   );
 }
@@ -25,7 +29,7 @@ function Metric({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 rounded-md bg-muted p-2">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="flex items-center gap-1.5 text-sm font-medium">{children}</div>
+      <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium">{children}</div>
     </div>
   );
 }
@@ -179,7 +183,13 @@ export function Room({ run, onLeave }: Props) {
       <div className="grid grid-cols-2 gap-2">
         <Metric label="Relay">
           <Dot on={relayReady} />
-          {relayReady ? relayAddress : 'Starting'}
+          {relayReady ? (
+            <span className="truncate" title={relayAddress}>
+              {relayAddress}
+            </span>
+          ) : (
+            'Starting'
+          )}
         </Metric>
         <Metric label="Browser">
           <Dot on={browserOpen} />
