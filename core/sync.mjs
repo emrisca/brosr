@@ -7,7 +7,14 @@ import { ClockEstimator } from './clock.mjs';
 import { DriftController } from './drift.mjs';
 import { MediaAdapter, bufferedAround } from './media.mjs';
 import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
-import { ROOM_COLOURS, cleanCursor, cleanRoomName, isColour, nextColour } from './cursor.mjs';
+import {
+  ROOM_COLOURS,
+  cleanCursor,
+  cleanRoomName,
+  isColour,
+  nextColour,
+  siteOf,
+} from './cursor.mjs';
 import { Room } from './room.mjs';
 import {
   GrantBook,
@@ -644,9 +651,17 @@ export function createRoomClient({
       }
     }
     if (!cursor) return;
-    // A pointer shows on whatever site this person is reading, so a cursor is
-    // not tied to the page it was sent from. The share keeps it honest when
-    // the two windows differ in size.
+    // A pointer belongs to the site it was sent from. Two people reading
+    // different sites never see each other's mouse, and the share keeps the
+    // point honest when the two windows differ in size.
+    const here = pageUrl ? pageUrl() : null;
+    if (!siteOf(message.url) || siteOf(message.url) !== siteOf(here)) {
+      // The peer moved to another site, so the cursor leaves this page.
+      peerPoints.delete(message.peerId);
+      cursor.removePeer(message.peerId);
+      stats.cursors = cursor.stats().peers;
+      return;
+    }
     peerPoints.set(message.peerId, position);
     cursor.setPeer({ ...position, point: pointPixels(point) });
     stats.cursors = cursor.stats().peers;

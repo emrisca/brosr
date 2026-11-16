@@ -733,7 +733,7 @@ function cursorDocument() {
   return { documentElement: make(), createElement: make, createElementNS: make };
 }
 
-test('a cursor draws on every page this person reads', () => {
+test('a cursor stays on the site it was sent from', () => {
   const client = createRoomClient({
     role: 'peer',
     peerId: 'peer',
@@ -754,16 +754,27 @@ test('a cursor draws on every page this person reads', () => {
       roomTime: 0,
     });
 
-  // A peer on another site still points at this page, because a cursor is not
-  // tied to the page it was sent from.
+  // A peer on another site is not on this page, so nothing draws here.
   client.receive(presence('https://www.youtube.com/watch?v=1', 0.1), 0);
-  assert.equal(client.publish().cursors, 1);
+  assert.equal(client.publish().cursors, 0);
 
+  // The same site is the page this person reads, so the cursor lands.
   client.receive(presence('https://example.com/', 0.2), 0);
   assert.equal(client.publish().cursors, 1);
 
-  // The peer moves again, and the cursor stays with the newest point.
+  // The peer moves to another site, and the cursor leaves this page.
   client.receive(presence('https://www.youtube.com/watch?v=2', 0.3), 0);
+  assert.equal(client.publish().cursors, 0);
+
+  // A peer whose page is unknown never lands on a guess.
+  client.receive(
+    encode({ type: 'presence', peerId: 'p3', name: 'Q', point: { x: 0.2, y: 0.2 }, roomTime: 0 }),
+    0
+  );
+  assert.equal(client.publish().cursors, 0);
+
+  // Back on this site, the cursor returns at the newest point.
+  client.receive(presence('https://example.com/other', 0.4), 0);
   assert.equal(client.publish().cursors, 1);
 });
 

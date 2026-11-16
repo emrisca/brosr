@@ -30,6 +30,18 @@ export function cleanRoomName(value, fallback = 'Room') {
   return (text || fallback).slice(0, 48);
 }
 
+// Two people see each other's pointer only on the same site. Presence carries
+// the page it came from, so this key decides whether a cursor belongs here.
+// An unreadable address answers an empty key, which never matches a real site.
+export function siteOf(href) {
+  try {
+    const url = new URL(String(href || ''));
+    return url.origin === 'null' ? '' : url.origin;
+  } catch {
+    return '';
+  }
+}
+
 function channel(value) {
   return Math.round(value).toString(16).padStart(2, '0');
 }

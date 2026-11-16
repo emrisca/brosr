@@ -18,7 +18,7 @@ import {
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
 import { ActionNotice, CursorOverlay, mediaAction } from './overlay.mjs';
-import { cleanCursor, cleanRoomName, isColour, randomColour } from './cursor.mjs';
+import { cleanCursor, cleanRoomName, isColour, randomColour, siteOf } from './cursor.mjs';
 import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
@@ -132,9 +132,9 @@ async function startPageMedia() {
   // this browser's own report before it relays anything. The notice names the
   // person behind the change, and a skipped frame resets the baseline so the
   // end of an ad never reads as a person seeking.
-  // Cursors reach every tab of this browser, so a peer pointer lands on
-  // whatever site this person is reading. The room tab owns the socket and
-  // forwards each frame here.
+  // Cursors reach every tab of this browser, and each tab draws only the
+  // peers on its own site. The room tab owns the socket and forwards each
+  // frame here.
   const cursorLayer =
     window.top === window ? new CursorOverlay({ document }).attach() : null;
   const cursorPoints = new Map();
@@ -144,6 +144,15 @@ async function startPageMedia() {
   });
   const placeCursor = (entry) => {
     if (!cursorLayer || !entry || !entry.id) return;
+    // A peer pointer belongs to the site it was sent from, so a tab on another
+    // site drops it instead of drawing a mouse that is not here.
+    if (!entry.url || siteOf(entry.url) !== siteOf(location.href)) {
+      if (cursorPoints.delete(entry.id)) {
+        cursorLayer.removePeer(entry.id);
+        document.documentElement.dataset.brosrCursors = String(cursorPoints.size);
+      }
+      return;
+    }
     const share = entry.point || { x: 0, y: 0 };
     cursorPoints.set(entry.id, { ...entry, point: share });
     cursorLayer.setPeer({
