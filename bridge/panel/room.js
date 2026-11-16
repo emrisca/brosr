@@ -156,6 +156,20 @@ function renderSettings(data) {
         : 'Open a room to choose a colour.';
   }
 
+  const show = $('show-cursor');
+  if (show) {
+    show.checked = !data || data.showOwnCursor !== false;
+    show.disabled = !data || !custom;
+  }
+  const showNote = $('show-cursor-note');
+  if (showNote) {
+    showNote.textContent = !custom
+      ? 'Pick a cursor above, then the switch draws it here.'
+      : show && !show.checked
+        ? 'Your own pointer is the system arrow here.'
+        : 'On draws your own pick on every page here. Off keeps the system arrow.';
+  }
+
   const own = $('own-cursor');
   if (own) {
     own.checked = !data || data.sharePointer !== false;
@@ -446,6 +460,17 @@ async function setOwnCursor(on) {
   } else {
     $('own-cursor').checked = !on;
     notice('The pointer setting did not change.', true);
+  }
+}
+
+async function setShowOwnCursor(on) {
+  const reply = await roomMessage({ type: 'brosr:show-own-cursor', on });
+  if (reply && reply.ok) {
+    notice(on ? 'Your custom cursor is on.' : 'Your custom cursor is off here.');
+    await refresh();
+  } else {
+    $('show-cursor').checked = !on;
+    notice('The cursor setting did not change.', true);
   }
 }
 
@@ -1298,6 +1323,9 @@ $('cursor-set').addEventListener('keydown', (event) => {
   loadCursorSet();
 });
 $('cursor-clear').addEventListener('click', clearCursor);
+$('show-cursor').addEventListener('change', (event) => {
+  setShowOwnCursor(event.currentTarget.checked);
+});
 $('own-cursor').addEventListener('change', (event) => {
   setOwnCursor(event.currentTarget.checked);
 });

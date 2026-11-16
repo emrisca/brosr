@@ -345,9 +345,11 @@ export async function start() {
     }
   })());
   let ownCursor = savedCursor;
-  // A cursor chosen for the room is also the cursor this person uses. Apply it
-  // before the socket opens, so no page flickers back to the system arrow.
-  applyOwnCursor(ownCursor);
+  // A cursor chosen for the room is also the cursor this person uses, unless
+  // they turned the local view off. Apply it before the socket opens, so no
+  // page flickers back to the system arrow.
+  let showOwnCursor = readSetting('brosr-show-own-cursor') !== '0';
+  applyOwnCursor(showOwnCursor ? ownCursor : null);
   const sharePointer = readSetting('brosr-share-pointer') !== '0';
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
@@ -705,6 +707,7 @@ export async function start() {
     return {
       ...live,
       source,
+      showOwnCursor,
       panelUrl,
       panelState,
       command: lastCommand,
@@ -880,7 +883,11 @@ export async function start() {
     // the tab registers itself instead.
     const hello = () =>
       api.runtime
-        .sendMessage({ type: 'brosr:room-hello', role, cursor: ownCursor })
+        .sendMessage({
+          type: 'brosr:room-hello',
+          role,
+          cursor: showOwnCursor ? ownCursor : null,
+        })
         .catch(() => {});
     hello();
     setInterval(hello, 2000);
@@ -1012,10 +1019,10 @@ export async function start() {
           next ? JSON.stringify(next) : null
         );
         ownCursor = next || null;
-        applyOwnCursor(ownCursor);
+        applyOwnCursor(showOwnCursor ? ownCursor : null);
         // Every tab shows the same pointer, so the image has to leave this
         // page as well as join the room.
-        if (api && api.runtime && api.runtime.sendMessage) {
+        if (showOwnCursor && api && api.runtime && api.runtime.sendMessage) {
           api.runtime
             .sendMessage({ type: 'brosr:own-cursor', cursor: ownCursor })
             .catch(() => {});
@@ -1028,6 +1035,25 @@ export async function start() {
         writeSetting('brosr-share-pointer', next ? '1' : '0');
         publish();
         return reply({ ok: true, sharePointer: next });
+      }
+      if (message.type === 'brosr:show-own-cursor') {
+        // The room sees the cursor either way. This switch only decides whether
+        // this person sees the image instead of the system arrow.
+        showOwnCursor = Boolean(message.on);
+        writeSetting('brosr-show-own-cursor', showOwnCursor ? '1' : '0');
+        applyOwnCursor(showOwnCursor ? ownCursor : null);
+        // Every tab carries a copy of the image, so a clear has to reach them
+        // all as well.
+        if (api && api.runtime && api.runtime.sendMessage) {
+          api.runtime
+            .sendMessage({
+              type: 'brosr:own-cursor',
+              cursor: showOwnCursor ? ownCursor : null,
+            })
+            .catch(() => {});
+        }
+        publish();
+        return reply({ ok: true, showOwnCursor });
       }
       if (message.type === 'brosr:presence-point') {
         // Another tab of this browser owns the mouse. Presence carries that

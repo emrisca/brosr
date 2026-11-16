@@ -222,7 +222,15 @@
           </button>
         </section>
 
-        <section class="card">
+        <section class="card" aria-labelledby="pointer-label">
+          <p class="section-title" id="pointer-label">Pointer</p>
+          <label class="switch-row" for="show-cursor">
+            <span>Show my custom cursor</span>
+            <input type="checkbox" id="show-cursor" />
+          </label>
+          <p class="note" id="show-cursor-note">
+            On draws your own pick on every page here. Off keeps the system arrow.
+          </p>
           <label class="switch-row" for="own-cursor">
             <span>Share my pointer</span>
             <input type="checkbox" id="own-cursor" />

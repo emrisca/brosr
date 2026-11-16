@@ -21,6 +21,15 @@ test('a grant is sent again once the socket is open', () => {
   assert.match(source, /socket\.onopen[\s\S]*?client\.setGrant\(input\.grantTo, true\)/);
 });
 
+test('your own cursor is a switch beside sharing it', () => {
+  // Sharing sends the pointer to the room. Showing it is a separate choice, so
+  // either one can be off while the other stays on.
+  assert.match(source, /let showOwnCursor = readSetting\('brosr-show-own-cursor'\) !== '0'/);
+  assert.match(source, /applyOwnCursor\(showOwnCursor \? ownCursor : null\)/);
+  assert.match(source, /cursor: showOwnCursor \? ownCursor : null/);
+  assert.match(source, /if \(showOwnCursor && api && api\.runtime && api\.runtime\.sendMessage\)/);
+});
+
 test('a click flushes at once, so a link cannot unload the page first', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
   assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
