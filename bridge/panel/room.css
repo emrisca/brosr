@@ -420,6 +420,47 @@ h1 {
   background: transparent;
 }
 
+/* The site list is one switch per line. It sits on its own class so the
+   two-column cursor picker above cannot squeeze a site name into half a
+   cell and run the text under its toggle. */
+.cursor-sites-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.cursor-sites-list li {
+  display: block;
+  min-height: 0;
+  padding: 0;
+}
+
+.cursor-sites-list li:hover {
+  background: transparent;
+}
+
+.cursor-sites-list .switch-row {
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+/* A long address wraps instead of hiding its tail, so the canvas and notes
+   rows never read as the same site. */
+.cursor-sites-list .switch-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.cursor-sites-list .empty {
+  display: block;
+  padding: 0 2px;
+  font-size: 11px;
+}
+
 .cursor-choice {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);

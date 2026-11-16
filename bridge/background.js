@@ -89,7 +89,13 @@ function rememberTab(tab, seen) {
 // panel never receives a number that tabs.sendMessage rejects.
 async function roomTab() {
   const seen = await state();
-  if (validId(seen.roomTabId)) return seen.roomTabId;
+  if (validId(seen.roomTabId)) {
+    // A tab id from an earlier browser run names no tab now. Holding it would
+    // reject every report from the real room tab.
+    const held = await api.tabs.get(seen.roomTabId).catch(() => null);
+    if (held) return seen.roomTabId;
+    await save({ roomTabId: null, roomRole: null });
+  }
   let id = null;
   try {
     const tabs = await api.tabs.query({});
@@ -138,7 +144,18 @@ api.tabs.onRemoved.addListener((id) => {
 // Sharing is host-led. A guest opens what the host announces and never sends
 // its own tabs, so one person's browsing stays private by default.
 const local = api.storage && api.storage.local ? api.storage.local : null;
-const prefs = { autoShare: true, muted: {}, shared: {}, sync: true, notices: true, granted: false };
+const prefs = {
+  autoShare: true,
+  muted: {},
+  shared: {},
+  sync: true,
+  notices: true,
+  granted: false,
+  // Null means the two brosr apps on the page's own origin. A host replaces
+  // this with its own list, and a peer keeps the list its host sent.
+  cursorSites: null,
+  cursorNames: true,
+};
 let roomRole = null;
 let prefsLoaded = false;
 
@@ -147,7 +164,16 @@ async function loadPrefs() {
   prefsLoaded = true;
   if (!local) return prefs;
   try {
-    const saved = await local.get(['autoShare', 'muted', 'shared', 'sync', 'notices', 'granted']);
+    const saved = await local.get([
+      'autoShare',
+      'muted',
+      'shared',
+      'sync',
+      'notices',
+      'granted',
+      'cursorSites',
+      'cursorNames',
+    ]);
     if (saved) {
       prefs.autoShare = saved.autoShare !== false;
       prefs.muted = saved.muted || {};
@@ -155,6 +181,10 @@ async function loadPrefs() {
       prefs.sync = saved.sync !== false;
       prefs.notices = saved.notices !== false;
       prefs.granted = saved.granted === true;
+      prefs.cursorSites = Array.isArray(saved.cursorSites)
+        ? saved.cursorSites.filter((site) => typeof site === 'string')
+        : null;
+      prefs.cursorNames = saved.cursorNames !== false;
     }
   } catch {
     // A refused read keeps the defaults.
@@ -327,6 +357,18 @@ async function openPanel() {
 // Every message answers the same way on both engines. A Chrome listener that
 // returns a promise is ignored, so each branch replies through sendResponse and
 // the listener returns true to hold the channel open.
+// A site list and the name view belong to the whole browser, so a change from
+// the room tab reaches every page that draws a pointer.
+async function broadcastCursor(message, sender) {
+  const from = sender && sender.tab ? sender.tab.id : null;
+  const all = await api.tabs.query({}).catch(() => []);
+  await Promise.all(
+    all
+      .filter((tab) => validId(tab.id) && tab.id !== from && shareable(tab.url))
+      .map((tab) => api.tabs.sendMessage(tab.id, message).catch(() => {}))
+  );
+}
+
 async function handle(message, sender) {
   if (!message) return undefined;
   if (message.type === 'brosr:room-hello') {
@@ -337,8 +379,12 @@ async function handle(message, sender) {
       const seen = await state();
       // The query at startup can claim the room tab before the page says hello.
       // A hello from that same tab still names the role, so the panel knows
-      // whether it may change which tabs sync.
-      if (seen.roomTabId === null || seen.roomTabId === from) {
+      // whether it may change which tabs sync. A stored id that no longer
+      // names a tab yields to the live hello.
+      const held = validId(seen.roomTabId)
+        ? await api.tabs.get(seen.roomTabId).catch(() => null)
+        : null;
+      if (seen.roomTabId === null || seen.roomTabId === from || !held) {
         roomRole = message.role === 'host' ? 'host' : 'peer';
         await save({ roomTabId: from, roomRole });
       }
@@ -390,6 +436,46 @@ async function handle(message, sender) {
       },
     });
     return { ok: true };
+  }
+  if (message.type === 'brosr:cursor-settings') {
+    await loadPrefs();
+    return {
+      ok: true,
+      names: prefs.cursorNames !== false,
+      sites: Array.isArray(prefs.cursorSites) ? prefs.cursorSites : null,
+    };
+  }
+  if (message.type === 'brosr:cursor-names-set') {
+    await loadPrefs();
+    await savePrefs({ cursorNames: message.on !== false });
+    await broadcastCursor(
+      {
+        type: 'brosr:cursor-settings',
+        names: prefs.cursorNames !== false,
+        sites: Array.isArray(prefs.cursorSites) ? prefs.cursorSites : null,
+      },
+      sender
+    );
+    return { ok: true, names: prefs.cursorNames !== false };
+  }
+  if (message.type === 'brosr:cursor-policy') {
+    // Only the room tab speaks for this browser. A page cannot rewrite the
+    // host's list on its own.
+    const id = await roomTab();
+    const from = sender && sender.tab ? sender.tab.id : null;
+    if (!validId(id) || id !== from) return { ok: false, reason: 'not-room-tab' };
+    if (!Array.isArray(message.sites)) return { ok: false, reason: 'sites' };
+    const sites = message.sites.filter((site) => typeof site === 'string');
+    await savePrefs({ cursorSites: sites });
+    await broadcastCursor(
+      {
+        type: 'brosr:cursor-settings',
+        names: prefs.cursorNames !== false,
+        sites,
+      },
+      sender
+    );
+    return { ok: true, sites };
   }
   if (message.type === 'brosr:cached-status') {
     const seen = await state();
@@ -736,7 +822,9 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then((reply) => {
       if (reply !== undefined) sendResponse(reply);
     })
-    .catch((error) => sendResponse({ ok: false, error: text(error) }));
+    .catch((error) => {
+      sendResponse({ ok: false, error: text(error) });
+    });
   return true;
 });
 

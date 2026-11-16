@@ -17,6 +17,7 @@ export const TYPES = [
   'colour',
   'roomname',
   'cursor',
+  'cursorpolicy',
   'control',
   'ping',
   'pong',
@@ -87,6 +88,9 @@ export function validate(message) {
       if (message.cursor !== null && (typeof message.cursor !== 'object' || !message.cursor.src)) {
         fail('cursor needs an image or null');
       }
+      break;
+    case 'cursorpolicy':
+      if (!Array.isArray(message.sites)) fail('cursorpolicy needs a sites list');
       break;
     case 'control':
       if (typeof message.peerId !== 'string') fail('control needs a peerId');

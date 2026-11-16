@@ -3,7 +3,7 @@
 // document.documentElement.dataset.brosr, so the harness can read the same
 // numbers whether the core runs in the content script or in the page.
 
-import { createRoomClient, PRESENCE_TICK_MS } from './sync.mjs';
+import { createRoomClient, PEER_IDLE_MS, PRESENCE_TICK_MS } from './sync.mjs';
 import { TAB_APP, tabOpen } from './tabs.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
@@ -18,11 +18,39 @@ import {
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
 import { ActionNotice, CursorOverlay, mediaAction } from './overlay.mjs';
-import { cleanCursor, cleanRoomName, isColour, randomColour, siteOf } from './cursor.mjs';
+import {
+  cleanCursor,
+  cleanCursorSites,
+  cleanRoomName,
+  cursorSiteOf,
+  defaultCursorSites,
+  isColour,
+  randomColour,
+  siteOf,
+} from './cursor.mjs';
 import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
+
+// A setting survives a navigation and a browser restart. The page path reads
+// these keys before the room path starts, so they belong to the module.
+function readSetting(key) {
+  try {
+    return globalThis.localStorage ? localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+function writeSetting(key, value) {
+  try {
+    if (!globalThis.localStorage) return;
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, String(value));
+  } catch {
+    // A refused store costs this room only.
+  }
+}
 
 // The person who picked a cursor sees it on their own screen too. The image
 // goes on the document, so every site this browser opens carries it.
@@ -138,15 +166,30 @@ async function startPageMedia() {
   const cursorLayer =
     window.top === window ? new CursorOverlay({ document }).attach() : null;
   const cursorPoints = new Map();
+  // The host names the sites that show pointers, and every tab keeps its own
+  // copy. Canvas and Notes are the only sites on until the host says more.
+  let allowedSites = defaultCursorSites(location.href);
+  let showNames = readSetting('brosr-cursor-names') !== '0';
+  // The harness reads this the same way it reads the cursor count.
+  document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
+  const siteAllowed = (href) => {
+    const key = cursorSiteOf(href);
+    return Boolean(key) && allowedSites.includes(key);
+  };
   const pixelPoint = (point) => ({
     x: Math.max(0, Math.min(1, Number(point && point.x) || 0)) * window.innerWidth,
     y: Math.max(0, Math.min(1, Number(point && point.y) || 0)) * window.innerHeight,
   });
   const placeCursor = (entry) => {
     if (!cursorLayer || !entry || !entry.id) return;
-    // A peer pointer belongs to the site it was sent from, so a tab on another
-    // site drops it instead of drawing a mouse that is not here.
-    if (!entry.url || siteOf(entry.url) !== siteOf(location.href)) {
+    // A peer pointer belongs to the site it was sent from, and the host names
+    // the sites that show pointers. A tab on another site, or on a site the
+    // host turned off, draws nothing.
+    if (
+      !entry.url ||
+      !siteAllowed(entry.url) ||
+      cursorSiteOf(entry.url) !== cursorSiteOf(location.href)
+    ) {
       if (cursorPoints.delete(entry.id)) {
         cursorLayer.removePeer(entry.id);
         document.documentElement.dataset.brosrCursors = String(cursorPoints.size);
@@ -154,12 +197,13 @@ async function startPageMedia() {
       return;
     }
     const share = entry.point || { x: 0, y: 0 };
-    cursorPoints.set(entry.id, { ...entry, point: share });
+    cursorPoints.set(entry.id, { ...entry, point: share, at: Date.now() });
     cursorLayer.setPeer({
       id: entry.id,
       name: entry.name,
       colour: entry.colour,
       cursor: entry.cursor || null,
+      showName: showNames,
       point: pixelPoint(share),
     });
     // The overlay lives in a closed shadow root, so this count is the only
@@ -174,6 +218,23 @@ async function startPageMedia() {
       },
       { passive: true }
     );
+    // A peer that closes its tab stops forwarding frames. Its last point then
+    // has no owner, so the layer forgets it rather than drawing a ghost mouse
+    // until this page reloads.
+    setInterval(() => {
+      if (!cursorPoints.size) return;
+      const at = Date.now();
+      let dropped = false;
+      for (const [id, entry] of cursorPoints) {
+        if (at - entry.at < PEER_IDLE_MS) continue;
+        cursorPoints.delete(id);
+        cursorLayer.removePeer(id);
+        dropped = true;
+      }
+      if (dropped) {
+        document.documentElement.dataset.brosrCursors = String(cursorPoints.size);
+      }
+    }, 1000);
   }
 
   // A pointer on any site tells the room tab where this person is, so a peer
@@ -212,6 +273,17 @@ async function startPageMedia() {
       applyOwnCursor(message.cursor || null);
       return undefined;
     }
+    if (message.type === 'brosr:cursor-settings') {
+      if (Array.isArray(message.sites)) {
+        allowedSites = cleanCursorSites(message.sites) || [];
+      }
+      if (typeof message.names === 'boolean') showNames = message.names;
+      document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
+      // Apply the new rule to pointers already on screen, so a site turned off
+      // loses its cursors now and not on the next frame.
+      for (const [id, entry] of cursorPoints) placeCursor({ ...entry, id });
+      return undefined;
+    }
     if (message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
     const result = remote.handle(message);
@@ -241,6 +313,14 @@ async function startPageMedia() {
   });
 
   let relayKey = '';
+  // The background holds the host's site list and the name view, so a tab that
+  // opens later starts with the same rule as the rest of this browser.
+  send({ type: 'brosr:cursor-settings' }).then((reply) => {
+    if (!reply || !reply.ok) return;
+    if (Array.isArray(reply.sites)) allowedSites = cleanCursorSites(reply.sites) || [];
+    if (typeof reply.names === 'boolean') showNames = reply.names;
+    document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
+  });
   function reportMedia() {
     const state = mediaStateFromDocument(document, pageHref(), location.hostname);
     if (!state) return;
@@ -328,22 +408,6 @@ export async function start() {
   const hostId = config.hostId || 'host';
   const name = config.name || peerId;
   const roomName = cleanRoomName(config.roomName || 'Room');
-  const readSetting = (key) => {
-    try {
-      return globalThis.localStorage ? localStorage.getItem(key) : null;
-    } catch {
-      return null;
-    }
-  };
-  const writeSetting = (key, value) => {
-    try {
-      if (!globalThis.localStorage) return;
-      if (value === null) localStorage.removeItem(key);
-      else localStorage.setItem(key, String(value));
-    } catch {
-      // A refused store costs this room only.
-    }
-  };
   const savedColour = readSetting('brosr-colour');
   const colour = isColour(savedColour) ? savedColour : randomColour();
   const savedCursor = cleanCursor((() => {
@@ -360,6 +424,17 @@ export async function start() {
   let showOwnCursor = readSetting('brosr-show-own-cursor') !== '0';
   applyOwnCursor(showOwnCursor ? ownCursor : null);
   const sharePointer = readSetting('brosr-share-pointer') !== '0';
+  let showNames = readSetting('brosr-cursor-names') !== '0';
+  // A host names the sites that show pointers. A peer keeps the last list it
+  // learned, or the two brosr apps until the host sends its own.
+  const savedSites = cleanCursorSites((() => {
+    try {
+      return JSON.parse(readSetting('brosr-cursor-sites') || 'null');
+    } catch {
+      return null;
+    }
+  })());
+  let cursorSites = savedSites || defaultCursorSites(location.href);
   const bias = Number(config.bias || 0);
   const relayPort = config.relayPort || '8787';
   const source =
@@ -496,6 +571,20 @@ export async function start() {
     roomName,
     customCursor: savedCursor,
     sharePointer,
+    cursorSites,
+    showNames,
+    // A learned list is written here and sent to the rest of this browser, so
+    // every tab follows the host without holding a socket.
+    onPolicy: (sites) => {
+      const list = Array.isArray(sites) ? sites : [];
+      cursorSites = list;
+      writeSetting('brosr-cursor-sites', JSON.stringify(list));
+      if (api && api.runtime && api.runtime.sendMessage) {
+        api.runtime
+          .sendMessage({ type: 'brosr:cursor-policy', sites: list })
+          .catch(() => {});
+      }
+    },
     document,
     viewport,
     // Presence names the page, so another tab draws a cursor only when it
@@ -1063,6 +1152,34 @@ export async function start() {
         }
         publish();
         return reply({ ok: true, showOwnCursor });
+      }
+      if (message.type === 'brosr:cursor-names') {
+        const on = Boolean(message.on);
+        showNames = client.setShowNames(on);
+        writeSetting('brosr-cursor-names', showNames ? '1' : '0');
+        // Every tab draws its own copy of the overwritten cursor, so the name
+        // view has to reach them as well.
+        if (api && api.runtime && api.runtime.sendMessage) {
+          api.runtime
+            .sendMessage({ type: 'brosr:cursor-names-set', on: showNames })
+            .catch(() => {});
+        }
+        publish();
+        return reply({ ok: true, names: showNames });
+      }
+      if (message.type === 'brosr:cursor-site') {
+        // Only the host picks the sites. A peer gets a refusal and keeps the
+        // list the host sent.
+        if (role !== 'host') return reply({ ok: false, reason: 'not-host' });
+        const key = cursorSiteOf(String(message.site || ''));
+        if (!key) return reply({ ok: false, reason: 'bad-site' });
+        const next = new Set(client.publish().cursorSites || defaultCursorSites(location.href));
+        if (message.on) next.add(key);
+        else next.delete(key);
+        cursorSites = client.setCursorSites([...next]) || [];
+        writeSetting('brosr-cursor-sites', JSON.stringify(cursorSites));
+        publish();
+        return reply({ ok: true, sites: cursorSites });
       }
       if (message.type === 'brosr:presence-point') {
         // Another tab of this browser owns the mouse. Presence carries that

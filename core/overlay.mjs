@@ -322,6 +322,8 @@ export class CursorOverlay {
       ? `${Math.max(20, Math.min(48, Number(custom.w) || 32)) + 2}px`
       : '16px';
     node.label.textContent = peer.name || peer.id;
+    // A viewer can turn every pointer name off. The peer still draws.
+    node.label.style.display = peer.showName === false ? 'none' : 'block';
     if (custom) {
       if (node.imageSrc !== custom.src) {
         node.imageSrc = custom.src;

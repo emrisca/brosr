@@ -10,10 +10,11 @@ import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
 import {
   ROOM_COLOURS,
   cleanCursor,
+  cleanCursorSites,
   cleanRoomName,
+  cursorSiteOf,
   isColour,
   nextColour,
-  siteOf,
 } from './cursor.mjs';
 import { Room } from './room.mjs';
 import {
@@ -30,6 +31,10 @@ export const HOST_TICK_MS = 250;
 // The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
 // fresh target, and the overlay eases between them.
 export const PRESENCE_TICK_MS = 33;
+// Presence arrives many times a second while a person is in the room. A peer
+// whose frames stop has closed its tab or lost the relay, so its cursor leaves
+// this page instead of sitting at the last point it sent.
+export const PEER_IDLE_MS = 4000;
 export const SAMPLE_AFTER_MS = 4000;
 // A seek takes time to land. Deciding again during that window stacks seeks
 // and the player never reaches any of the targets.
@@ -58,6 +63,14 @@ export function createRoomClient({
   roomName = 'Room',
   customCursor = null,
   sharePointer = true,
+  // The host names the sites that show pointers. Null keeps the old same-site
+  // rule, which a peer holds until the host sends its list.
+  cursorSites = null,
+  // A viewer can hide every pointer name without hiding the pointers.
+  showNames = true,
+  // A peer that learns a new site list reports it here, so every tab of this
+  // browser follows the host at once.
+  onPolicy = null,
   send = () => {},
   document: doc = null,
   mediaRoot = null,
@@ -95,6 +108,11 @@ export function createRoomClient({
   let currentRoomName = initialRoomName;
   let currentCursor = cleanCursor(customCursor);
   let sharingPointer = Boolean(sharePointer);
+  let allowedSites = cleanCursorSites(cursorSites);
+  let showingNames = showNames !== false;
+  // Every site a presence frame has named. The host panel offers these as
+  // toggles, so a site someone is actually on can be switched on.
+  const seenSites = new Set();
   const cursor = doc && overlay ? new CursorOverlay({ document: doc }).attach() : null;
   const samples = [];
   const latencies = [];
@@ -163,6 +181,9 @@ export function createRoomClient({
   // The last point of every peer on this page, as a share. A resize places each
   // cursor again from these, because the pixels it drew at are gone.
   const peerPoints = new Map();
+  // When each of those points arrived. Presence ends without a goodbye when a
+  // tab closes, so the tick uses this to expire a silent cursor.
+  const peerSeen = new Map();
   // The page that point belongs to.
   let lastPointerUrl = null;
   // The last frame that reached this tab, so a change can be named once.
@@ -255,6 +276,78 @@ export function createRoomClient({
     return sharingPointer;
   }
 
+  function noteSite(href) {
+    const key = cursorSiteOf(href);
+    if (key) seenSites.add(key);
+    return key;
+  }
+
+  function sitesAllowed(url) {
+    const key = cursorSiteOf(url);
+    if (!key) return false;
+    return allowedSites === null || allowedSites.includes(key);
+  }
+
+  // A site the host just turned off loses its pointers at once, instead of
+  // waiting for the next presence frame to drop each one.
+  function dropDisallowed() {
+    if (!cursor) return;
+    let dropped = false;
+    for (const [id, entry] of peerPoints) {
+      if (sitesAllowed(entry.url)) continue;
+      peerPoints.delete(id);
+      peerSeen.delete(id);
+      cursor.removePeer(id);
+      dropped = true;
+    }
+    if (dropped) stats.cursors = cursor.stats().peers;
+  }
+
+  // The host owns the site list, and a change names every site at once. The
+  // peers and the panel never read two half-updated rules.
+  function setCursorSites(value) {
+    if (!isHost()) return null;
+    const next = cleanCursorSites(value) || [];
+    allowedSites = next;
+    sendMessage({ type: 'cursorpolicy', peerId, sites: next, roomTime: roomTimeOf() });
+    dropDisallowed();
+    if (onPolicy) {
+      try {
+        onPolicy(next);
+      } catch {
+        // A listener cannot break the room.
+      }
+    }
+    return [...next];
+  }
+
+  function sendPolicy() {
+    if (!isHost()) return false;
+    sendMessage({
+      type: 'cursorpolicy',
+      peerId,
+      sites: allowedSites === null ? [] : [...allowedSites],
+      roomTime: roomTimeOf(),
+    });
+    return true;
+  }
+
+  // Names are a local view, so this never changes what reaches the room.
+  function setShowNames(on) {
+    showingNames = Boolean(on);
+    if (cursor) {
+      for (const [id, entry] of peerPoints) {
+        cursor.setPeer({
+          ...entry,
+          id,
+          point: pointPixels(entry.point),
+          showName: showingNames,
+        });
+      }
+    }
+    return showingNames;
+  }
+
   function hello() {
     sendMessage({
       type: 'hello',
@@ -265,6 +358,12 @@ export function createRoomClient({
       cursor: currentCursor,
       roomTime: roomTimeOf(),
     });
+  }
+
+  // A late guest needs the list as well as the roster, so every hello answers
+  // with the host's current policy.
+  function helloAnswer() {
+    return sendPolicy();
   }
 
   // A page names its own messages. An empty name or a non-object payload is
@@ -640,6 +739,10 @@ export function createRoomClient({
       // The share, because a tab that hands the cursor on needs the wire form.
       point,
       url: message.url,
+      // The image travels in the roster, not in every frame. A viewer without
+      // a custom cursor of its own still draws the sender's pick.
+      cursor: (state.peers.get(message.peerId) || {}).cursor || null,
+      showName: showingNames,
     };
     // Only the room tab holds a socket, so it is the one that shares a cursor
     // with the rest of this browser.
@@ -655,14 +758,24 @@ export function createRoomClient({
     // different sites never see each other's mouse, and the share keeps the
     // point honest when the two windows differ in size.
     const here = pageUrl ? pageUrl() : null;
-    if (!siteOf(message.url) || siteOf(message.url) !== siteOf(here)) {
+    noteSite(here);
+    noteSite(message.url);
+    // The host names the sites that show pointers. A peer on any other site
+    // is not a cursor here, even when the two pages share an origin.
+    if (
+      !cursorSiteOf(message.url) ||
+      cursorSiteOf(message.url) !== cursorSiteOf(here) ||
+      !sitesAllowed(message.url)
+    ) {
       // The peer moved to another site, so the cursor leaves this page.
       peerPoints.delete(message.peerId);
+      peerSeen.delete(message.peerId);
       cursor.removePeer(message.peerId);
       stats.cursors = cursor.stats().peers;
       return;
     }
     peerPoints.set(message.peerId, position);
+    peerSeen.set(message.peerId, local);
     cursor.setPeer({ ...position, point: pointPixels(point) });
     stats.cursors = cursor.stats().peers;
   }
@@ -894,6 +1007,7 @@ export function createRoomClient({
           // A peer that follows a navigation reloads and says hello again. Send
           // the grant again, or the new page never learns it holds control.
           sendSnapshot();
+          helloAnswer();
           const held = grants.active().find((grant) => grant.peerId === message.peerId);
           if (held) {
             sendMessage({
@@ -976,6 +1090,23 @@ export function createRoomClient({
           state.join({ id: message.peerId, cursor: cleanCursor(message.cursor) });
         }
         return { ok: true };
+      case 'cursorpolicy': {
+        // The host is the authority. A frame that echoes its own list back is
+        // not a change.
+        if (isHost()) return { ok: true, ignored: 'host' };
+        const next = cleanCursorSites(message.sites);
+        if (next === null) return { ok: false, reason: 'bad-sites' };
+        allowedSites = next;
+        dropDisallowed();
+        if (onPolicy) {
+          try {
+            onPolicy(next);
+          } catch {
+            // A listener cannot break the room.
+          }
+        }
+        return { ok: true, sites: next };
+      }
       case 'media':
         return applyMedia(message, local);
       case 'app': {
@@ -1028,6 +1159,7 @@ export function createRoomClient({
     // pointer can land on any site this browser has open.
     const here = peer.url || lastPointerUrl || (pageUrl ? pageUrl() : null);
     if (here) message.url = here;
+    noteSite(here);
     sendMessage(message);
   }
 
@@ -1121,6 +1253,20 @@ export function createRoomClient({
     if (currentHost && currentHost !== peerId && gone.includes(currentHost)) {
       migrateHost(currentHost);
     }
+    // A cursor is only as live as its last frame. A peer that closed its tab
+    // sends no goodbye, so silence is what removes its pointer here.
+    if (cursor && peerPoints.size) {
+      let dropped = false;
+      for (const id of peerPoints.keys()) {
+        const seen = peerSeen.get(id) ?? -Infinity;
+        if (local - seen < PEER_IDLE_MS) continue;
+        peerPoints.delete(id);
+        peerSeen.delete(id);
+        cursor.removePeer(id);
+        dropped = true;
+      }
+      if (dropped) stats.cursors = cursor.stats().peers;
+    }
     if (batcher && local - lastInputFlush >= POINTER_INTERVAL_MS) {
       lastInputFlush = local;
       batcher.flush();
@@ -1211,6 +1357,9 @@ export function createRoomClient({
       colour: currentColour,
       cursor: currentCursor,
       sharePointer: sharingPointer,
+      cursorSites: allowedSites === null ? null : [...allowedSites],
+      cursorSeen: [...seenSites],
+      cursorNames: showingNames,
       colours: ROOM_COLOURS,
       url: state.url,
       scroll: Math.round(state.scroll * 1000) / 1000,
@@ -1270,6 +1419,9 @@ export function createRoomClient({
     setRoomName,
     setCursor,
     setSharePointer,
+    setCursorSites,
+    setShowNames,
+    sendPolicy,
     hello,
     publish,
     roomState: state,

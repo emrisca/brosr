@@ -32,14 +32,59 @@ export function cleanRoomName(value, fallback = 'Room') {
 
 // Two people see each other's pointer only on the same site. Presence carries
 // the page it came from, so this key decides whether a cursor belongs here.
-// An unreadable address answers an empty key, which never matches a real site.
+// A bare domain and its www host are one site, while another subdomain, a
+// different scheme or another port is not. An unreadable address answers an
+// empty key, which never matches a real site.
+const WWW = /^www\./i;
 export function siteOf(href) {
   try {
     const url = new URL(String(href || ''));
-    return url.origin === 'null' ? '' : url.origin;
+    if (url.origin === 'null') return '';
+    const host = url.hostname.replace(WWW, '');
+    return `${url.protocol}//${host}${url.port ? `:${url.port}` : ''}`;
   } catch {
     return '';
   }
+}
+
+// A brosr app runs on a path of the same origin as the room, so the site key
+// alone cannot tell Canvas from Notes. An app adds its own suffix, and every
+// other page keeps the plain site key.
+const APPS = ['/canvas', '/notes'];
+export function cursorSiteOf(href) {
+  const base = siteOf(href);
+  if (!base) return '';
+  try {
+    const path = new URL(String(href)).pathname.toLowerCase().replace(/\/+$/, '');
+    const app = APPS.find((name) => path === name || path.startsWith(`${name}/`));
+    return app ? `${base}${app}` : base;
+  } catch {
+    return base;
+  }
+}
+
+// Canvas and Notes are the only sites that show pointers until the host says
+// otherwise. Every other site starts off.
+export function defaultCursorSites(href) {
+  const base = siteOf(href);
+  if (!base) return [];
+  return APPS.map((name) => `${base}${name}`);
+}
+
+// The host sends the site list, so it is cleaned and bounded here. An empty
+// list is a real choice: no site shows a pointer.
+export function cleanCursorSites(value) {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set();
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    // A site key is normalized the same way presence is, so a trailing slash
+    // or a www host never splits one site into two.
+    const key = cursorSiteOf(entry.trim().slice(0, 200));
+    if (!key) continue;
+    seen.add(key);
+  }
+  return [...seen].slice(0, 60);
 }
 
 function channel(value) {

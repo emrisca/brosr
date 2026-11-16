@@ -231,11 +231,24 @@
           <p class="note" id="show-cursor-note">
             On draws your own pick on every page here. Off keeps the system arrow.
           </p>
+          <label class="switch-row" for="cursor-names">
+            <span>Show pointer names</span>
+            <input type="checkbox" id="cursor-names" />
+          </label>
+          <p class="note" id="cursor-names-note">
+            Off hides every name and keeps the pointers.
+          </p>
           <label class="switch-row" for="own-cursor">
             <span>Share my pointer</span>
             <input type="checkbox" id="own-cursor" />
           </label>
           <p class="note" id="own-cursor-note">Off keeps your pointer off every other screen.</p>
+        </section>
+
+        <section class="card" aria-labelledby="cursor-sites-label" id="cursor-sites" hidden>
+          <p class="section-title" id="cursor-sites-label">Where cursors show</p>
+          <p class="note">Only the host picks the sites. Canvas and Notes start on.</p>
+          <ul class="cursor-sites-list" id="cursor-sites-list"></ul>
         </section>
       </div>
 

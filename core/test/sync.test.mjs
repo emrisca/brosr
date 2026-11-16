@@ -6,11 +6,13 @@ import assert from 'node:assert/strict';
 import {
   bufferedAround,
   createRoomClient,
+  PEER_IDLE_MS,
   SEEK_BUFFER_WAIT_MS,
   SEEK_SETTLE_MS,
   SEEK_TIMEOUT_MS,
 } from '../sync.mjs';
 import { RemoteMediaSync } from '../media-relay.mjs';
+import { cursorSiteOf, defaultCursorSites } from '../cursor.mjs';
 import { SEEK_COOLDOWN_MS } from '../drift.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -694,6 +696,8 @@ test('a remote cursor reaches the browser, and a relayed pointer drives presence
     colour: '#fff',
     point: { x: 0.35, y: 0.42 },
     url: 'https://example.com/',
+    cursor: null,
+    showName: true,
   });
 
   // A pointer that lives on another tab arrives as a share, not an event.
@@ -775,6 +779,88 @@ test('a cursor stays on the site it was sent from', () => {
 
   // Back on this site, the cursor returns at the newest point.
   client.receive(presence('https://example.com/other', 0.4), 0);
+  assert.equal(client.publish().cursors, 1);
+});
+
+test('a www host is the same site as its bare domain', () => {
+  const frame = (url, x) =>
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x, y: x },
+      url,
+      roomTime: 0,
+    });
+  const open = (href) =>
+    createRoomClient({
+      role: 'peer',
+      peerId: 'peer',
+      now: () => 0,
+      document: cursorDocument(),
+      pageUrl: () => href,
+      send: () => {},
+    });
+
+  // A bare page and a peer on the www host share one cursor.
+  const bare = open('https://example.com/');
+  bare.receive(frame('https://www.example.com/watch?v=1', 0.2), 0);
+  assert.equal(bare.publish().cursors, 1);
+
+  // Another subdomain is a different site in both directions.
+  const sub = open('https://m.example.com/');
+  sub.receive(frame('https://example.com/', 0.2), 0);
+  assert.equal(sub.publish().cursors, 0);
+  sub.receive(frame('https://www.example.com/', 0.2), 0);
+  assert.equal(sub.publish().cursors, 0);
+  sub.receive(frame('https://m.example.com/', 0.2), 0);
+  assert.equal(sub.publish().cursors, 1);
+
+  // A port is part of the site, so a dev server is not the live site.
+  const port = open('https://example.com:8443/');
+  port.receive(frame('https://example.com/', 0.2), 0);
+  assert.equal(port.publish().cursors, 0);
+  port.receive(frame('https://example.com:8443/', 0.2), 0);
+  assert.equal(port.publish().cursors, 1);
+});
+
+test('a peer cursor expires when its frames stop', () => {
+  let now = 0;
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => now,
+    document: cursorDocument(),
+    pageUrl: () => 'https://example.com/',
+    send: () => {},
+  });
+  const frame = (roomTime) =>
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.3, y: 0.3 },
+      url: 'https://example.com/',
+      roomTime,
+    });
+
+  client.receive(frame(0), 0);
+  assert.equal(client.publish().cursors, 1);
+
+  // Silence inside the window keeps the cursor where it is.
+  now = PEER_IDLE_MS - 1;
+  client.tick(now);
+  assert.equal(client.publish().cursors, 1);
+
+  // Silence for the whole window removes it.
+  now = PEER_IDLE_MS;
+  client.tick(now);
+  assert.equal(client.publish().cursors, 0);
+
+  // A frame after the silence draws the cursor again.
+  client.receive(frame(now), now);
   assert.equal(client.publish().cursors, 1);
 });
 
@@ -1074,4 +1160,122 @@ test('a late player replaces the adapter, and a missing one restores the element
   assert.equal(restored, client.media);
   assert.notEqual(restored, player);
   assert.equal(typeof restored.pick, 'function');
+});
+
+test('canvas and notes are separate sites, and both start on', () => {
+  assert.equal(cursorSiteOf('https://app.test/canvas?x=1'), 'https://app.test/canvas');
+  assert.equal(cursorSiteOf('https://www.app.test/notes/abc'), 'https://app.test/notes');
+  assert.equal(cursorSiteOf('https://app.test/blog'), 'https://app.test');
+  assert.deepEqual(defaultCursorSites('https://app.test/room'), [
+    'https://app.test/canvas',
+    'https://app.test/notes',
+  ]);
+});
+
+test('the host site list gates cursors and travels to a late guest', () => {
+  const sites = ['https://example.com/canvas'];
+  const hostSent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 0,
+    send: (frame) => hostSent.push(decode(frame)),
+  });
+  assert.deepEqual(host.setCursorSites(sites), sites);
+  assert.deepEqual(
+    hostSent.find((message) => message.type === 'cursorpolicy').sites,
+    sites
+  );
+
+  // A late guest gets the list with the roster.
+  hostSent.length = 0;
+  host.receive(encode({ type: 'hello', peerId: 'guest', name: 'Guest', colour: '#fff' }), 0);
+  assert.equal(
+    hostSent.some((message) => message.type === 'cursorpolicy'),
+    true,
+    'a hello is answered with the site list'
+  );
+
+  let here = 'https://example.com/canvas';
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    hostId: 'host',
+    now: () => 0,
+    document: cursorDocument(),
+    pageUrl: () => here,
+    send: () => {},
+  });
+  client.receive(encode({ type: 'cursorpolicy', sites }), 0);
+  assert.deepEqual(client.publish().cursorSites, sites);
+  assert.equal(client.setCursorSites([]), null, 'only the host picks the sites');
+
+  const presence = (url) =>
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.2, y: 0.2 },
+      url,
+      roomTime: 0,
+    });
+
+  client.receive(presence('https://example.com/canvas'), 0);
+  assert.equal(client.publish().cursors, 1, 'an allowed app draws the pointer');
+  assert.equal(client.publish().cursorSeen.includes('https://example.com/canvas'), true);
+
+  // The same page, now outside the list, shows nothing.
+  client.receive(encode({ type: 'cursorpolicy', sites: [] }), 0);
+  client.receive(presence('https://example.com/canvas'), 0);
+  assert.equal(client.publish().cursors, 0, 'an empty list hides every pointer');
+
+  // A site on the same origin but off the list shows nothing either.
+  client.receive(encode({ type: 'cursorpolicy', sites }), 0);
+  here = 'https://example.com/blog';
+  client.receive(presence('https://example.com/blog'), 0);
+  assert.equal(client.publish().cursors, 0);
+});
+
+test('a peer custom cursor and the name switch reach the drawn position', () => {
+  const image = { src: 'data:image/png;base64,AAAA', name: 'star', w: 32, h: 32 };
+  const shared = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    hostId: 'host',
+    now: () => 0,
+    document: cursorDocument(),
+    pageUrl: () => 'https://example.com/',
+    cursorSites: ['https://example.com/'],
+    onPresence: (peer) => shared.push(peer),
+    send: () => {},
+  });
+  client.receive(
+    encode({ type: 'hello', peerId: 'p2', name: 'P', colour: '#fff', cursor: image }),
+    0
+  );
+  const frame = (url, x) =>
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x, y: x },
+      url,
+      roomTime: 0,
+    });
+  client.receive(frame('https://example.com/', 0.5), 0);
+
+  assert.equal(shared.at(-1).cursor.src, image.src, 'the image rides the position');
+  assert.equal(shared.at(-1).showName, true);
+  assert.equal(client.publish().cursors, 1);
+
+  // The name view is local: the pointer stays, the label goes.
+  assert.equal(client.setShowNames(false), false);
+  assert.equal(client.publish().cursorNames, false);
+  client.receive(frame('https://example.com/', 0.6), 0);
+  assert.equal(shared.at(-1).showName, false);
+  assert.equal(client.publish().cursors, 1);
 });

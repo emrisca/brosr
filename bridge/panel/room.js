@@ -182,6 +182,20 @@ function renderSettings(data) {
       : 'Off keeps your pointer off every other screen.';
   }
 
+  const names = $('cursor-names');
+  if (names) {
+    names.checked = !data || data.cursorNames !== false;
+    names.disabled = !data;
+  }
+
+  // The site list belongs to the host. A peer sees no card at all.
+  const sitesCard = $('cursor-sites');
+  if (sitesCard) {
+    const host = Boolean(data && data.role === 'host');
+    sitesCard.hidden = !host;
+    if (host) renderCursorSites(data);
+  }
+
   const clear = $('cursor-clear');
   if (clear) clear.hidden = !custom;
   if (!cursorBusy && Date.now() - cursorStatusAt > 4000) {
@@ -192,6 +206,83 @@ function renderSettings(data) {
         : 'No custom cursor.';
       delete node.dataset.bad;
     }
+  }
+}
+
+function siteLabel(key) {
+  try {
+    const url = new URL(key);
+    const path = url.pathname.replace(/\/+$/, '');
+    return path && path !== '/' ? `${url.host}${path}` : url.host;
+  } catch {
+    return key;
+  }
+}
+
+function renderCursorSites(data) {
+  const list = $('cursor-sites-list');
+  if (!list) return;
+  const policy = Array.isArray(data && data.cursorSites) ? data.cursorSites : null;
+  const seen = Array.isArray(data && data.cursorSeen) ? data.cursorSeen : [];
+  const defaults = (() => {
+    try {
+      const origin = new URL((data && data.url) || '').origin;
+      return [`${origin}/canvas`, `${origin}/notes`];
+    } catch {
+      return [];
+    }
+  })();
+  const keys = [...new Set([...(policy || []), ...seen, ...defaults])];
+  const active = policy || defaults;
+  const signature = `${active.join(',')}|${keys.join(',')}`;
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  list.replaceChildren();
+  if (!keys.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No sites seen yet.';
+    list.append(empty);
+    return;
+  }
+  for (const key of keys) {
+    const row = document.createElement('li');
+    const label = document.createElement('label');
+    label.className = 'switch-row';
+    const text = document.createElement('span');
+    text.textContent = siteLabel(key);
+    text.title = key;
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = active.includes(key);
+    input.addEventListener('change', () => setCursorSite(key, input.checked));
+    label.append(text, input);
+    row.append(label);
+    list.append(row);
+  }
+}
+
+async function setCursorNames(on) {
+  const reply = await roomMessage({ type: 'brosr:cursor-names', on });
+  if (reply && reply.ok) {
+    notice(on ? 'Pointer names are on.' : 'Pointer names are off.');
+    await refresh();
+  } else {
+    $('cursor-names').checked = !on;
+    notice('The name setting did not change.', true);
+  }
+}
+
+async function setCursorSite(site, on) {
+  const reply = await roomMessage({ type: 'brosr:cursor-site', site, on });
+  if (reply && reply.ok) {
+    notice(
+      on ? `${siteLabel(site)} shows cursors.` : `${siteLabel(site)} hides cursors.`
+    );
+    await refresh();
+  } else {
+    notice('The site list did not change.', true);
+    await refresh();
   }
 }
 
@@ -1328,6 +1419,9 @@ $('show-cursor').addEventListener('change', (event) => {
 });
 $('own-cursor').addEventListener('change', (event) => {
   setOwnCursor(event.currentTarget.checked);
+});
+$('cursor-names').addEventListener('change', (event) => {
+  setCursorNames(event.currentTarget.checked);
 });
 
 renderPanelSites();
