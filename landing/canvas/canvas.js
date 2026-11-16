@@ -83,6 +83,15 @@ let pointerSent = 0;
 // The last client point, kept so a zoom, a pan or a window resize can read the
 // paper under a hand that has not moved.
 let pointerAt = null;
+// A remote dot glides to the point it reports instead of jumping there, the way
+// the landing page cursors do. The eased point is what the sheet paints. A page
+// in the background paints no frames, so it snaps, and a dot seen for the first
+// time appears where it is.
+const GLIDE_TAU = 26;
+const GLIDE_DONE = 0.25;
+const glide = new Map();
+let glideRaf = 0;
+let glidePrev = 0;
 
 function nextStrokeId() {
   strokeCount += 1;
@@ -391,8 +400,9 @@ function paintPointers(g) {
 
   for (const [id, entry] of room.here) {
     if (id === PEER || !entry.pointer) continue;
+    const at = glide.get(id) || entry.pointer;
     g.save();
-    g.translate(entry.pointer.x, entry.pointer.y);
+    g.translate(at.x, at.y);
     g.scale(1 / view.z, 1 / view.z);
     g.fillStyle = pointerColour(id);
     g.strokeStyle = 'rgba(255, 255, 255, 0.92)';
@@ -417,6 +427,77 @@ function paintPointers(g) {
   }
   g.restore();
 }
+
+function glideTarget(id) {
+  const entry = room.here.get(id);
+  return entry && entry.pointer ? entry.pointer : null;
+}
+
+function glideFrame(now) {
+  glideRaf = 0;
+  const dt = glidePrev ? Math.min(64, now - glidePrev) : 16;
+  glidePrev = now;
+  const k = 1 - Math.exp(-dt / GLIDE_TAU);
+  let moving = false;
+  for (const [id, at] of glide) {
+    const target = glideTarget(id);
+    if (!target) {
+      glide.delete(id);
+      continue;
+    }
+    const dx = target.x - at.x;
+    const dy = target.y - at.y;
+    if (Math.hypot(dx, dy) <= GLIDE_DONE) {
+      at.x = target.x;
+      at.y = target.y;
+      continue;
+    }
+    at.x += dx * k;
+    at.y += dy * k;
+    moving = true;
+  }
+  redraw();
+  if (moving) glideRaf = requestAnimationFrame(glideFrame);
+  else glidePrev = 0;
+}
+
+// A report eases the dot toward the new point. The loop stops on its own once
+// every dot has arrived, so a resting sheet paints no extra frames.
+function glideTo(id) {
+  const target = glideTarget(id);
+  if (!target) {
+    glide.delete(id);
+    return;
+  }
+  const at = glide.get(id);
+  if (!at || document.hidden) {
+    glide.set(id, { x: target.x, y: target.y });
+    return;
+  }
+  if (at.x === target.x && at.y === target.y) return;
+  if (!glideRaf) {
+    glidePrev = 0;
+    glideRaf = requestAnimationFrame(glideFrame);
+  }
+}
+
+// A hidden page paints no frames, so a glide in flight is finished at once
+// instead of resuming when the tab comes back. The show paints the settled dot.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    redraw();
+    return;
+  }
+  if (glideRaf) cancelAnimationFrame(glideRaf);
+  glideRaf = 0;
+  glidePrev = 0;
+  for (const [id, at] of glide) {
+    const target = glideTarget(id);
+    if (!target) continue;
+    at.x = target.x;
+    at.y = target.y;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // View
@@ -571,6 +652,7 @@ function pruneHere() {
     if (id === PEER) continue;
     if (entry.at < cutoff) {
       room.here.delete(id);
+      glide.delete(id);
       dropped = true;
     }
   }
@@ -771,6 +853,7 @@ function handle(from, data) {
     entry.at = Date.now();
     if ('pointer' in data) entry.pointer = cleanPointer(data.pointer);
     room.here.set(from, entry);
+    glideTo(from);
     showRoomState();
     redraw();
     return;
@@ -783,6 +866,7 @@ function handle(from, data) {
     const entry = room.here.get(from);
     if (!entry) return;
     entry.pointer = data.gone === true ? null : cleanPointer(data);
+    glideTo(from);
     redraw();
     return;
   }

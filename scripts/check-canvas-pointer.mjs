@@ -193,13 +193,31 @@ function moved(where, a, b) {
 
 const round = (value) => Math.round(value * 10) / 10;
 
+// A dot glides to its point, so the wait holds until the tip has arrived, not
+// only until some coloured pixel exists.
 async function expectDot(where, tab, point) {
-  const state = await waitFor(async () => {
+  const expectedOf = (now) => ({
+    x: (now.view.x + point.x * now.view.z) * now.dpr,
+    y: (now.view.y + point.y * now.view.z) * now.dpr,
+  });
+  let state;
+  try {
+    state = await waitFor(async () => {
+      const now = await tab.eval(INSPECT);
+      if (!now || !(now.dot > 0)) return null;
+      const at = expectedOf(now);
+      return Math.abs(now.tip.x - at.x) <= TOLERANCE && Math.abs(now.tip.y - at.y) <= TOLERANCE
+        ? now
+        : null;
+    }, `a dot on the ${where}`);
+  } catch (error) {
     const now = await tab.eval(INSPECT);
-    return now && now.dot > 0 ? now : null;
-  }, `a dot on the ${where}`);
-  const expectedX = (state.view.x + point.x * state.view.z) * state.dpr;
-  const expectedY = (state.view.y + point.y * state.view.z) * state.dpr;
+    assert.fail(
+      `${where}: dot tip ${now && now.tip ? round(now.tip.x) + ',' + round(now.tip.y) : 'none'} at ${now && now.zoom}, expected ${now ? round(expectedOf(now).x) + ',' + round(expectedOf(now).y) : 'none'} for sheet ${round(point.x)},${round(point.y)}`
+    );
+  }
+  const expectedX = expectedOf(state).x;
+  const expectedY = expectedOf(state).y;
   const dx = Math.abs(state.tip.x - expectedX);
   const dy = Math.abs(state.tip.y - expectedY);
   assert.ok(
