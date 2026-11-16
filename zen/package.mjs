@@ -14,6 +14,10 @@ const CHROME_MANIFEST = path.join(bridge, 'manifest.chrome.json');
 
 const CORE = [
   'protocol.mjs',
+  // The entry and the sync client both import this one, so a bundle without
+  // it leaves the injected script with a failed import and the page with no
+  // dataset and no socket.
+  'cursor.mjs',
   'clock.mjs',
   'drift.mjs',
   'media.mjs',
