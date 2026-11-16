@@ -2,21 +2,25 @@
 // guard accepts the result. AMO credentials come from the environment or from
 // .secrets/amo.env, which git ignores.
 //
-// A failure before AMO accepts the source restores both manifests and rebuilds
-// the unsigned XPI, so a half finished release leaves the tree where it started.
-// A failure after the signature lands leaves the bumped version in place, since
-// AMO already holds that version and a local rollback would only hide it.
+// A failed sign first asks AMO whether it already holds a signed file for the
+// version. AMO can accept the upload and return the file after the tool has
+// given up, and it refuses a second upload of the same version, so that file is
+// the only way forward. A failure with no file from AMO restores both manifests
+// and rebuilds the unsigned XPI, so the tree stays where it started. A failure
+// after the signature lands leaves the bumped version in place, since a local
+// rollback would only hide a version AMO knows about.
 //
 //   node scripts/release-bridge.mjs patch
 //   node scripts/release-bridge.mjs minor
 //   node scripts/release-bridge.mjs 0.5.0
 //   node scripts/release-bridge.mjs patch --dry-run
 import { spawnSync } from 'node:child_process';
+import { createHmac, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildXpi, stageBridge } from '../zen/package.mjs';
-import { signedGap } from '../zen/profile.mjs';
+import { BRIDGE_ID, signedGap } from '../zen/profile.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = path.join(root, 'zen', '.runtime');
@@ -55,9 +59,13 @@ function bump(version, kind) {
 // shipping the old version.
 function setVersion(file, version) {
   const text = fs.readFileSync(file, 'utf8');
-  const next = text.replace(/("version"\s*:\s*")\d+\.\d+\.\d+(")/, `$1${version}$2`);
-  if (next === text) throw new Error(`no version line in ${path.relative(root, file)}`);
-  fs.writeFileSync(file, next);
+  const line = /("version"\s*:\s*")\d+\.\d+\.\d+(")/;
+  // The line is checked on its own, because a release of the version a manifest
+  // already names changes no text and is still a valid request. AMO can hold
+  // that version, and the fetch below is the only way to get its file.
+  if (!line.test(text)) throw new Error(`no version line in ${path.relative(root, file)}`);
+  const next = text.replace(line, `$1${version}$2`);
+  if (next !== text) fs.writeFileSync(file, next);
 }
 
 function loadKeys() {
@@ -70,6 +78,37 @@ function loadKeys() {
     if (hit) env[hit[1]] = hit[2];
   }
   return env;
+}
+
+// AMO's record of a version, for the case where the upload landed and the
+// signature came back after web-ext stopped waiting. Unlisted versions appear
+// only with filter=all_with_unlisted, and file stays absent until AMO signs.
+async function amoHeld(version, dir, key, secret) {
+  const b64 = (value) => Buffer.from(value).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+  const body = b64(JSON.stringify({ iss: key, jti: randomUUID(), iat: now, exp: now + 300 }));
+  const jwt = `${header}.${body}.${createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')}`;
+  const list = await fetch(
+    `https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(BRIDGE_ID)}/versions/?page_size=50&filter=all_with_unlisted`,
+    { headers: { Authorization: `JWT ${jwt}` } }
+  );
+  if (!list.ok) {
+    console.error(`[release] the AMO version list answered ${list.status}`);
+    return null;
+  }
+  const data = await list.json();
+  const row = (data.results || []).find((entry) => entry.version === version);
+  if (!row || !row.file || !row.file.url) return null;
+  const file = await fetch(row.file.url, { headers: { Authorization: `JWT ${jwt}` } });
+  if (!file.ok) {
+    console.error(`[release] the AMO file answered ${file.status}`);
+    return null;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `${version}.xpi`);
+  fs.writeFileSync(out, Buffer.from(await file.arrayBuffer()));
+  return out;
 }
 
 const versions = manifests.map(readVersion);
@@ -108,7 +147,9 @@ try {
   console.log(`[release] staged ${staged.entries} files at ${path.relative(root, staged.dir)}`);
 
   const env = loadKeys();
-  if (!process.env.WEB_EXT_API_KEY && !env.WEB_EXT_API_KEY) {
+  const key = process.env.WEB_EXT_API_KEY || env.WEB_EXT_API_KEY;
+  const secret = process.env.WEB_EXT_API_SECRET || env.WEB_EXT_API_SECRET;
+  if (!key || !secret) {
     throw new Error('no AMO credentials. Put WEB_EXT_API_KEY and WEB_EXT_API_SECRET in .secrets/amo.env.');
   }
 
@@ -135,8 +176,20 @@ try {
       timeout: Number(process.env.BROSR_SIGN_TIMEOUT_MS || 300000),
     }
   );
-  if (sign.error) throw new Error(`web-ext could not run: ${sign.error.message}`);
-  if (sign.status !== 0) throw new Error(`web-ext sign exited ${sign.status}`);
+  if (sign.error || sign.status !== 0) {
+    // The upload can land and the signature can arrive after the tool gave up.
+    // AMO refuses a second upload of the same version, so the file it holds is
+    // the only copy available, and it is the signed one.
+    const held = await amoHeld(next, artifacts, key, secret);
+    if (!held) {
+      throw new Error(
+        sign.error
+          ? `web-ext could not run: ${sign.error.message}`
+          : `web-ext sign exited ${sign.status}, and AMO holds no signed file for ${next} yet`
+      );
+    }
+    console.log(`[release] AMO already held ${next}, fetched ${path.relative(root, held)}`);
+  }
 
   const made = fs.existsSync(artifacts)
     ? fs.readdirSync(artifacts).filter((name) => name.endsWith('.xpi'))
