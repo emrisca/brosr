@@ -81,6 +81,8 @@ const COMMANDS = {
       bridge: report.bridge,
       extensions: report.extensions,
       blocker: report.blocker,
+      pstream: report.pstream,
+      pstreamError: report.pstreamError,
       reused: Boolean(report.reused),
     };
   },

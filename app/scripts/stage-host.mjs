@@ -19,6 +19,7 @@ const FILES = [
   'host/cli.mjs',
   'host/room.mjs',
   'host/browsers.mjs',
+  'host/pstream.mjs',
   'host/friends.mjs',
   'host/lobby.mjs',
   // The CLI imports both for the stop and session commands.

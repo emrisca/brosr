@@ -417,9 +417,9 @@ export function launchArgs(
   // own, and the wildcard origin lets a local client open the debugger socket.
   if (browser && browser.family === 'chromium') {
     const args = [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'];
-    // The bridge and the blocker are unpacked folders here. Both flags take a
-    // comma separated list, so the build starts with those two and with nothing
-    // else from the daily profile.
+    // The bridge, the blocker and P-Stream are unpacked folders here. Both
+    // flags take a comma separated list, so the build starts with those three
+    // and with nothing else from the daily profile.
     const packs = (Array.isArray(extension) ? extension : [extension]).filter(Boolean);
     if (packs.length) {
       const list = packs.join(',');
@@ -446,7 +446,8 @@ export function launchArgs(
 
 // A command-line extension is installed but never pinned, so the toolbar shows
 // no icon and the room panel is hard to find. Chrome derives the id from the
-// unpacked folder path and reads the pin from the profile at startup.
+// unpacked folder path and reads the pin from the profile at startup. Windows
+// hashes the path as UTF-16; a UTF-8 hash produces a different id.
 export function chromeExtensionId(dir) {
   let target = path.resolve(dir);
   try {
@@ -454,14 +455,15 @@ export function chromeExtensionId(dir) {
   } catch {
     // A folder that does not exist yet keeps its plain path.
   }
-  const hash = createHash('sha256').update(target).digest('hex').slice(0, 32);
+  const bytes = process.platform === 'win32' ? Buffer.from(target, 'utf16le') : target;
+  const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
   return hash.replace(/[0-9a-f]/g, (digit) =>
     String.fromCharCode(97 + parseInt(digit, 16))
   );
 }
 
 // A room profile starts with no settings file, so the room writes one before
-// the first window opens. Two unpacked add-ons are pinned here, because a
+// the first window opens. Three unpacked add-ons are pinned here, because a
 // command-line extension shows no toolbar icon of its own.
 // Google refuses a sign-in from a browser that blocks its cross-site cookies,
 // and Brave blocks them by default. The room profile allows them, which is the

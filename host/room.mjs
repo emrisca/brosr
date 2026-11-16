@@ -13,6 +13,7 @@ import { prepareProfile } from '../zen/profile.mjs';
 import { buildChrome, buildXpi } from '../zen/package.mjs';
 import { detect, find, launchArgs, pinChromeExtension, rememberStart } from './browsers.mjs';
 import { blockerCopy, stageBlocker } from './blockers.mjs';
+import { pstreamCopy, stagePStream, why } from './pstream.mjs';
 import { bindHost } from './friends.mjs';
 import { formatAddress, parseInviteLink } from '../core/friends.mjs';
 
@@ -367,6 +368,28 @@ async function ensureChromeBlocker() {
   }
 }
 
+// P-Stream is a Chrome Web Store CRX on Chromium. It stages beside the blocker,
+// and a failed download leaves the room with the extensions it already has.
+async function ensureChromePStream() {
+  ensureDir(RUNTIME);
+  try {
+    const hit = await stagePStream(RUNTIME);
+    return {
+      dir: hit.dir,
+      staged: Boolean(hit.staged),
+      version: hit.version || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      dir: pstreamCopy(RUNTIME),
+      staged: false,
+      version: null,
+      error: why(error),
+    };
+  }
+}
+
 // A prepared profile is the slow step. The app shows the result line by line,
 // so this returns a report instead of only a path.
 export async function prepare({ browser: browserId, bridge = true, onProgress, guest = false } = {}) {
@@ -380,16 +403,20 @@ export async function prepare({ browser: browserId, bridge = true, onProgress, g
     const profileDir = chromiumProfile(browser, guest);
     const existed = fs.existsSync(profileDir);
     if (typeof onProgress === 'function') {
-      onProgress({ step: 1, total: 2, label: 'Building the bridge' });
+      onProgress({ step: 1, total: 3, label: 'Building the bridge' });
     }
     const bridge = ensureChromeBridge();
     if (typeof onProgress === 'function') {
-      onProgress({ step: 2, total: 2, label: 'Loading the blocker' });
+      onProgress({ step: 2, total: 3, label: 'Loading the blocker' });
     }
     const blocker = await ensureChromeBlocker();
+    if (typeof onProgress === 'function') {
+      onProgress({ step: 3, total: 3, label: 'Loading P-Stream' });
+    }
+    const pstream = await ensureChromePStream();
     // The bridge goes first, because the room panel lives in it. The blocker
-    // follows when its folder is there.
-    const dirs = [bridge.dir, blocker.dir].filter(Boolean);
+    // and P-Stream follow when their folders are there.
+    const dirs = [bridge.dir, blocker.dir, pstream.dir].filter(Boolean);
     ensureDir(profileDir);
     const pins = pinChromeExtension(profileDir, dirs);
     return {
@@ -403,6 +430,8 @@ export async function prepare({ browser: browserId, bridge = true, onProgress, g
       reused: existed,
       blocker: Boolean(blocker.dir),
       blockerError: blocker.error,
+      pstream: Boolean(pstream.dir),
+      pstreamError: pstream.error,
       staged: blocker.staged ? { tag: blocker.tag, dir: blocker.dir } : null,
     };
   }
@@ -547,6 +576,8 @@ export async function start(options = {}) {
       : null,
     bridge: prepared.bridge,
     extensions: prepared.extensions,
+    pstream: prepared.pstream,
+    pstreamError: prepared.pstreamError,
     timings: {
       prepareMs: preparedAt - began,
       relayMs: relayAt - preparedAt,

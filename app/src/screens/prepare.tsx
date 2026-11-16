@@ -114,7 +114,7 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-sm">
                 <Check className="size-4 text-brand" aria-hidden="true" />
-                Content blockers
+                Add-ons
               </span>
               <span className="text-xs text-muted-foreground">
                 {prepared.extensions} {prepared.extensions === 1 ? 'add-on' : 'add-ons'}

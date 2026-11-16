@@ -38,6 +38,8 @@ export type Prepared = {
   bridge: { file: string; built: boolean; version: string | null };
   extensions: number;
   blocker: boolean;
+  pstream?: boolean;
+  pstreamError?: string | null;
 };
 
 // Where the start call spent its time. The room screen shows this line so a
@@ -64,6 +66,8 @@ export type Run = {
   browserPid: number;
   bridge: { file: string; built: boolean; version: string | null };
   extensions: number;
+  pstream?: boolean;
+  pstreamError?: string | null;
   timings?: Timings;
 };
 
