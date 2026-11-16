@@ -220,7 +220,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function killTree(pid) {
   if (!pid) return;
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
     return;
   }
   try {
@@ -539,6 +542,7 @@ export async function withBrowser(profile, options, work) {
     ],
     {
       stdio: 'ignore',
+      windowsHide: true,
       env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
     }
   );

@@ -5,11 +5,19 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
+
+// A release build is a GUI process with no console. Without this flag, Windows
+// gives every console child its own terminal window, which flashes on each
+// host call and on the Node helpers the host starts.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // A window opened from Finder inherits a short PATH, so the usual install
 // prefixes are checked before the inherited one.
@@ -109,13 +117,17 @@ fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
             .map_err(|error| format!("Could not make {}: {error}", dir.display()))?;
     }
 
-    let mut child = Command::new(node_binary()?)
+    let mut command = Command::new(node_binary()?);
+    command
         .arg(&cli)
         .args(&args)
         .env("BROSR_STATE", &state)
         .env("BROSR_ZEN_RUNTIME", &runtime)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("Could not start Node: {error}"))?;
 
