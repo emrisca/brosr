@@ -337,6 +337,9 @@ const CONTRACT = [
   'peers',
   'peerList',
   'trustTarget',
+  'media',
+  'mediaEchoLocal',
+  'viewers',
 ];
 const HOST_ONLY = ['trust'];
 
@@ -351,6 +354,21 @@ function contractOf(state, keys) {
     if (typeof state.capture !== 'boolean') wrong.push(`capture=${state.capture}`);
     if (typeof state.peers !== 'number') wrong.push(`peers=${state.peers}`);
     if (!Array.isArray(state.peerList)) wrong.push(`peerList=${typeof state.peerList}`);
+    // The Watch section reads the film and the viewer list. A room with nothing
+    // playing carries a null film, and the keys must still be there so the panel
+    // never reads undefined. A film that is present names its key and its URL.
+    const film = state.media;
+    if (!(film === null || (typeof film === 'object' && !Array.isArray(film)))) {
+      wrong.push(`media=${JSON.stringify(film)}`);
+    } else if (film) {
+      if (typeof film.key !== 'string' || !film.key) wrong.push(`media.key=${film.key}`);
+      if (typeof film.url !== 'string' || !film.url) wrong.push(`media.url=${film.url}`);
+      if (typeof film.position !== 'number') wrong.push(`media.position=${film.position}`);
+    }
+    if (typeof state.mediaEchoLocal !== 'number') {
+      wrong.push(`mediaEchoLocal=${typeof state.mediaEchoLocal}`);
+    }
+    if (!Array.isArray(state.viewers)) wrong.push(`viewers=${typeof state.viewers}`);
   }
   return { ok: missing.length === 0 && wrong.length === 0, missing, wrong };
 }
