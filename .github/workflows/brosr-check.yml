@@ -35,3 +35,13 @@ jobs:
 
       - name: Run the guard, both lanes and the tests
         run: node scripts/check-all.mjs
+
+      # A failed lane names its state in its own log. The step above writes one
+      # file per step, and nothing else on a runner survives the job.
+      - name: Keep the check logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brosr-check-logs
+          path: zen/.runtime/check-*.log
+          if-no-files-found: ignore

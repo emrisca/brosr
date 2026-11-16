@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const relay = path.join(root, 'relay', 'target', 'debug', 'brosr-relay');
 const signed = path.join(root, 'zen', '.runtime', 'bridge-signed.xpi');
+const logs = path.join(root, 'zen', '.runtime');
 const steps = [];
 
 function run(name, args, timeout) {
@@ -22,6 +23,12 @@ function run(name, args, timeout) {
     timeout: timeout || 180000,
   });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
+  // A failing lane names its state in the last lines, and a hosted job keeps
+  // nothing else. Each step writes its whole output here, and the workflow
+  // uploads these files when the job fails.
+  fs.mkdirSync(logs, { recursive: true });
+  const file = path.join(logs, `check-${name.replace(/[^a-z0-9]+/gi, '-')}.log`);
+  fs.writeFileSync(file, output);
   const ok = result.status === 0;
   const ms = Date.now() - started;
   steps.push({ name, ok, exit: result.status, ms });
