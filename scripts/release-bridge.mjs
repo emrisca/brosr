@@ -126,7 +126,14 @@ try {
       'unlisted',
       '--no-input',
     ],
-    { cwd: root, env: { ...process.env, ...env }, stdio: 'inherit', timeout: 300000 }
+    {
+      cwd: root,
+      env: { ...process.env, ...env },
+      stdio: 'inherit',
+      // AMO can hold a submission in approval for minutes. A fixed five minute
+      // cap turned a queued signature into a rollback, so the cap is adjustable.
+      timeout: Number(process.env.BROSR_SIGN_TIMEOUT_MS || 300000),
+    }
   );
   if (sign.error) throw new Error(`web-ext could not run: ${sign.error.message}`);
   if (sign.status !== 0) throw new Error(`web-ext sign exited ${sign.status}`);
