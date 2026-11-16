@@ -202,6 +202,9 @@ class ChromiumPage {
     // The form tab sits behind the guest while it types, and a background tab
     // can drop synthetic keys. Raising it first gives the field focus back.
     await this.send('Page.bringToFront').catch(() => {});
+    // The raise can clear the emulation the tab was opened with, and a page
+    // that reports itself unfocused drops injected keys. Set it again here.
+    await this.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
     // Raising a tab does not always restore the element it had focused, and a
     // key event goes to whatever holds focus. A headless runner left the body
     // focused and the field empty, so the field is focused again here.
@@ -804,35 +807,47 @@ try {
     );
   }
 
-  await form.eval(
-    "document.getElementById('field').focus(); document.getElementById('field').value = ''; window.__keys = []; true"
-  );
-  await sleep(500);
-  await guestPage.keys('trusted');
-  let typed;
-  try {
-    typed = await until(async () => {
+  // A headless tab can drop the first batch after it loses focus, so one retry
+  // clears the field and types again before the run reports a failure.
+  const typeTrusted = async () => {
+    await form.eval(
+      "document.getElementById('field').focus(); document.getElementById('field').value = ''; window.__keys = []; true"
+    );
+    await sleep(500);
+    await guestPage.keys('trusted');
+    return until(async () => {
       const raw = await form.eval(
         "JSON.stringify({ value: document.getElementById('field').value, keys: window.__keys })"
       );
       const parsed = raw ? JSON.parse(raw) : null;
       return parsed && parsed.value === 'trusted' ? parsed : null;
     }, 'the host field', 25000);
-  } catch (error) {
-    // A timeout here has three possible ends: the guest never captured, the
-    // host never sent a batch, or the agent never applied one. Record all three
-    // so a failing run names the step that broke.
-    out.steps.diagnosis = {
-      form: await form
-        .eval(
-          "JSON.stringify({ value: document.getElementById('field').value, keys: (window.__keys || []).length, active: (document.activeElement && (document.activeElement.id || document.activeElement.tagName)) || null, focused: document.hasFocus(), visibility: document.visibilityState })"
-        )
-        .catch((e) => String(e)),
-      host: await hostPage.read().catch(() => null),
-      guest: await guestPage.read().catch(() => null),
-      agent: agent && agent.stats ? agent.stats : null,
-    };
-    throw error;
+  };
+  let typed;
+  try {
+    typed = await typeTrusted();
+  } catch (first) {
+    // A first batch can land on a page that lost focus. The retry clears the
+    // field first, so a partial batch never leaves the value doubled.
+    out.steps.retry = String((first && first.message) || first);
+    try {
+      typed = await typeTrusted();
+    } catch (error) {
+      // A timeout here has three possible ends: the guest never captured, the
+      // host never sent a batch, or the agent never applied one. Record all
+      // three so a failing run names the step that broke.
+      out.steps.diagnosis = {
+        form: await form
+          .eval(
+            "JSON.stringify({ value: document.getElementById('field').value, keys: (window.__keys || []).length, active: (document.activeElement && (document.activeElement.id || document.activeElement.tagName)) || null, focused: document.hasFocus(), visibility: document.visibilityState })"
+          )
+          .catch((e) => String(e)),
+        host: await hostPage.read().catch(() => null),
+        guest: await guestPage.read().catch(() => null),
+        agent: agent && agent.stats ? agent.stats : null,
+      };
+      throw error;
+    }
   }
   const keys = typed.keys || [];
   out.steps.typed = {
@@ -878,5 +893,9 @@ try {
   if (bridge && bridgeTemp) await rm(bridge, { force: true }).catch(() => {});
 }
 
-process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+// A pipe write is asynchronous, and an exit straight after it cut the JSON
+// short exactly when the diagnosis mattered most.
+await new Promise((resolve) =>
+  process.stdout.write(JSON.stringify(out, null, 2) + '\n', resolve)
+);
 process.exit(out.ok ? 0 : 1);

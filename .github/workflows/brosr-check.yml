@@ -45,3 +45,6 @@ jobs:
           name: brosr-check-logs
           path: zen/.runtime/check-*.log
           if-no-files-found: ignore
+          # The logs sit in a dot folder, and v4 skips hidden paths unless the
+          # step asks for them, which left the upload empty on the first run.
+          include-hidden-files: true
