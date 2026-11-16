@@ -492,9 +492,29 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
   });
 }
 
+// A machine that joined someone else's room runs no local relay, so it has no
+// room.json. Its join file is the record, and the relay it reports on is the
+// one the invite named.
+async function guestStatus() {
+  const join = readJoin();
+  if (!join) return { ok: true, running: false };
+  const browser = alive(join.browserPid);
+  const ready = await relayReady(join.port, join.host);
+  const link = ready ? await relayStatus(join.port, join.room, join.host) : null;
+  return {
+    ...join,
+    role: 'peer',
+    running: browser,
+    relayAlive: ready,
+    browserAlive: browser,
+    relayReady: ready,
+    peers: link ? link.peers : 0,
+  };
+}
+
 export async function status() {
   const run = readRun();
-  if (!run) return { ok: true, running: false };
+  if (!run) return guestStatus();
   const relay = alive(run.relayPid);
   const browser = alive(run.browserPid);
   const host = run.host || '127.0.0.1';
