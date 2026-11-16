@@ -39,6 +39,12 @@ npm test
 The suite covers protocol encode and decode, the clock estimator, the drift controller, the
 overlay, the room state and the input guards.
 
+The host lifecycle has its own suite, and the two run in one pass from the repo root:
+
+```bash
+node --test core/test/*.test.mjs host/test/*.test.mjs
+```
+
 ## Run a room
 
 The Brosr app sets up a room and opens it. It is a Tauri window with a React interface, and
