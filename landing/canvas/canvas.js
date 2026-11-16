@@ -76,6 +76,9 @@ let strokeCount = 0;
 let live = { id: null, sent: 0, at: 0 };
 let pointer = null;
 let pointerSent = 0;
+// The last client point, kept so a zoom, a pan or a window resize can read the
+// paper under a hand that has not moved.
+let pointerAt = null;
 
 function nextStrokeId() {
   strokeCount += 1;
@@ -330,6 +333,7 @@ function fit() {
   view.y = (height - PAPER.height * view.z) / 2;
   redraw();
   showZoom();
+  refreshPointer(true);
 }
 
 function showZoom() {
@@ -345,6 +349,7 @@ function resize() {
   canvas.style.width = width + 'px';
   canvas.style.height = height + 'px';
   redraw();
+  refreshPointer(true);
 }
 
 function toWorld(event) {
@@ -523,6 +528,24 @@ function sendPointer(force) {
     return;
   }
   send({ op: 'pointer', ...wirePoint(pointer) });
+}
+
+// A zoom, a pan or a window resize moves the paper under a hand that has not
+// moved. The last client point is read again against the new view, so the dot
+// follows the paper point under the cursor instead of the one it rested on
+// before the change.
+function refreshPointer(force) {
+  if (!pointerAt) return;
+  const point = toWorld({ clientX: pointerAt.x, clientY: pointerAt.y });
+  const onPaper =
+    point.x >= 0 && point.y >= 0 && point.x <= PAPER.width && point.y <= PAPER.height;
+  const next = onPaper ? point : null;
+  if (!next && !pointer) return;
+  if (!force && pointer && next && Math.hypot(next.x - pointer.x, next.y - pointer.y) < 0.5) {
+    return;
+  }
+  pointer = next;
+  sendPointer(true);
 }
 
 function sendStroke(stroke) {
@@ -889,6 +912,7 @@ viewport.addEventListener('pointerdown', (event) => {
 });
 
 viewport.addEventListener('pointermove', (event) => {
+  pointerAt = { x: event.clientX, y: event.clientY };
   const point = toWorld(event);
   const coords = document.getElementById('coords');
   coords.textContent = Math.round(point.x) + ', ' + Math.round(point.y);
@@ -907,6 +931,9 @@ viewport.addEventListener('pointermove', (event) => {
   if (panning) {
     view.x = panning.vx + (event.clientX - panning.x);
     view.y = panning.vy + (event.clientY - panning.y);
+    // The move was read against the view before this pan step, so the point is
+    // read again now that the paper has moved under the hand.
+    refreshPointer(true);
     redraw();
     return;
   }
@@ -944,6 +971,7 @@ viewport.addEventListener('pointercancel', endStroke);
 
 // The pointer leaving the window is not a move, so the dot is cleared here.
 viewport.addEventListener('pointerleave', () => {
+  pointerAt = null;
   if (!pointer) return;
   pointer = null;
   sendPointer(true);
@@ -962,6 +990,7 @@ viewport.addEventListener(
     view.y = sy - before.y * view.z;
     redraw();
     showZoom();
+    refreshPointer(true);
   },
   { passive: false }
 );
@@ -1081,12 +1110,14 @@ document.getElementById('zoom-in').addEventListener('click', () => {
   view.z = clamp(view.z * 1.2, 0.15, 8);
   redraw();
   showZoom();
+  refreshPointer(true);
 });
 
 document.getElementById('zoom-out').addEventListener('click', () => {
   view.z = clamp(view.z / 1.2, 0.15, 8);
   redraw();
   showZoom();
+  refreshPointer(true);
 });
 
 document.getElementById('fit').addEventListener('click', fit);
