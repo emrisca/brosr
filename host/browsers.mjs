@@ -137,8 +137,12 @@ const CHROMIUM = [
     id: 'chrome',
     name: 'Google Chrome',
     vendor: 'Google',
-    supported: false,
-    reason: 'Chrome ignores --load-extension from version 137',
+    // Chrome from 137 refuses --load-extension. The room installs the folders
+    // over the devtools pipe instead, which the helper beside the window holds
+    // open. See host/chrome-pipe.mjs.
+    branded: true,
+    supported: true,
+    reason: null,
     bins: {
       darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
       win32: [
@@ -326,9 +330,9 @@ function plistVersion(file) {
   }
 }
 
-// The bridge ships a Manifest V3 build for these browsers. Google Chrome is the
-// one build that refuses the flag which loads an unpacked add-on, so it keeps an
-// entry and a reason. Every other build still reads the flag.
+// The bridge ships a Manifest V3 build for these browsers. A branded Google
+// build refuses the flag which loads an unpacked add-on, so it takes the same
+// folders over the devtools pipe. Every other build still reads the flag.
 function inspectChromium(entry) {
   const candidates = (entry.bins[PLATFORM] || []).filter(Boolean);
   const bin = candidates.find((file) => fs.existsSync(file));
@@ -345,6 +349,7 @@ function inspectChromium(entry) {
     version,
     gecko: null,
     geckoMajor: 0,
+    branded: Boolean(entry.branded),
     supported: entry.supported,
     reason: entry.supported ? null : entry.reason,
     profileRoot: entry.profiles[PLATFORM] || null,
@@ -417,13 +422,18 @@ export function launchArgs(
   // own, and the wildcard origin lets a local client open the debugger socket.
   if (browser && browser.family === 'chromium') {
     const args = [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check'];
-    // The bridge, the blocker and P-Stream are unpacked folders here. Both
-    // flags take a comma separated list, so the build starts with those three
-    // and with nothing else from the daily profile.
+    // The bridge, the blocker and P-Stream are unpacked folders here. A branded
+    // Chrome takes them over the devtools pipe, because it ignores the flag.
+    // Every other build reads both flags as a comma separated list, so it starts
+    // with those three and with nothing else from the daily profile.
     const packs = (Array.isArray(extension) ? extension : [extension]).filter(Boolean);
     if (packs.length) {
-      const list = packs.join(',');
-      args.push(`--disable-extensions-except=${list}`, `--load-extension=${list}`);
+      if (browser.branded) {
+        args.push('--enable-unsafe-extension-debugging', '--remote-debugging-pipe');
+      } else {
+        const list = packs.join(',');
+        args.push(`--disable-extensions-except=${list}`, `--load-extension=${list}`);
+      }
     }
     // A room launch never asks about a session it did not restore.
     args.push('--disable-session-crashed-bubble');

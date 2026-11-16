@@ -2,11 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AD_CLASS,
+  YT_MUSIC_HOST,
   YouTubeAdapter,
   adPlayingFrom,
+  hostOf,
+  isYouTubeMusic,
   playerKey,
   videoIdOf,
 } from '../youtube.mjs';
+import { isYouTubeHost } from '../media-relay.mjs';
 
 function fakePlayer({
   time = 0,
@@ -73,6 +77,27 @@ test('the key reads a video id from every common URL shape', () => {
   assert.equal(videoIdOf(''), '');
   assert.equal(playerKey('https://youtu.be/xyz789'), 'youtube:xyz789');
   assert.equal(playerKey('about:blank'), '');
+});
+
+test('a YouTube Music track keys on its video id, not the queue', () => {
+  const first = 'https://music.youtube.com/watch?v=abc123&list=RDAMVMabc123';
+  const second = 'https://music.youtube.com/watch?v=abc123&list=RDAMVMother';
+  assert.equal(playerKey(first), 'youtube:abc123');
+  assert.equal(playerKey(first), playerKey(second), 'the queue in the address does not split the track');
+  assert.equal(playerKey('https://music.youtube.com/watch?v=abc123&t=42'), 'youtube:abc123');
+  assert.equal(playerKey('https://music.youtube.com/browse/MPREb'), '', 'a browse page names no track');
+});
+
+test('the music host is its own name, and both forms of address agree', () => {
+  assert.equal(YT_MUSIC_HOST, 'music.youtube.com');
+  assert.equal(isYouTubeMusic('music.youtube.com'), true);
+  assert.equal(isYouTubeMusic('https://music.youtube.com/watch?v=abc123'), true);
+  assert.equal(isYouTubeMusic('https://www.youtube.com/watch?v=abc123'), false);
+  assert.equal(isYouTubeMusic(''), false);
+  assert.equal(hostOf('https://music.youtube.com:443/watch'), 'music.youtube.com');
+  assert.equal(hostOf('Music.YouTube.com.'), 'music.youtube.com');
+  assert.equal(isYouTubeHost('https://music.youtube.com/watch?v=abc123'), true);
+  assert.equal(isYouTubeHost('https://notyoutube.com/watch?v=abc123'), false);
 });
 
 test('an ad is the player container class and nothing else', () => {

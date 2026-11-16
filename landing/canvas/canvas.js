@@ -54,7 +54,9 @@ const room = {
   socket: null,
   peers: 0,
   retry: null,
+  ask: null,
   received: new Map(),
+  parts: new Map(),
   seen: new Set(),
   inflight: new Map(),
 };
@@ -349,6 +351,9 @@ function redo() {
 function showHistory() {
   document.getElementById('undo').disabled = state.history.length === 0;
   document.getElementById('redo').disabled = state.redo.length === 0;
+  // The room line carries the sheet count, so it follows a local commit or an
+  // undo at once instead of waiting for the next poll.
+  if (room.socket && room.socket.readyState === WebSocket.OPEN) showRoomState();
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +364,13 @@ function setRoomState(text, bad) {
   if (!node) return;
   node.textContent = text;
   node.classList.toggle('is-offline', Boolean(bad));
+}
+
+// One line says how many pages are in the room and how much sheet they share,
+// which is also the fastest way to see that a late join arrived empty.
+function showRoomState() {
+  const pages = room.peers + (room.peers === 1 ? ' page in the room' : ' pages in the room');
+  setRoomState(pages + ' · ' + strokeTotal() + ' strokes');
 }
 
 function send(data) {
@@ -391,6 +403,30 @@ function sendStroke(stroke) {
 
 function sendRemove(stroke) {
   send({ op: 'remove', id: stroke.id });
+}
+
+function strokeTotal() {
+  return state.layers.reduce((sum, layer) => sum + layer.strokes.length, 0);
+}
+
+// A page that drew before its socket opened still owns those strokes, and one
+// that reconnects owns everything from before the drop. Handing the sheet over
+// on open is what makes both sides converge, and the ids stop the repeat.
+function announce() {
+  for (const layer of state.layers) {
+    for (const stroke of layer.strokes) sendStroke(stroke);
+  }
+}
+
+// A joiner asks for the sheet. A peer that is still opening its own socket
+// hears nothing the first time, so an empty page asks once more.
+function requestSheet() {
+  send({ op: 'sync' });
+  clearTimeout(room.ask);
+  room.ask = setTimeout(() => {
+    if (!room.socket) return;
+    if (strokeTotal() === 0) send({ op: 'sync' });
+  }, 1200);
 }
 
 // A peer should see the line while it is drawn, not only after the pointer
@@ -462,6 +498,16 @@ function handle(data) {
     if (!Number.isInteger(data.part) || !Number.isInteger(data.parts) || data.parts < 1) return;
     if (data.part < 0 || data.part >= data.parts) return;
 
+    // A sync reply can repeat a part that already arrived, and appending it
+    // twice doubles those points. Each part lands once per stroke.
+    let parts = room.parts.get(stroke.id);
+    if (!parts) {
+      parts = new Set();
+      room.parts.set(stroke.id, parts);
+    }
+    if (parts.has(data.part)) return;
+    parts.add(data.part);
+
     if (data.part === 0) {
       if (!Array.isArray(data.points)) return;
       room.inflight.delete(stroke.id);
@@ -478,6 +524,10 @@ function handle(data) {
     }
     if (data.part === data.parts - 1) {
       room.received.delete(stroke.id);
+      room.parts.delete(stroke.id);
+      // The finished copy replaces the live one this page was drawing, so the
+      // line never shows twice while the last parts are in flight.
+      room.inflight.delete(stroke.id);
       if (held.points.length > 1) {
         addStroke(held);
         redraw();
@@ -520,10 +570,24 @@ function handle(data) {
 
   if (data.op === 'sync') {
     // A page that just joined asks for the sheet. Every page answers with the
-    // strokes it holds, and a stroke id already on the sheet is ignored.
+    // strokes it holds, and a stroke id already on the sheet is ignored. The
+    // end frame says how many there were, so the joiner can tell an empty room
+    // from an answer that has not arrived yet.
+    let answered = 0;
     for (const layer of state.layers) {
-      for (const stroke of layer.strokes) sendStroke(stroke);
+      for (const stroke of layer.strokes) {
+        sendStroke(stroke);
+        answered += 1;
+      }
     }
+    send({ op: 'sync-end', from: PEER, strokes: answered });
+    return;
+  }
+
+  if (data.op === 'sync-end') {
+    if (typeof data.strokes !== 'number' || !Number.isFinite(data.strokes)) return;
+    readPeers();
+    return;
   }
 }
 
@@ -536,7 +600,9 @@ function connect() {
   room.socket = socket;
 
   socket.addEventListener('open', () => {
-    send({ op: 'sync' });
+    // Announce what this page holds, then ask for the rest of the sheet.
+    announce();
+    requestSheet();
     readPeers();
   });
   socket.addEventListener('message', (event) => {
@@ -563,9 +629,8 @@ function readPeers() {
   fetch('/status?room=' + encodeURIComponent(ROOM), { cache: 'no-store' })
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error('status'))))
     .then((body) => {
-      const peers = Number(body.peers) || 0;
-      room.peers = peers;
-      setRoomState(peers + (peers === 1 ? ' page in the room' : ' pages in the room'));
+      room.peers = Number(body.peers) || 0;
+      showRoomState();
     })
     .catch(() => setRoomState('Solo', true));
 }
@@ -581,6 +646,11 @@ setInterval(() => {
       room.inflight.delete(id);
       stale = true;
     }
+  }
+  // A stroke that stopped part way keeps only its part count. Once no part is
+  // in flight the record is dead weight.
+  for (const id of room.parts.keys()) {
+    if (!room.received.has(id)) room.parts.delete(id);
   }
   if (stale) redraw();
 }, 5000);

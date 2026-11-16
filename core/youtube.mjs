@@ -11,6 +11,27 @@
 
 export const AD_CLASS = 'ad-showing';
 export const YT_ORIGIN = 'https://www.youtube.com';
+// YouTube Music serves the same player on its own host, and a track there is
+// named by the same `v` parameter. The queue is the only extra, so the key and
+// the drift policy are the ones the watch adapter already uses.
+export const YT_MUSIC_HOST = 'music.youtube.com';
+
+// A caller hands in a hostname from `location` or a whole address from a link.
+// Both name the same site, so one parse serves the room and the media relay.
+export function hostOf(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!text.includes('://')) return text.toLowerCase().replace(/\.$/, '');
+  try {
+    return new URL(text).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+export function isYouTubeMusic(value) {
+  return hostOf(value) === YT_MUSIC_HOST;
+}
 
 // A key survives a re-render and names the film, not the page.
 export function videoIdOf(url) {

@@ -12,6 +12,7 @@ import { newRoomKey } from '../core/seal.mjs';
 import { prepareProfile } from '../zen/profile.mjs';
 import { buildChrome, buildXpi } from '../zen/package.mjs';
 import { detect, find, launchArgs, pinChromeExtension, rememberStart } from './browsers.mjs';
+import { holdChrome } from './chrome-hold.mjs';
 import { blockerCopy, stageBlocker } from './blockers.mjs';
 import { pstreamCopy, stagePStream, why } from './pstream.mjs';
 import { bindHost } from './friends.mjs';
@@ -471,6 +472,25 @@ function bridgeVersion() {
   }
 }
 
+// A branded Chrome closes when its devtools pipe closes, and that pipe is what
+// installs the add-ons. So a helper process owns both: it starts the window,
+// installs each folder, reports the ids and stays alive beside the window. Every
+// other build takes the flags on the command line and is spawned here.
+async function launch(browser, args, dirs) {
+  if (browser.family !== 'chromium' || !browser.branded) {
+    const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+    return { pid: child.pid, holderPid: null, ids: null, errors: [] };
+  }
+  const held = await holdChrome({ bin: browser.path, args, dirs, state: RUN_DIR });
+  if (!held.pid) {
+    killTree(held.holderPid);
+    const detail = held.errors.map((hit) => hit.error).filter(Boolean).join('; ');
+    throw new Error(`${browser.name} did not load its add-ons${detail ? `: ${detail}` : ''}`);
+  }
+  return { pid: held.pid, holderPid: held.holderPid, ids: held.ids, errors: held.errors };
+}
+
 // One room at a time. A second start stops the first, because two relays on one
 // port and two windows on one profile would fight.
 export async function start(options = {}) {
@@ -529,8 +549,7 @@ export async function start(options = {}) {
     extension: prepared.extensionDirs || prepared.extension || null,
     remotePort: trust ? trust.port : null,
   });
-  const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
-  child.unref();
+  const launched = await launch(browser, args, prepared.extensionDirs || []);
   const launchedAt = Date.now();
 
   // The helper waits for the room tab, then binds its listener only when the
@@ -563,7 +582,12 @@ export async function start(options = {}) {
     invite: guestInvite({ host, port, room, key }),
     profile: prepared.profile,
     relayPid: relay.pid,
-    browserPid: child.pid,
+    browserPid: launched.pid,
+    // The helper that holds the devtools pipe on a branded Chrome. It exits
+    // with the window, and stop closes it with the window.
+    pipePid: launched.holderPid,
+    extensionIds: launched.ids,
+    extensionErrors: launched.errors.length ? launched.errors : null,
     // The token stays here. Only the helper and the room tab read it, and the
     // status command reports the port and the helper without the token.
     trust: trust
@@ -594,10 +618,14 @@ export function stop() {
   const joined = readJoin();
   const relay = run ? killTree(run.relayPid) : false;
   const browser = run ? killTree(run.browserPid) : false;
+  // The pipe helper shares the window's process group, so it goes with it. A
+  // helper that outlived a failed launch is closed here too.
+  if (run && run.pipePid) killTree(run.pipePid);
   // The helper closes the listener before it exits. Killing it here is the
   // app-exit rule, so no control channel outlives the room.
   const trust = run && run.trust && run.trust.helperPid ? killTree(run.trust.helperPid) : false;
   const guest = joined ? killTree(joined.browserPid) : false;
+  if (joined && joined.pipePid) killTree(joined.pipePid);
   const profiles = stopProfiles();
   const profileStopped = profiles.some(Boolean);
   for (const file of [RUN_FILE, JOIN_FILE]) {
@@ -647,6 +675,7 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
   const link = parseInviteLink(url);
   const previous = readJoin();
   if (previous && alive(previous.browserPid)) killTree(previous.browserPid);
+  if (previous && previous.pipePid) killTree(previous.pipePid);
 
   const available = detect();
   const chosen = browserId || (available[0] && available[0].id);
@@ -662,8 +691,7 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
     url: link.url,
     extension: prepared.extensionDirs || prepared.extension || null,
   });
-  const child = spawn(browser.path, args, { detached: true, stdio: 'ignore' });
-  child.unref();
+  const launched = await launch(browser, args, prepared.extensionDirs || []);
 
   return writeJoin({
     ok: true,
@@ -677,7 +705,8 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
     name: name || link.name || 'Guest',
     peer: link.peer,
     profile: prepared.profile,
-    browserPid: child.pid,
+    browserPid: launched.pid,
+    pipePid: launched.holderPid,
     bridge: prepared.bridge,
     extensions: prepared.extensions,
   });

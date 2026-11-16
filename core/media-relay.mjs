@@ -11,7 +11,7 @@
 // tab that shows the film stays near the host without a second seek loop.
 
 import { mediaKey } from './media.mjs';
-import { adPlayingFrom, playerKey } from './youtube.mjs';
+import { adPlayingFrom, hostOf, playerKey } from './youtube.mjs';
 
 // The room samples its own media at the host tick rate. A tab uses the same
 // rate, so one hop never adds more than one tick of lag.
@@ -27,12 +27,15 @@ export const RELAY_SEEK_SETTLE_MS = 700;
 export const RELAY_SEEK_TIMEOUT_MS = 8000;
 export const RELAY_NUDGE_RATE = 1.05;
 
+// This covers `youtube.com`, `www.youtube.com` and `music.youtube.com`. The
+// music host keeps its track in the same `v` parameter, so one checker serves
+// both and the key stays a video id.
 const YT_HOST = /(^|\.)(youtube\.com|youtu\.be)$/i;
 const VIDEO_SELECTOR = 'video.html5-main-video, video';
 const AD_ROOT = '#movie_player';
 
-export function isYouTubeHost(hostname = '') {
-  return YT_HOST.test(String(hostname));
+export function isYouTubeHost(value = '') {
+  return YT_HOST.test(hostOf(value));
 }
 
 // A site player often hides its film behind a blob URL, a media source or an
