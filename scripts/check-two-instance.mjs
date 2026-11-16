@@ -25,13 +25,14 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
 import { bridgeEntries, buildChrome, buildXpi } from '../zen/package.mjs';
 import { zipEntry } from '../spike/unzip.mjs';
 import { findZen, writeProfile } from '../zen/profile.mjs';
 import { createTrustAgent } from '../host/trust.mjs';
+import { newRoomKey } from '../core/seal.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RELAY = path.join(root, 'relay', 'target', 'debug', 'brosr-relay');
@@ -41,6 +42,30 @@ const HOST_PORT = 9351;
 const GUEST_PORT = 9352;
 const ROOM = 'twolocal';
 const PEER = 'guest-1';
+
+// A room on a LAN or tailnet address is not a secure context, and that is the
+// case the seal's plain JavaScript HKDF exists for. Loopback is a secure
+// context, so a loopback run would never exercise it. The Zen lane therefore
+// uses this machine's private IPv4 when it has one and joins with a keyed
+// invite. BROSR_CHECK_ORIGIN pins another address, and a machine with none
+// falls back to loopback and reports the seal as skipped.
+const LAN = (() => {
+  for (const list of Object.values(networkInterfaces())) {
+    for (const item of list || []) {
+      if (item.family !== 'IPv4' || item.internal) continue;
+      const [a, b] = item.address.split('.').map(Number);
+      const private4 =
+        a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 100 && b >= 64 && b <= 127);
+      if (private4) return item.address;
+    }
+  }
+  return null;
+})();
+const ORIGIN = process.env.BROSR_CHECK_ORIGIN || LAN || '127.0.0.1';
+const ORIGIN_SECURE = /^(127\.0\.0\.1|localhost)$/.test(ORIGIN);
 const CHROMIUM = [
   '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
   '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -52,12 +77,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const out = { steps: {} };
 const chromeLane = process.argv.includes('--chrome');
 
-function free(port) {
+function free(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const server = net.createServer();
     server.once('error', () => resolve(false));
     server.once('listening', () => server.close(() => resolve(true)));
-    server.listen(port, '127.0.0.1');
+    server.listen(port, host);
   });
 }
 
@@ -174,6 +199,9 @@ class ChromiumPage {
   // Chrome inserts a character on a keyDown with text. The virtual key code
   // keeps the event shaped like a real key, and the page sees isTrusted true.
   async sendActions(actions) {
+    // The form tab sits behind the guest while it types, and a background tab
+    // can drop synthetic keys. Raising it first gives the field focus back.
+    await this.send('Page.bringToFront').catch(() => {});
     for (const group of actions || []) {
       if (group.type !== 'key') continue;
       for (const step of group.actions || []) {
@@ -296,8 +324,47 @@ function chromiumBuild() {
   );
 }
 
+// The page publishes one dataset object, and the room panel reads the same
+// object. A key that leaves it breaks the panel without breaking the wire, so
+// the check names every key it needs and the shape each one must hold. The
+// host adds the trust client, which only a host page opens.
+const CONTRACT = [
+  'socket',
+  'role',
+  'peerId',
+  'granted',
+  'capture',
+  'peers',
+  'peerList',
+  'trustTarget',
+];
+const HOST_ONLY = ['trust'];
+
+function contractOf(state, keys) {
+  const missing = keys.filter((key) => !state || !(key in state));
+  const wrong = [];
+  if (state) {
+    if (state.socket !== 1) wrong.push(`socket=${state.socket}`);
+    if (state.role !== 'host' && state.role !== 'peer') wrong.push(`role=${state.role}`);
+    if (typeof state.peerId !== 'string' || !state.peerId) wrong.push(`peerId=${state.peerId}`);
+    if (typeof state.granted !== 'boolean') wrong.push(`granted=${state.granted}`);
+    if (typeof state.capture !== 'boolean') wrong.push(`capture=${state.capture}`);
+    if (typeof state.peers !== 'number') wrong.push(`peers=${state.peers}`);
+    if (!Array.isArray(state.peerList)) wrong.push(`peerList=${typeof state.peerList}`);
+  }
+  return { ok: missing.length === 0 && wrong.length === 0, missing, wrong };
+}
+
+// A room loads the panel as well, but the panel is UI and another machine is
+// editing it. A stale panel shows an old layout and cannot break the trust
+// path, so its differing bytes are reported as drift rather than failed. Every
+// code file still has to match the tree byte for byte, because a module that
+// was missing from the bundle is what broke a room before.
+const CODE = ['background.js', 'content.js', 'bridge-youtube.js'];
+const isCode = (name) => name.startsWith('core/') || CODE.includes(name);
+
 // One reader for a bundle on disk: its version, the AMO signature, and every
-// name that is missing from this tree or differs in bytes.
+// name that is missing from this tree, differs as code, or drifts as UI.
 function bundleState(file) {
   const raw = zipEntry(file, 'manifest.json');
   if (!raw) return { error: 'no manifest.json' };
@@ -306,6 +373,7 @@ function bundleState(file) {
   const entries = bridgeEntries();
   const missing = [];
   const changed = [];
+  const drift = [];
 
   for (const entry of entries) {
     // AMO rewrites the manifest while signing, so only payload files are
@@ -313,7 +381,10 @@ function bundleState(file) {
     if (entry.name === 'manifest.json') continue;
     const held = zipEntry(file, entry.name);
     if (!held) missing.push(entry.name);
-    else if (!held.equals(Buffer.from(entry.data))) changed.push(entry.name);
+    else if (!held.equals(Buffer.from(entry.data))) {
+      if (isCode(entry.name)) changed.push(entry.name);
+      else drift.push(entry.name);
+    }
   }
 
   return {
@@ -324,6 +395,7 @@ function bundleState(file) {
     files: entries.length,
     missing,
     changed,
+    drift,
     signature: Boolean(zipEntry(file, 'META-INF/mozilla.rsa')),
   };
 }
@@ -429,19 +501,19 @@ try {
     );
   }
 
-  for (const [name, port] of [
-    ['the relay', RELAY_PORT],
-    ['the host browser', HOST_PORT],
-    ['the guest browser', GUEST_PORT],
+  for (const [name, port, host] of [
+    ['the relay', RELAY_PORT, ORIGIN],
+    ['the host browser', HOST_PORT, '127.0.0.1'],
+    ['the guest browser', GUEST_PORT, '127.0.0.1'],
   ]) {
-    if (!(await free(port))) throw new Error(`port ${port} for ${name} is busy`);
+    if (!(await free(port, host))) throw new Error(`port ${port} for ${name} is busy`);
   }
 
   relay = spawn(RELAY, [], {
     cwd: root,
     env: {
       ...process.env,
-      HOST: '127.0.0.1',
+      HOST: ORIGIN,
       PORT: String(RELAY_PORT),
       FIXTURES: path.join(root, 'spike', 'fixtures'),
       ASSETS: path.join(root, 'assets'),
@@ -455,11 +527,11 @@ try {
     relayLog += chunk;
   });
   await until(
-    async () => (await fetch(`http://127.0.0.1:${RELAY_PORT}/health`)).ok,
+    async () => (await fetch(`http://${ORIGIN}:${RELAY_PORT}/health`)).ok,
     'the relay',
     15000
   );
-  out.steps.relay = `http://127.0.0.1:${RELAY_PORT}`;
+  out.steps.relay = `http://${ORIGIN}:${RELAY_PORT}`;
 
   let openHost;
   let openGuest;
@@ -562,7 +634,7 @@ try {
     };
   }
 
-  const formUrl = `http://127.0.0.1:${RELAY_PORT}/form.html`;
+  const formUrl = `http://${ORIGIN}:${RELAY_PORT}/form.html`;
   const form = await openHost(formUrl);
   await form.eval(
     "(() => { const f = document.getElementById('field'); if (!f) return false; f.focus(); window.__keys = []; f.addEventListener('keydown', (e) => window.__keys.push({ key: e.key, trusted: e.isTrusted })); return true; })()"
@@ -580,9 +652,13 @@ try {
   });
   out.steps.agent = agent.url;
 
+  // A plain HTTP page on a private address has no crypto.subtle, so this key
+  // path runs the seal's own HKDF. The key stays in the fragment, so the relay
+  // never sees it in a request line.
+  const inviteKey = !chromeLane && !ORIGIN_SECURE ? newRoomKey() : null;
   const hostUrl =
-    `http://127.0.0.1:${RELAY_PORT}/?role=host&room=${ROOM}&peer=host&name=Host` +
-    `&relay=${RELAY_PORT}&grant=${PEER}#t=${TOKEN}&tp=${agent.port}`;
+    `http://${ORIGIN}:${RELAY_PORT}/?role=host&room=${ROOM}&peer=host&name=Host` +
+    `&relay=${RELAY_PORT}&grant=${PEER}#${inviteKey ? `k=${inviteKey}&` : ''}t=${TOKEN}&tp=${agent.port}`;
   const hostPage = await openHost(hostUrl);
   out.steps.hostUrl = hostUrl;
   const hostState = await until(async () => {
@@ -591,7 +667,9 @@ try {
   }, 'the host socket', 30000);
   if (!hostState.trust) throw new Error('the host page has no trust client');
 
-  const guestUrl = `http://127.0.0.1:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest&relay=${RELAY_PORT}`;
+  const guestUrl =
+    `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest&relay=${RELAY_PORT}` +
+    (inviteKey ? `#k=${inviteKey}` : '');
   const guestPage = await openGuest(guestUrl);
   out.steps.guestUrl = guestUrl;
   const joined = await until(async () => {
@@ -615,6 +693,49 @@ try {
     peers: hostSees.peerList.map((p) => ({ id: p.id, granted: p.granted })),
     trust: Boolean(hostSees.trust),
   };
+
+  // A sealed room is the one path a loopback run cannot prove. Both ends must
+  // derive the same key on a page the browser calls insecure, and the guest
+  // must open the frames the host seals.
+  const pageSecure = Boolean(await hostPage.eval('window.isSecureContext'));
+  const hostSeal = hostSees.seal || null;
+  const guestSeal = granted.seal || null;
+  const sealOk =
+    !inviteKey ||
+    (pageSecure === false &&
+      Boolean(hostSeal && hostSeal.mode === 'on') &&
+      Boolean(guestSeal && guestSeal.mode === 'on' && guestSeal.in > 0));
+  out.steps.seal = {
+    origin: ORIGIN,
+    keyed: Boolean(inviteKey),
+    pageSecure,
+    host: hostSeal,
+    guest: guestSeal,
+    ok: sealOk,
+  };
+  if (inviteKey && !sealOk) {
+    process.stderr.write(
+      `[brosr] the sealed room did not open: ${JSON.stringify(out.steps.seal)}\n`
+    );
+  }
+
+  // Both pages are live here, so this reads the object a person would get by
+  // opening the panel. It sits before the typing run because a missing key
+  // should be named even when the keyboard path also fails.
+  const hostContract = contractOf(await hostPage.read(), [...CONTRACT, ...HOST_ONLY]);
+  const guestContract = contractOf(await guestPage.read(), CONTRACT);
+  out.steps.contract = {
+    ok: hostContract.ok && guestContract.ok,
+    keys: CONTRACT,
+    hostOnly: HOST_ONLY,
+    host: hostContract,
+    guest: guestContract,
+  };
+  if (!out.steps.contract.ok) {
+    process.stderr.write(
+      `[brosr] the dataset contract is short: ${JSON.stringify(out.steps.contract)}\n`
+    );
+  }
 
   await form.eval(
     "document.getElementById('field').focus(); document.getElementById('field').value = ''; window.__keys = []; true"
@@ -654,11 +775,20 @@ try {
     all: keys.length > 0 && keys.every((k) => k.trusted === true),
   };
 
-  const hostTrust = await hostPage.read();
+  // The page publishes on a timer, and its reply counter lands after the keys
+  // do. A single read here can catch the batch mid-flight and report applied 0
+  // for a run that worked, so wait for the settled count before judging it.
+  const settled = await until(async () => {
+    const s = await hostPage.read();
+    return s && s.trust && s.trust.applied >= 7 && s.trust.failed === 0 ? s : null;
+  }, 'the applied trust count', 10000).catch(() => null);
+  const hostTrust = settled || (await hostPage.read());
   out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
   out.ok =
     shipped.ok &&
     signed.ok &&
+    sealOk &&
+    out.steps.contract.ok &&
     typed.value === 'trusted' &&
     keys.length >= 7 &&
     keys.every((k) => k.trusted === true) &&
