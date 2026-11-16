@@ -1,18 +1,18 @@
-/* Canvas. A warm sheet, a compact panel, and nothing that competes with the
+/* Canvas. A neutral sheet, a compact panel, and nothing that competes with the
    drawing. Tokens stay close to the landing page so the two read as one app. */
 
 :root {
-  --bg: oklch(0.16 0.006 70);
-  --panel: oklch(0.21 0.007 70);
-  --panel-soft: oklch(0.24 0.008 70);
-  --fg: oklch(0.96 0.004 80);
-  --muted: oklch(0.72 0.008 80);
+  --bg: oklch(0.13 0 0);
+  --panel: oklch(0.17 0 0);
+  --panel-soft: oklch(0.22 0 0);
+  --fg: oklch(0.96 0 0);
+  --muted: oklch(0.72 0 0);
   --line: oklch(1 0 0 / 0.10);
   --line-strong: oklch(1 0 0 / 0.20);
-  --brand: oklch(0.78 0.13 62);
-  --brand-ink: oklch(0.24 0.03 60);
-  --ring: oklch(0.75 0.06 62);
-  --paper: #faf7f2;
+  --brand: oklch(0.90 0 0);
+  --brand-ink: oklch(0.14 0 0);
+  --ring: oklch(0.78 0 0);
+  --paper: #f7f7f8;
 }
 
 * {
@@ -110,8 +110,8 @@ button:disabled {
 }
 
 .danger:hover {
-  border-color: oklch(0.62 0.16 26);
-  color: oklch(0.78 0.12 26);
+  border-color: var(--brand);
+  color: var(--fg);
 }
 
 .workspace {
@@ -178,7 +178,7 @@ button:disabled {
 
 .brush[aria-pressed="true"] {
   border-color: var(--line-strong);
-  background: oklch(0.30 0.03 62);
+  background: oklch(0.26 0 0);
   color: var(--fg);
 }
 
@@ -282,7 +282,7 @@ select {
   min-width: 0;
   min-height: 0;
   background:
-    radial-gradient(60% 60% at 50% 40%, oklch(0.24 0.01 70), oklch(0.15 0.006 70) 78%);
+    radial-gradient(60% 60% at 50% 40%, oklch(0.20 0 0), oklch(0.12 0 0) 78%);
 }
 
 .viewport {

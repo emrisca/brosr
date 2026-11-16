@@ -3,7 +3,7 @@
 // symmetry, layers, the room and a PNG export all read from the same record.
 
 const PAPER = { width: 2400, height: 1600 };
-const PAPER_COLOUR = '#faf7f2';
+const PAPER_COLOUR = '#f7f7f8';
 
 const PRESETS = {
   pencil: { label: 'Pencil', size: 4, opacity: 1 },
@@ -20,7 +20,7 @@ const SHAPES = new Set(['line', 'rect', 'ellipse']);
 
 const state = {
   preset: 'pencil',
-  colour: '#1c1a17',
+  colour: '#18181b',
   size: 4,
   opacity: 1,
   stabilizer: 0.35,
@@ -885,7 +885,7 @@ window.addEventListener('resize', resize);
 resize();
 fit();
 setPreset('pencil');
-setColour('#1c1a17');
+setColour('#18181b');
 showLayerState();
 showHistory();
 connect();

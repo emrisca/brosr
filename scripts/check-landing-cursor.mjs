@@ -37,6 +37,8 @@ const WITH_BRIDGE = option('--bridge', !process.argv.includes('--no-bridge'));
 // unpacked folder, because Chrome 137 refuses --load-extension.
 const CANDIDATES = [
   process.env.BROSR_CHECK_BROWSER,
+  'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
   '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
@@ -47,6 +49,8 @@ const CANDIDATES = [
 ].filter(Boolean);
 const BRIDGE_ONLY = [
   process.env.BROSR_CHECK_BRIDGE_BROWSER,
+  'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
   '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
   '/Applications/Chromium.app/Contents/MacOS/Chromium',

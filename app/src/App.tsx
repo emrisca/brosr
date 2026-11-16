@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Users } from 'lucide-react';
+import { Minus, Users, X } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { StepRail } from '@/components/step-rail';
@@ -143,15 +143,23 @@ export default function App() {
     getCurrentWindow().startDragging().catch(() => {});
   }
 
+  function minimizeWindow() {
+    getCurrentWindow().minimize().catch(() => {});
+  }
+
+  function closeWindow() {
+    getCurrentWindow().close().catch(() => {});
+  }
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden">
       <div className="brosr-aurora" aria-hidden="true" />
 
       {/* The window has no title bar. The top strip is the drag area, and the
-          inset keeps the mark and the controls clear of the traffic lights. */}
+          custom controls keep the frameless window usable on Windows. */}
       <header
         onMouseDown={drag}
-        className="relative flex items-center justify-between gap-2 px-2.5 pt-8 pb-2.5"
+        className="relative flex items-center justify-between gap-2 px-3 py-2"
       >
         <div className="flex items-center gap-1.5">
           <Brand className="size-5" />
@@ -168,6 +176,25 @@ export default function App() {
           </Button>
           <StepRail current={INDEX[step]} />
           <ThemeToggle theme={theme} onToggle={toggle} />
+          <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Minimize"
+            title="Minimize"
+            onClick={minimizeWindow}
+          >
+            <Minus />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close Brosr"
+            title="Close"
+            onClick={closeWindow}
+          >
+            <X />
+          </Button>
         </div>
       </header>
 
