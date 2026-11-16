@@ -202,6 +202,12 @@ class ChromiumPage {
     // The form tab sits behind the guest while it types, and a background tab
     // can drop synthetic keys. Raising it first gives the field focus back.
     await this.send('Page.bringToFront').catch(() => {});
+    // Raising a tab does not always restore the element it had focused, and a
+    // key event goes to whatever holds focus. A headless runner left the body
+    // focused and the field empty, so the field is focused again here.
+    await this.eval(
+      "(() => { const active = document.activeElement; if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return true; const field = document.querySelector('input, textarea, [contenteditable]'); if (!field) return false; field.focus(); return document.activeElement === field; })()"
+    ).catch(() => false);
     for (const group of actions || []) {
       if (group.type !== 'key') continue;
       for (const step of group.actions || []) {
