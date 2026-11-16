@@ -46,13 +46,20 @@ const ROOM = new URLSearchParams(location.search).get('room') || 'default';
 const PEER = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 8);
 const PART_POINTS = 300;
 const MAX_POINTS = 20000;
+// Presence. A canvas page says who it is on open and every few seconds, so the
+// room line names the other people with the sheet open, not only a count.
+const HERE_MS = 3000;
+const HERE_TTL = 9000;
+const NAME_KEY = 'brosr.canvas.name';
 // A live frame goes out at most every 60 ms, and a stroke nobody finished is
 // dropped from the sheet after 15 s.
 const LIVE_MS = 60;
 const LIVE_TTL = 15000;
 const room = {
   socket: null,
-  peers: 0,
+  // One entry per canvas page, keyed by peer id. A page that stops sending
+  // presence is dropped after HERE_TTL.
+  here: new Map(),
   retry: null,
   ask: null,
   received: new Map(),
@@ -71,6 +78,7 @@ function nextStrokeId() {
 const viewport = document.getElementById('viewport');
 const canvas = document.getElementById('sheet');
 const ctx = canvas.getContext('2d');
+const nameInput = document.getElementById('name');
 
 // ---------------------------------------------------------------------------
 // Painting
@@ -366,16 +374,64 @@ function setRoomState(text, bad) {
   node.classList.toggle('is-offline', Boolean(bad));
 }
 
-// One line says how many pages are in the room and how much sheet they share,
-// which is also the fastest way to see that a late join arrived empty.
+function cleanName(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .trim()
+    .slice(0, 24);
+}
+
+// An unnamed page still needs a label the other pages can read, so it takes the
+// short form of its own id.
+function myName() {
+  return cleanName(nameInput.value) || 'Guest ' + PEER.slice(0, 4);
+}
+
+function pruneHere() {
+  const cutoff = Date.now() - HERE_TTL;
+  let dropped = false;
+  for (const [id, entry] of room.here) {
+    if (id === PEER) continue;
+    if (entry.at < cutoff) {
+      room.here.delete(id);
+      dropped = true;
+    }
+  }
+  return dropped;
+}
+
+// One line says how many pages hold the sheet, how much ink is on it and who
+// else is here, which is also the fastest way to see that a late join arrived
+// empty.
 function showRoomState() {
-  const pages = room.peers + (room.peers === 1 ? ' page in the room' : ' pages in the room');
-  setRoomState(pages + ' · ' + strokeTotal() + ' strokes');
+  pruneHere();
+  const count = Math.max(1, room.here.size);
+  const pages = count + (count === 1 ? ' page in the room' : ' pages in the room');
+  const others = [...room.here.entries()]
+    .filter(([id]) => id !== PEER)
+    .map(([, entry]) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+  const named = others.slice(0, 3);
+  const rest = others.length - named.length;
+  const who = named.length
+    ? 'you, ' + named.join(', ') + (rest > 0 ? ', +' + rest : '')
+    : 'only you';
+  setRoomState(pages + ' · ' + strokeTotal() + ' strokes · ' + who);
 }
 
 function send(data) {
   if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
   room.socket.send(JSON.stringify({ v: 1, type: 'app', peerId: PEER, name: 'canvas', data }));
+}
+
+// Presence is the page's own name. The entry lands even before the socket does,
+// so the line stays honest while a page waits to connect.
+function sendHere() {
+  const name = myName();
+  room.here.set(PEER, { name, at: Date.now() });
+  if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
+  send({ op: 'here', name });
+  showRoomState();
 }
 
 function wirePoint(point) {
@@ -488,8 +544,17 @@ function cleanStroke(data) {
   };
 }
 
-function handle(data) {
+function handle(from, data) {
+  if (typeof from !== 'string' || !from || from === PEER) return;
   if (!data || typeof data !== 'object') return;
+
+  if (data.op === 'here') {
+    const name = cleanName(data.name);
+    if (!name) return;
+    room.here.set(from, { name, at: Date.now() });
+    showRoomState();
+    return;
+  }
 
   if (data.op === 'stroke') {
     const stroke = cleanStroke(data);
@@ -580,6 +645,9 @@ function handle(data) {
         answered += 1;
       }
     }
+    // The joiner learns every name at once instead of waiting for the next
+    // heartbeat from each page.
+    sendHere();
     send({ op: 'sync-end', from: PEER, strokes: answered });
     return;
   }
@@ -600,7 +668,9 @@ function connect() {
   room.socket = socket;
 
   socket.addEventListener('open', () => {
-    // Announce what this page holds, then ask for the rest of the sheet.
+    // Announce what this page holds, then ask for the rest of the sheet. The
+    // name goes first, so a joiner is named while its strokes arrive.
+    sendHere();
     announce();
     requestSheet();
     readPeers();
@@ -614,7 +684,7 @@ function connect() {
     }
     if (!frame || frame.type !== 'app' || frame.name !== 'canvas') return;
     if (frame.peerId === PEER) return;
-    handle(frame.data);
+    handle(frame.peerId, frame.data);
   });
   socket.addEventListener('close', () => {
     room.socket = null;
@@ -625,13 +695,13 @@ function connect() {
   socket.addEventListener('error', () => socket.close());
 }
 
+// The canvas counts canvas pages from presence, because the relay counts every
+// socket in the room and a film page is not a sheet. The read stays as a relay
+// liveness check.
 function readPeers() {
   fetch('/status?room=' + encodeURIComponent(ROOM), { cache: 'no-store' })
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error('status'))))
-    .then((body) => {
-      room.peers = Number(body.peers) || 0;
-      showRoomState();
-    })
+    .then(() => showRoomState())
     .catch(() => setRoomState('Solo', true));
 }
 
@@ -952,10 +1022,26 @@ window.addEventListener('resize', resize);
 // ---------------------------------------------------------------------------
 // Start
 
+try {
+  nameInput.value = localStorage.getItem(NAME_KEY) || '';
+} catch {
+  nameInput.value = '';
+}
+nameInput.addEventListener('input', () => {
+  try {
+    localStorage.setItem(NAME_KEY, nameInput.value.slice(0, 24));
+  } catch {
+    // A private window can refuse storage, and the name still works without it.
+  }
+  sendHere();
+});
+
 resize();
 fit();
 setPreset('pencil');
 setColour('#18181b');
 showLayerState();
 showHistory();
+sendHere();
+setInterval(sendHere, HERE_MS);
 connect();
