@@ -252,7 +252,15 @@ function renderCursorSites(data) {
     list.append(empty);
     return;
   }
-  for (const key of keys) {
+  // The sites that are on come first, and each group reads alphabetically, so
+  // a list that keeps growing never buries the rows the host is using.
+  const ordered = [...keys].sort((a, b) => {
+    const on = active.includes(a) ? 0 : 1;
+    const other = active.includes(b) ? 0 : 1;
+    if (on !== other) return on - other;
+    return siteLabel(a).localeCompare(siteLabel(b));
+  });
+  for (const key of ordered) {
     const row = document.createElement('li');
     const label = document.createElement('label');
     label.className = 'switch-row';
