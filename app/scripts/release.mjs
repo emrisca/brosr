@@ -68,8 +68,8 @@ function writeCargo(file, block) {
   const text = read(file);
   const pattern =
     block === 'package'
-      ? /(\[package\][\s\S]*?\nversion = ")[^"]+(")/
-      : /(\[\[package\]\]\nname = "brosr-app"\nversion = ")[^"]+(")/;
+      ? /(\[package\][\s\S]*?\r?\nversion = ")[^"]+(")/
+      : /(\[\[package\]\]\r?\nname = "brosr-app"\r?\nversion = ")[^"]+(")/;
   if (!pattern.test(text)) stop(`no ${block} version in ${path.basename(file)}`);
   writes.push({ file, text: text.replace(pattern, `$1${version}$2`) });
 }

@@ -36,10 +36,14 @@ if (!env.TAURI_SIGNING_PRIVATE_KEY) {
 }
 
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+// Node 24 refuses to spawn a .cmd shim directly on Windows, so npx goes
+// through the shell there. The arguments are fixed by this script.
 const child = spawn(npx, ['tauri', 'build', ...process.argv.slice(2)], {
   cwd: app,
   env,
   stdio: 'inherit',
+  shell: process.platform === 'win32',
+  windowsHide: true,
 });
 child.on('error', (error) => {
   console.error(`[brosr] ${error.message}`);
