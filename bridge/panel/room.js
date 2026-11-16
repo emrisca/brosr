@@ -27,113 +27,8 @@ const asked = new URLSearchParams(location.search).get('surface') || '';
 const SURFACE = asked === 'tab' ? 'tab' : 'popup';
 document.documentElement.dataset.surface = SURFACE;
 
-// The panel is a content page, so prefers-color-scheme reports the system and
-// not the browser theme. The theme API is the true source. A contrast pass then
-// keeps text readable when a palette pairs a light surface with pale text.
-const DARK_TEXT = '#16161a';
-const LIGHT_TEXT = '#fbfbfe';
-
-// Gecko reports a mixed colour as `color(srgb r g b)` with unit channels, so a
-// plain rgba match would miss every token the stylesheet builds. Both forms
-// resolve here, and a named system colour resolves through getComputedStyle.
-function channels(value) {
-  const text = String(value).trim();
-  const rgb = text.match(/^rgba?\(([^)]+)\)$/);
-  if (rgb) {
-    const parts = rgb[1]
-      .split(/[,/ ]+/)
-      .filter(Boolean)
-      .map(Number);
-    if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) return parts.slice(0, 3);
-  }
-  const hex = text.replace('#', '');
-  if (/^[0-9a-f]{6}$/i.test(hex)) return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-  if (/^[0-9a-f]{3}$/i.test(hex)) return [0, 1, 2].map((i) => parseInt(hex[i] + hex[i], 16));
-  const wide = text.match(/^color\(\s*[a-z0-9-]+\s+([^)]+)\)$/i);
-  if (wide) {
-    const parts = wide[1]
-      .split(/[\s/]+/)
-      .filter(Boolean)
-      .map(Number);
-    if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
-      return parts.slice(0, 3).map((part) => Math.round(Math.min(1, Math.max(0, part)) * 255));
-    }
-  }
-  return null;
-}
-
-const asRgb = (rgb) => `rgb(${rgb.map((value) => Math.round(value)).join(', ')})`;
-
-// The theme API can stay silent about a Zen space palette, so the panel also
-// reads the system surface. That path never returns a half colour pair.
-function systemSurface() {
-  const probe = document.createElement('span');
-  probe.style.cssText =
-    'position:fixed;left:-9999px;top:-9999px;background:Canvas;color:CanvasText';
-  document.body.append(probe);
-  const style = getComputedStyle(probe);
-  const pair = { base: channels(style.backgroundColor), text: channels(style.color) };
-  probe.remove();
-  return pair;
-}
-
-function luminance(rgb) {
-  const [r, g, b] = rgb.map((value) => {
-    const c = value / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function contrast(a, b) {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-}
-
-// The base, the text and the mixed surface are written as plain rgb triples.
-// A `color-mix` token would compute to `color(srgb ...)`, which the guard could
-// not read, so the guard would pass a pale pair through unchecked.
-async function applyTheme() {
-  const root = document.documentElement;
-  let colours = null;
-  try {
-    const theme = await api.theme.getCurrent();
-    colours = theme && theme.colors ? theme.colors : null;
-  } catch {
-    colours = null;
-  }
-  const system = systemSurface();
-  const base = channels(colours && (colours.toolbar || colours.popup || colours.frame)) || system.base;
-  let text = channels(colours && (colours.toolbar_text || colours.popup_text)) || system.text;
-  if (!base || !text) return;
-  // A palette can hand back a light surface and pale text. Keep the pair above
-  // 4.5 to 1, and pick the near end that the surface can carry.
-  if (contrast(base, text) < 4.5) {
-    text = channels(luminance(base) > 0.45 ? DARK_TEXT : LIGHT_TEXT);
-  }
-  const accent = channels(colours && (colours.tab_line || colours.frame_text));
-  const keepAccent = accent && contrast(base, accent) >= 3;
-  const surface = base.map((value, index) => value * 0.94 + text[index] * 0.06);
-  const set = (name, value) => {
-    if (value) root.style.setProperty(name, value);
-    else root.style.removeProperty(name);
-  };
-  set('--room-base', asRgb(base));
-  set('--room-text', asRgb(text));
-  set('--room-bg', asRgb(surface));
-  set('--room-accent', keepAccent ? asRgb(accent) : '');
-}
-
-if (api && api.theme) {
-  applyTheme();
-  try {
-    api.theme.onUpdated.addListener(() => applyTheme());
-  } catch {
-    // An older build without the event keeps the first pass.
-  }
-  const scheme = matchMedia('(prefers-color-scheme: dark)');
-  scheme.addEventListener('change', () => applyTheme());
-}
+// The stylesheet owns the neutral palette in both colour schemes. The panel
+// follows the system scheme and never borrows a page or browser accent.
 // The room tab carries the room and the transport in its URL. A join link
 // keeps the page and the room, drops the host identity and adds a guest one.
 function inviteLink(href) {
@@ -181,13 +76,7 @@ function renderHistory(data) {
   const history = Array.isArray(data.controlHistory)
     ? data.controlHistory.slice(-3).reverse()
     : [];
-  if (!history.length) {
-    const empty = document.createElement('li');
-    empty.className = 'empty';
-    empty.textContent = 'No control changes yet.';
-    list.append(empty);
-    return;
-  }
+  if (!history.length) return;
   for (const entry of history) {
     const row = document.createElement('li');
     row.textContent = `${entry.peerId} ${entry.allowed ? 'granted' : 'revoked'}`;
@@ -309,13 +198,10 @@ function renderWatch(reply) {
   if (!media) {
     state.textContent = 'No media';
     delete state.dataset.state;
-    copy.textContent =
-      reply && reply.role === 'host'
-        ? 'Play something in a tab and the room follows it.'
-        : 'The host has not started a film.';
+    copy.textContent = 'No film yet.';
     button.textContent = 'Open the film';
     button.disabled = true;
-    button.title = 'No film in this room yet';
+    button.title = 'No film yet';
     return;
   }
   const flag = media.ad ? 'Ad' : media.buffering ? 'Buffering' : '';
@@ -385,6 +271,7 @@ function renderTrust(data) {
 
 function render(reply) {
   lastReply = reply;
+  delete document.body.dataset.state;
   const data = reply.data || {};
   $('room').textContent = reply.room || 'room';
   $('role').textContent = reply.role || '';
@@ -395,7 +282,8 @@ function render(reply) {
     renderTabs();
   }
   $('dot').dataset.state = data.socket === 1 ? 'live' : 'down';
-  setStatus(data.socket === 1 ? 'Connected' : 'Reconnecting...');
+  if (data.socket === 1) setStatus('');
+  else setStatus('Reconnecting...', 'error');
   $('control').hidden = reply.role !== 'host';
   renderSeal(data.seal);
   renderTrust(data);
@@ -490,6 +378,7 @@ function render(reply) {
 
 function missing(reason) {
   lastReply = null;
+  document.body.dataset.state = 'missing';
   $('dot').dataset.state = 'down';
   setStatus(reason || 'This tab is not in a room.', 'error');
   $('peers').replaceChildren();

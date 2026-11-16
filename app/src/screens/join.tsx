@@ -71,17 +71,13 @@ export function JoinDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>Join a room</DialogTitle>
           <DialogDescription>
-            Paste the invite link a friend sent. Brosr opens a browser that is already set
-            up for their room, and no room of your own starts.
+            Paste an invite link. Brosr opens it in a browser set up for that room.
           </DialogDescription>
         </DialogHeader>
 
         {joined ? (
           <div className="flex flex-col gap-2">
             <p className="text-sm">The room is open in {joined}.</p>
-            <p className="text-xs text-muted-foreground">
-              That window is the room. Close it when you are done.
-            </p>
             <DialogFooter>
               <Button size="sm" onClick={() => onOpenChange(false)}>
                 Done

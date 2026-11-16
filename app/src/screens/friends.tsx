@@ -187,10 +187,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
       <DialogContent className="max-w-[30rem]">
         <DialogHeader>
           <DialogTitle>Friends</DialogTitle>
-          <DialogDescription>
-            Invites stay on this machine, your local network or your tailnet. Nothing is sent
-            to the internet.
-          </DialogDescription>
+          <DialogDescription>Invites stay on your device or network.</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-1.5">
@@ -219,9 +216,6 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
               {copied ? 'Copied' : 'Copy'}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Send this to a friend. It is the address they add to reach your invites.
-          </p>
         </div>
 
         {localOnly ? (
@@ -258,9 +252,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
               {busy === 'add' ? 'Adding' : 'Add'}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Paste the address your friend copied. Leave the port off to use 8790.
-          </p>
+          <p className="text-xs text-muted-foreground">Leave the port off to use 8790.</p>
         </form>
 
         <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
@@ -274,7 +266,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
               >
                 <div className="min-w-0 flex-1">
                   {editing === friend.address ? (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <Input
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
@@ -307,7 +299,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
                       </Button>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <p className="truncate text-sm">{friend.name}</p>
                       <Button
                         size="icon-xs"
@@ -324,7 +316,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
                     {friend.address}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1.5">
                   <Button
                     variant="secondary"
                     size="xs"
@@ -371,7 +363,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
                     {invite.room}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1.5">
                   <Button
                     size="xs"
                     onClick={() => answer(invite, true)}

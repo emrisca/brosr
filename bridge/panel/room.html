@@ -10,15 +10,12 @@
     <header class="room-header">
       <div class="room-title">
         <span class="dot" id="dot" data-state="idle" aria-hidden="true"></span>
-
         <h1 id="room">Room</h1>
       </div>
 
       <div class="room-meta">
         <span class="count" id="count" aria-label="Peers in this room"></span>
-
         <span class="role" id="role"></span>
-
         <span class="seal" id="seal" hidden></span>
       </div>
 
@@ -45,7 +42,6 @@
             <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
             <path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2" />
           </svg>
-
           <span>Copy join link</span>
         </button>
 
@@ -54,7 +50,6 @@
             <path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89" />
             <path d="M13.5 2.5v3.1h-3.1" />
           </svg>
-
           <span>Refresh room</span>
         </button>
 
@@ -67,7 +62,6 @@
             <path d="M12 8H8.5" />
             <path d="M10 6.5 8.5 8l1.5 1.5" />
           </svg>
-
           <span>Close panel</span>
         </button>
 
@@ -79,122 +73,98 @@
             <path d="M9.5 5.5 12 8l-2.5 2.5" />
             <path d="M12 8H6.5" />
           </svg>
-
           <span>Leave room</span>
         </button>
       </div>
     </header>
 
-    <p class="status" id="status" role="status" aria-live="polite">Checking this tab.</p>
+    <div class="room-body">
+      <p class="status" id="status" role="status" aria-live="polite"></p>
 
-    <section class="invite" id="invite-box" hidden>
-      <label for="invite">Join link</label>
+      <section class="card invite" id="invite-box" hidden>
+        <label for="invite">Join link</label>
+        <div class="invite-row">
+          <input id="invite" type="text" readonly />
+          <button class="invite-copy" id="invite-copy" type="button">Copy</button>
+        </div>
+      </section>
 
-      <div class="invite-row">
-        <input id="invite" type="text" readonly />
+      <p class="notice" id="notice" role="status" aria-live="polite"></p>
 
-        <button class="invite-copy" id="invite-copy" type="button">Copy</button>
-      </div>
-    </section>
+      <section class="card panel-sites" id="panel-sites" hidden>
+        <p class="section-title">Dropped links</p>
+        <ul class="site-list" id="panel-sites-list"></ul>
+      </section>
 
-    <p class="notice" id="notice" role="status" aria-live="polite"></p>
+      <section class="card peers-section" aria-labelledby="peers-label">
+        <p class="section-title" id="peers-label">People</p>
+        <ul id="peers"></ul>
+      </section>
 
-    <section class="panel-sites" id="panel-sites" hidden>
-      <p class="section-title">Dropped here</p>
+      <section class="card watch" id="watch" aria-labelledby="watch-label">
+        <div class="section-head">
+          <p class="section-title" id="watch-label">Watch</p>
+          <span class="watch-state" id="watch-state">No media</span>
+        </div>
 
-      <ul class="site-list" id="panel-sites-list"></ul>
-    </section>
+        <p class="watch-copy" id="watch-copy">No film yet.</p>
 
-    <section class="peers-section" aria-labelledby="peers-label">
-      <p class="section-title" id="peers-label">In this room</p>
+        <div class="watch-row">
+          <button class="watch-button" id="watch-toggle" type="button" disabled title="No film yet">
+            Open the film
+          </button>
+        </div>
 
-      <ul id="peers"></ul>
-    </section>
+        <p class="watch-action" id="watch-action" hidden></p>
+        <ul class="watch-viewers" id="watch-viewers"></ul>
+      </section>
 
-    <section class="watch" id="watch" aria-labelledby="watch-label">
-      <div class="watch-head">
-        <p class="section-title" id="watch-label">Watch together</p>
+      <section class="card control" id="control" hidden>
+        <p class="section-title">Host controls</p>
 
-        <span class="watch-state" id="watch-state">No media</span>
-      </div>
+        <label class="switch-row" for="trust-target">
+          <span>Trusted typing</span>
+          <input type="checkbox" id="trust-target" />
+        </label>
 
-      <div class="watch-row">
-        <p class="watch-copy" id="watch-copy">The host has not started a film.</p>
+        <p class="note" id="trust-note"></p>
+        <ul class="history" id="history"></ul>
+      </section>
 
-        <button
-          class="watch-button"
-          id="watch-toggle"
-          type="button"
-          disabled
-          aria-describedby="watch-copy"
-          title="No film in this room yet"
-        >
-          Open the film
-        </button>
-      </div>
-
-      <p class="watch-action" id="watch-action" hidden></p>
-
-      <ul class="watch-viewers" id="watch-viewers"></ul>
-    </section>
-
-    <section class="control" id="control" hidden>
-      <p class="section-title">Control</p>
-
-      <label class="tabs-auto" for="trust-target">
-        <input type="checkbox" id="trust-target" />
-
-        <span>Trusted typing</span>
-      </label>
-
-      <p class="tabs-note" id="trust-note">Typing goes to this room tab.</p>
-
-      <ul class="history" id="history"></ul>
-    </section>
-
-    <section class="tabs" id="playback-section" aria-labelledby="playback-label">
-      <div class="tabs-head">
+      <section class="card" id="playback-section" aria-labelledby="playback-label">
         <p class="section-title" id="playback-label">Playback</p>
 
-        <label class="tabs-auto" for="sync-media">
-          <input type="checkbox" id="sync-media" />
-
+        <label class="switch-row" for="sync-media">
           <span>Sync playback</span>
+          <input type="checkbox" id="sync-media" />
         </label>
-      </div>
 
-      <p class="tabs-note" id="playback-note">This browser follows the room playhead.</p>
+        <label class="switch-row" for="notice-media">
+          <span>Action notices</span>
+          <input type="checkbox" id="notice-media" />
+        </label>
 
-      <label class="tabs-auto tabs-notice" for="notice-media">
-        <input type="checkbox" id="notice-media" />
+        <p class="note" id="playback-note"></p>
+      </section>
 
-        <span>Action notices</span>
-      </label>
-    </section>
+      <section class="card" id="tabs-section" aria-labelledby="tabs-label">
+        <p class="section-title" id="tabs-label">Tabs</p>
 
-    <section class="tabs" id="tabs-section" aria-labelledby="tabs-label">
-      <div class="tabs-head">
-        <p class="section-title" id="tabs-label">Sync tabs</p>
-
-        <label class="tabs-auto" for="tabs-auto">
-          <input type="checkbox" id="tabs-auto" />
-
+        <label class="switch-row" for="tabs-auto">
           <span>Share new tabs</span>
+          <input type="checkbox" id="tabs-auto" />
         </label>
-      </div>
 
-      <p class="tabs-note" id="tabs-note" hidden></p>
+        <p class="note" id="tabs-note" hidden></p>
+        <ul class="tab-list" id="tabs-list"></ul>
+      </section>
 
-      <ul class="tab-list" id="tabs-list"></ul>
-    </section>
-
-    <footer>
-      <span class="stat" id="playback">-</span>
-
-      <span class="stat" id="relay">-</span>
-
-      <span class="stat" id="latency">-</span>
-    </footer>
+      <footer>
+        <span class="stat" id="playback">-</span>
+        <span class="stat" id="relay">-</span>
+        <span class="stat" id="latency">-</span>
+      </footer>
+    </div>
 
     <script src="room.js"></script>
   </body>

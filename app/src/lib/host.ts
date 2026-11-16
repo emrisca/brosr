@@ -55,6 +55,7 @@ export type Run = {
   browser: { id: string; name: string; path: string; family?: 'gecko' | 'chromium' };
   room: string;
   name: string;
+  host: string;
   port: number;
   url: string;
   invite: string;

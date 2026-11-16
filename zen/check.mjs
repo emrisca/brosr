@@ -168,7 +168,7 @@ async function readPanel(bidi, panelContext) {
   const raw = await evaluate(
     bidi,
     panelContext,
-    "JSON.stringify({ notice: document.getElementById('notice').textContent, control: !document.getElementById('control').hidden, names: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent), grantedPeers: [...document.querySelectorAll('#peers li')].filter((node) => node.dataset.granted === '1').map((node) => node.dataset.peer), history: [...document.querySelectorAll('#history li')].map((node) => node.textContent), state: document.getElementById('dot').dataset.state, room: document.getElementById('room').textContent, invite: document.getElementById('invite').value, count: document.getElementById('count').textContent, playback: document.getElementById('playback').textContent, relay: document.getElementById('relay').textContent, inviteCopy: document.getElementById('invite-copy').textContent, inviteRow: (() => { const a = document.getElementById('invite').getBoundingClientRect(); const b = document.getElementById('invite-copy').getBoundingClientRect(); return Math.abs(a.top - b.top) < 6 && b.left >= a.right; })(), watchState: document.getElementById('watch-state').textContent, watchLabel: document.getElementById('watch-toggle').textContent.trim(), watchDisabled: document.getElementById('watch-toggle').disabled, watchCopy: document.getElementById('watch-copy').textContent.trim(), viewH: innerHeight, watchBottom: Math.round(document.getElementById('watch-toggle').getBoundingClientRect().bottom), title: document.title, bg: getComputedStyle(document.body).backgroundColor, fg: getComputedStyle(document.body).color })"
+    "JSON.stringify({ notice: document.getElementById('notice').textContent, control: !document.getElementById('control').hidden, names: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent), grantedPeers: [...document.querySelectorAll('#peers li')].filter((node) => node.dataset.granted === '1').map((node) => node.dataset.peer), history: [...document.querySelectorAll('#history li')].map((node) => node.textContent), state: document.getElementById('dot').dataset.state, room: document.getElementById('room').textContent, invite: document.getElementById('invite').value, count: document.getElementById('count').textContent, playback: document.getElementById('playback').textContent, relay: document.getElementById('relay').textContent, inviteCopy: document.getElementById('invite-copy').textContent, inviteRow: (() => { const a = document.getElementById('invite').getBoundingClientRect(); const b = document.getElementById('invite-copy').getBoundingClientRect(); return Math.abs(a.top - b.top) < 6 && b.left >= a.right; })(), watchState: document.getElementById('watch-state').textContent, watchLabel: document.getElementById('watch-toggle').textContent.trim(), watchDisabled: document.getElementById('watch-toggle').disabled, watchCopy: document.getElementById('watch-copy').textContent.trim(), syncMedia: (() => { const box = document.getElementById('sync-media'); const label = box && box.closest('label'); return { label: label ? label.textContent.trim() : '', checked: Boolean(box && box.checked), disabled: Boolean(box && box.disabled) }; })(), viewH: innerHeight, watchBottom: Math.round(document.getElementById('watch-toggle').getBoundingClientRect().bottom), title: document.title, bg: getComputedStyle(document.body).backgroundColor, fg: getComputedStyle(document.body).color })"
   );
   return raw ? JSON.parse(raw) : null;
 }
@@ -454,8 +454,12 @@ async function probeDock(zen) {
       dock.error = `the compact button sits at ${g.compact.top}, below the bar`;
     } else if (g.barRow.left > 1 || g.barRow.right < g.windowWidth - 1) {
       dock.error = `the top bar spans ${g.barRow.left} to ${g.barRow.right} in a ${g.windowWidth} window`;
-    } else if (g.controlsBox.count > 0 && g.controlsBox.right > g.controlsBox.backLeft) {
-      dock.error = `the window controls end at ${g.controlsBox.right}, over the back button at ${g.controlsBox.backLeft}`;
+    } else if (
+      g.controlsBox.count > 0 &&
+      g.controlsBox.left < g.controlsBox.backLeft &&
+      g.controlsBox.right > g.controlsBox.backLeft
+    ) {
+      dock.error = `the window controls run from ${g.controlsBox.left} to ${g.controlsBox.right}, over the back button at ${g.controlsBox.backLeft}`;
     } else if (!g.bookmarks || g.bookmarks.text !== 'Essentials') {
       dock.error = `the essentials heading reads ${g.bookmarks ? g.bookmarks.text : 'missing'}`;
     } else if (g.bookmarks.top < g.barTop + 1) {
@@ -936,8 +940,13 @@ async function main() {
     if (!['No media', 'Playing', 'Paused'].includes(grantedPanel.watchState)) {
       throw new Error(`the watch card reads ${grantedPanel.watchState}`);
     }
-    if (grantedPanel.watchLabel !== 'Sync playback') {
+    if (grantedPanel.watchLabel !== 'Open the film') {
       throw new Error(`the watch button reads ${grantedPanel.watchLabel}`);
+    }
+    if (!grantedPanel.syncMedia || grantedPanel.syncMedia.label !== 'Sync playback') {
+      throw new Error(
+        `the playback toggle reads ${grantedPanel.syncMedia && grantedPanel.syncMedia.label}`
+      );
     }
     if (!grantedPanel.watchDisabled) {
       throw new Error('the sync button looks live while the media bridge is off');
@@ -1095,17 +1104,22 @@ async function main() {
     log('[zen] failed:', error.message);
   } finally {
     killTree(browser);
-    killTree(relay);
     await sleep(300);
   }
 
-  if (result.check.ok) {
-    result.dock = await probeDock(zen);
-    if (result.dock.error) {
-      result.check.ok = false;
-      result.check.error = 'dock: ' + result.dock.error;
+  try {
+    if (result.check.ok) {
+      result.dock = await probeDock(zen);
+      if (result.dock.error) {
+        result.check.ok = false;
+        result.check.error = 'dock: ' + result.dock.error;
+      }
+      log('[zen] dock', JSON.stringify(result.dock));
     }
-    log('[zen] dock', JSON.stringify(result.dock));
+  } finally {
+    // The dock opens a loopback page, so its relay must outlive the main
+    // window. Keep it until the tile pass has read that page.
+    killTree(relay);
   }
 
   fs.mkdirSync(runtime, { recursive: true });

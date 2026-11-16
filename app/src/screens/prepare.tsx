@@ -55,7 +55,7 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
       .then((result) => {
         if (!live) return;
         setPrepared(result);
-        setStage({ step: 1, total: 1, label: 'Room profile ready' });
+        setStage({ step: 1, total: 1, label: 'Browser profile ready' });
         setPhase('ready');
       })
       .catch((cause) => {
@@ -108,7 +108,7 @@ export function Prepare({ browser, name, onReady, onBack }: Props) {
           <>
             <div className="flex items-center gap-1.5 text-sm">
               <Check className="size-4 text-brand" aria-hidden="true" />
-              Room profile
+              Browser profile
             </div>
             <Separator />
             <div className="flex items-center justify-between gap-2">

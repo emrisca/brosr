@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Room setup, window dragging and update checks for the main window.",
+  "description": "Room setup, window dragging, window controls and update checks for the main window.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
     "updater:default",
     "process:allow-restart"
   ]

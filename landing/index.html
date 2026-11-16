@@ -27,133 +27,170 @@
   </header>
 
   <main class="page">
-    <section class="intro">
-      <h1>Every page in this room, in one place.</h1>
-      <p>These apps are built for a shared browser. Open one and it joins the room you already have.</p>
-    </section>
-
-    <h2 id="tiles" class="section-title">Apps</h2>
-
-    <ul class="tiles">
-      <li>
-        <a class="tile tile-live" href="./canvas/">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
-              <path d="M13.5 5.5l4 4"></path>
-            </svg>
-          </span>
-          <span class="tile-body">
-            <span class="tile-name">Canvas</span>
-            <span class="tile-note">Draw on one surface. Every stroke lands for the room.</span>
-          </span>
-          <span class="tile-state is-live">Live</span>
-        </a>
-      </li>
-
-      <li>
-        <div class="tile is-soon">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <rect x="3" y="5" width="18" height="14" rx="3"></rect>
-              <path d="M10.5 9.5l4.5 2.5-4.5 2.5v-5z"></path>
-            </svg>
-          </span>
-          <span class="tile-body">
-            <span class="tile-name">Watch</span>
-            <span class="tile-note">One playhead for everyone, with pause and seek shared.</span>
-          </span>
-          <span class="tile-state">Soon</span>
-        </div>
-      </li>
-
-      <li>
-        <div class="tile is-soon">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M9 18V6l10-2v12"></path>
-              <circle cx="6.5" cy="18" r="2.5"></circle>
-              <circle cx="16.5" cy="16" r="2.5"></circle>
-            </svg>
-          </span>
-          <span class="tile-body">
-            <span class="tile-name">Listen</span>
-            <span class="tile-note">A shared queue that stays on the same track.</span>
-          </span>
-          <span class="tile-state">Soon</span>
-        </div>
-      </li>
-
-      <li>
-        <div class="tile is-soon">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M7 8h10a4 4 0 0 1 0 8H9l-3 3v-4a4 4 0 0 1 1-7z"></path>
-              <circle cx="9.5" cy="12" r="1"></circle>
-              <circle cx="14.5" cy="12" r="1"></circle>
-            </svg>
-          </span>
-          <span class="tile-body">
-            <span class="tile-name">Play</span>
-            <span class="tile-note">Turn based and canvas games, driven by both players.</span>
-          </span>
-          <span class="tile-state">Soon</span>
-        </div>
-      </li>
-
-      <li>
-        <div class="tile is-soon">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <path d="M5 4h10l4 4v12H5V4z"></path>
-              <path d="M8 10h8M8 14h8M8 18h5"></path>
-            </svg>
-          </span>
-          <span class="tile-body">
-            <span class="tile-name">Notes</span>
-            <span class="tile-note">A page that edits itself as everyone types.</span>
-          </span>
-          <span class="tile-state">Soon</span>
-        </div>
-      </li>
-
-      <li>
-        <div class="tile tile-url">
-          <span class="tile-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-              <circle cx="12" cy="12" r="8"></circle>
-              <path d="M4 12h16"></path>
-              <path d="M12 4c2.3 2.2 3.5 4.9 3.5 8S14.3 17.8 12 20c-2.3-2.2-3.5-4.9-3.5-8S9.7 6.2 12 4z"></path>
-            </svg>
-          </span>
-          <form class="tile-body tile-link" id="url-form" novalidate>
-            <label class="tile-name" for="url-field">Open a link</label>
-            <span class="tile-note">Any address opens in a new tab. That tab is shared with the room.</span>
-            <span class="tile-link-row">
-              <input class="tile-link-input" id="url-field" name="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="example.com" aria-describedby="url-error">
-              <button class="tile-link-button" type="submit">Open</button>
+    <section class="bento" id="tiles" aria-label="Room apps">
+      <article class="tile tile-watch" aria-labelledby="watch-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <rect x="3" y="5" width="18" height="14" rx="3"></rect>
+                <path d="M10.5 9.5l4.5 2.5-4.5 2.5v-5z"></path>
+              </svg>
             </span>
-            <p class="tile-link-error" id="url-error" role="status"></p>
-          </form>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="watch-title">Watch</h2>
+              <p class="tile-note">One playhead for everyone, with pause and seek shared.</p>
+            </div>
+          </div>
           <span class="tile-state is-live">Live</span>
         </div>
-      </li>
-
-      <li>
-        <div class="tile is-soon tile-slot">
-          <span class="tile-body">
-            <span class="tile-name">Next app</span>
-            <span class="tile-note">A tile is waiting for the next page built for a room.</span>
-          </span>
-          <span class="tile-state">Slot</span>
+        <div class="site-list">
+          <a class="site" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">YouTube</span>
+              <span class="site-host">youtube.com</span>
+            </span>
+            <span class="site-status is-supported">Supported</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+          <a class="site" href="https://cinecat.eu/" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">Cinecat</span>
+              <span class="site-host">cinecat.eu</span>
+            </span>
+            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+          <a class="site" href="https://www.movy.sx/" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">Movy</span>
+              <span class="site-host">movy.sx</span>
+            </span>
+            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+          <a class="site" href="https://7movies.ac/" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">7movies</span>
+              <span class="site-host">7movies.ac</span>
+            </span>
+            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
         </div>
-      </li>
-    </ul>
-  </main>
+      </article>
 
-  <footer class="foot">
-    <p>A room stays on your own network. The relay forwards frames and keeps nothing.</p>
-  </footer>
+      <article class="tile tile-listen" aria-labelledby="listen-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M9 18V6l10-2v12"></path>
+                <circle cx="6.5" cy="18" r="2.5"></circle>
+                <circle cx="16.5" cy="16" r="2.5"></circle>
+              </svg>
+            </span>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="listen-title">Listen</h2>
+              <p class="tile-note">A shared queue on one track.</p>
+            </div>
+          </div>
+          <span class="tile-state">Soon</span>
+        </div>
+        <div class="site-list">
+          <a class="site" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">YouTube Music</span>
+              <span class="site-host">music.youtube.com</span>
+            </span>
+            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+        </div>
+      </article>
+
+      <article class="tile tile-play" aria-labelledby="play-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M7 20h10M8.5 17h7l-1.2-4.5 3-2.2-3.6-5.1-3 2.8 1.2 2.1-3.2 3.2 1.1 2.2-1 1.5z"></path>
+              </svg>
+            </span>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="play-title">Play</h2>
+              <p class="tile-note">Chess, then more board games.</p>
+            </div>
+          </div>
+          <span class="tile-state">Soon</span>
+        </div>
+        <div class="site-list">
+          <a class="site" href="https://www.chess.com/play/online" target="_blank" rel="noopener noreferrer">
+            <span class="site-copy">
+              <span class="site-name">Chess</span>
+              <span class="site-host">chess.com</span>
+            </span>
+            <span class="site-status">Soon</span>
+            <svg class="site-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <path d="M7 17 17 7M8 7h9v9"></path>
+            </svg>
+          </a>
+        </div>
+      </article>
+
+      <a class="tile tile-canvas tile-live" href="./canvas/" aria-labelledby="canvas-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
+                <path d="M13.5 5.5l4 4"></path>
+              </svg>
+            </span>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="canvas-title">Canvas</h2>
+              <p class="tile-note">Draw on one surface. Every stroke lands for the room.</p>
+            </div>
+          </div>
+          <span class="tile-state is-live">Live</span>
+        </div>
+        <span class="tile-open">
+          Open canvas
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+            <path d="M7 17 17 7M8 7h9v9"></path>
+          </svg>
+        </span>
+      </a>
+
+      <article class="tile tile-notes" aria-labelledby="notes-title">
+        <div class="tile-head">
+          <div class="tile-heading">
+            <span class="tile-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                <path d="M5 4h10l4 4v12H5V4z"></path>
+                <path d="M8 10h8M8 14h8M8 18h5"></path>
+              </svg>
+            </span>
+            <div class="tile-copy">
+              <h2 class="tile-name" id="notes-title">Notes</h2>
+              <p class="tile-note">A page that edits itself as everyone types.</p>
+            </div>
+          </div>
+          <span class="tile-state">Soon</span>
+        </div>
+      </article>
+    </section>
+  </main>
 
   <div class="cursors" id="cursors" aria-hidden="true"></div>
 
@@ -194,47 +231,6 @@
 
       read();
       setInterval(read, 5000);
-
-      // The address tile opens a tab, and the bridge shares that tab with the
-      // room. This page does not rewrite the address, so the site keeps its
-      // own page.
-      var form = document.getElementById('url-form');
-      var field = document.getElementById('url-field');
-      var error = document.getElementById('url-error');
-
-      form.addEventListener('submit', function (event) {
-        event.preventDefault();
-        var raw = field.value.trim();
-        if (!raw) {
-          error.textContent = 'Type an address first.';
-          field.focus();
-          return;
-        }
-        var address = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw;
-        var target;
-        try {
-          target = new URL(address);
-        } catch (err) {
-          error.textContent = 'That is not an address this browser can open.';
-          field.focus();
-          return;
-        }
-        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-          error.textContent = 'Only http and https addresses open here.';
-          field.focus();
-          return;
-        }
-        error.textContent = '';
-        // A noopener window returns no handle, so the tab looks blocked on
-        // every browser. Open plainly and cut the opener link here.
-        var opened = window.open(target.href, '_blank');
-        if (!opened) {
-          error.textContent = 'The browser blocked the new tab. Allow pop-ups for this page.';
-          return;
-        }
-        opened.opener = null;
-        field.value = '';
-      });
 
       // The landing page draws a cursor for every other landing page in the
       // room, so a person can point at the tile to open. This page holds its

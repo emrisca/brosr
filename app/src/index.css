@@ -5,57 +5,55 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --background: oklch(0.975 0 0);
+  --foreground: oklch(0.15 0 0);
+  --card: oklch(0.995 0 0);
+  --card-foreground: oklch(0.15 0 0);
+  --popover: oklch(0.995 0 0);
+  --popover-foreground: oklch(0.15 0 0);
+  --primary: oklch(0.17 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
+  --secondary: oklch(0.935 0 0);
+  --secondary-foreground: oklch(0.20 0 0);
+  --muted: oklch(0.945 0 0);
   --muted-foreground: oklch(0.44 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  /* A clay red, so a warning sits inside the warm surface instead of \n     shouting over it. */
-  --destructive: oklch(0.53 0.16 28);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.86 0 0);
-  --ring: oklch(0.55 0 0);
-  /* The room line and the live dot. A status colour always carries a label. */
-  --brand: oklch(0.62 0.15 55);
-  --brand-ink: oklch(0.38 0.10 55);
-  --aurora-a: oklch(0.78 0.14 62 / 0.34);
-  --aurora-b: oklch(0.74 0.13 18 / 0.24);
-  --aurora-c: oklch(0.72 0.12 286 / 0.20);
+  --accent: oklch(0.92 0 0);
+  --accent-foreground: oklch(0.18 0 0);
+  --destructive: oklch(0.32 0 0);
+  --border: oklch(0.90 0 0);
+  --input: oklch(0.84 0 0);
+  --ring: oklch(0.52 0 0);
+  --brand: oklch(0.24 0 0);
+  --brand-ink: oklch(0.12 0 0);
+  --aurora-a: oklch(0.86 0 0 / 0.60);
+  --aurora-b: oklch(0.72 0 0 / 0.22);
+  --aurora-c: oklch(0.98 0 0 / 0.52);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.76 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.64 0.15 27);
+  --background: oklch(0.115 0 0);
+  --foreground: oklch(0.96 0 0);
+  --card: oklch(0.17 0 0);
+  --card-foreground: oklch(0.96 0 0);
+  --popover: oklch(0.17 0 0);
+  --popover-foreground: oklch(0.96 0 0);
+  --primary: oklch(0.94 0 0);
+  --primary-foreground: oklch(0.12 0 0);
+  --secondary: oklch(0.235 0 0);
+  --secondary-foreground: oklch(0.96 0 0);
+  --muted: oklch(0.215 0 0);
+  --muted-foreground: oklch(0.72 0 0);
+  --accent: oklch(0.28 0 0);
+  --accent-foreground: oklch(0.96 0 0);
+  --destructive: oklch(0.86 0 0);
   --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 18%);
-  --ring: oklch(0.70 0 0);
-  --brand: oklch(0.78 0.13 62);
-  --brand-ink: oklch(0.86 0.09 62);
-  --aurora-a: oklch(0.66 0.15 62 / 0.30);
-  --aurora-b: oklch(0.58 0.16 16 / 0.24);
-  --aurora-c: oklch(0.54 0.15 288 / 0.24);
+  --input: oklch(1 0 0 / 20%);
+  --ring: oklch(0.82 0 0);
+  --brand: oklch(0.91 0 0);
+  --brand-ink: oklch(0.98 0 0);
+  --aurora-a: oklch(0.92 0 0 / 0.10);
+  --aurora-b: oklch(0.52 0 0 / 0.20);
+  --aurora-c: oklch(0.78 0 0 / 0.07);
 }
 
 @theme inline {
@@ -107,28 +105,17 @@
   }
 }
 
-/* The soft colour field behind the setup flow. Three wide gradients drift a
-   few pixels, so the surface breathes without moving anything a person reads. */
+/* A silver field behind the setup flow. The light is static: the landing page
+   carries the motion, while the app stays quiet behind the controls. */
 .brosr-aurora {
   position: absolute;
-  inset: -18%;
+  inset: -12%;
   pointer-events: none;
   background:
-    radial-gradient(36% 40% at 22% 26%, var(--aurora-a), transparent 70%),
-    radial-gradient(32% 36% at 78% 20%, var(--aurora-b), transparent 70%),
-    radial-gradient(42% 44% at 62% 84%, var(--aurora-c), transparent 72%);
-  filter: blur(40px);
-  animation: brosr-drift 26s ease-in-out infinite alternate;
-}
-
-@keyframes brosr-drift {
-  from {
-    transform: translate3d(-1.5%, -1%, 0) scale(1);
-  }
-
-  to {
-    transform: translate3d(1.5%, 1.5%, 0) scale(1.05);
-  }
+    radial-gradient(46% 54% at 16% 18%, var(--aurora-a), transparent 72%),
+    radial-gradient(38% 46% at 86% 24%, var(--aurora-b), transparent 72%),
+    radial-gradient(54% 56% at 58% 92%, var(--aurora-c), transparent 74%);
+  filter: blur(56px);
 }
 
 /* One step arrives on 160ms of transform and opacity. The reduced motion rule
@@ -150,10 +137,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .brosr-aurora {
-    animation: none;
-  }
-
   .brosr-step {
     animation-duration: 1ms;
   }

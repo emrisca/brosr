@@ -1,28 +1,46 @@
-/* The panel sits in Zen's left column, so it borrows that column's habits: a
-   muted surface, 8px rows, one accent, 6/8/10 spacing and a 240px floor. Zen
-   supplies the theme colours and the panel rewrites them for contrast. */
+/* The room panel is the compact browser-side view of the app. It uses the
+   same silver field, card surfaces, 10px radii and 6/8/10 spacing as the Tauri
+   window. Every accent is neutral, and primary controls stay near black. */
 
 :root {
   color-scheme: light dark;
-  --room-base: Canvas;
-  --room-text: CanvasText;
-  --room-bg: color-mix(in srgb, var(--room-text) 5%, var(--room-base));
-  --room-dim: color-mix(in srgb, var(--room-text) 70%, var(--room-base));
-  --room-border: color-mix(in srgb, var(--room-text) 14%, transparent);
-  --room-surface: color-mix(in srgb, var(--room-text) 7%, transparent);
-  --room-surface-hover: color-mix(in srgb, var(--room-text) 12%, transparent);
-  --room-menu-bg: color-mix(in srgb, var(--room-base) 96%, var(--room-text) 4%);
-  --room-accent: #b07a52;
-  --room-focus: #4d8df0;
-  /* Status colours need one value per scheme, because a mid tone cannot reach
-     4.5 to 1 on a light surface and a dark one. The plain value is the
-     fallback for an engine without light-dark. */
-  --room-live: #1d7a4d;
-  --room-live: light-dark(#1d7a4d, #5fd39a);
-  --room-down: #a3271a;
-  --room-down: light-dark(#a3271a, #ff9d8a);
-  --room-radius: 8px;
+  --room-bg: #f7f7f8;
+  --room-card: #ffffff;
+  --room-text: #161618;
+  --room-dim: #6a6a70;
+  --room-border: #e6e6e9;
+  --room-input: #d4d4d9;
+  --room-surface: #f0f0f2;
+  --room-surface-hover: #e7e7ea;
+  --room-primary: #171719;
+  --room-primary-text: #fafafa;
+  --room-danger: #29292d;
+  --room-accent: #3a3a40;
+  --room-live: #1c1c1f;
+  --room-focus: #5c5c63;
+  --room-shadow: 0 12px 28px rgb(20 20 23 / 0.12);
+  --room-radius: 10px;
   --room-radius-sm: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --room-bg: #0b0b0d;
+    --room-card: #151518;
+    --room-text: #f4f4f5;
+    --room-dim: #9c9ca4;
+    --room-border: rgb(255 255 255 / 0.12);
+    --room-input: rgb(255 255 255 / 0.20);
+    --room-surface: #1d1d21;
+    --room-surface-hover: #26262b;
+    --room-primary: #f2f2f3;
+    --room-primary-text: #0d0d0f;
+    --room-danger: #d4d4d8;
+    --room-accent: #b9b9c0;
+    --room-live: #f0f0f2;
+    --room-focus: #c7c7ce;
+    --room-shadow: 0 12px 28px rgb(0 0 0 / 0.34);
+  }
 }
 
 * {
@@ -39,20 +57,17 @@ body {
 body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   min-width: 240px;
   min-height: 100vh;
-  padding: 8px 8px 10px;
   font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-  /* The panel is often narrow, so every block sizes against its own width. */
+  background:
+    radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--room-accent) 8%, transparent), transparent 62%),
+    var(--room-bg);
   container-type: inline-size;
   scrollbar-gutter: stable;
   animation: room-in 160ms ease-out both;
 }
 
-/* The toolbar popup takes its size from this document, so it holds one column
-   and caps its height instead of filling a window. The browser draws the popup
-   frame, so the page adds no entrance motion of its own. */
 :root[data-surface="popup"] body {
   width: 360px;
   min-height: 0;
@@ -61,7 +76,6 @@ body {
   animation: none;
 }
 
-/* A tab is the one container that needs the page to fill it. */
 :root[data-surface="tab"] body {
   width: 100%;
   min-width: 0;
@@ -72,23 +86,24 @@ h1 {
   margin: 0;
 }
 
-/* Two rows keep the room name whole while the chips wrap under it. The header
-   stays on top of the scroller, so the menu and the seal stay reachable. */
+[hidden] {
+  display: none !important;
+}
+
 .room-header {
   position: sticky;
-  top: -8px;
+  top: 0;
   z-index: 12;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "title actions"
     "meta actions";
-  gap: 2px 8px;
+  gap: 6px 8px;
   align-items: start;
-  margin: -8px -8px 0;
-  padding: 8px 8px 8px;
+  padding: 10px;
   border-bottom: 1px solid var(--room-border);
-  background: color-mix(in srgb, var(--room-base) 92%, transparent);
+  background: color-mix(in srgb, var(--room-bg) 92%, transparent);
   backdrop-filter: blur(12px) saturate(1.05);
 }
 
@@ -104,7 +119,7 @@ h1 {
   grid-area: meta;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 6px;
+  gap: 6px;
   align-items: center;
 }
 
@@ -115,10 +130,10 @@ h1 {
 h1 {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  overflow: hidden;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -137,23 +152,11 @@ h1 {
 }
 
 .dot[data-state="down"] {
-  background: var(--room-down);
+  background: var(--room-danger);
 }
 
-.count {
-  flex: none;
-  color: var(--room-dim);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.count:empty,
-.role:empty {
-  display: none;
-}
-
-/* The seal tells a person whether this room is private on the wire. A failed
-   key is the one state that needs a colour, because the room will not open. */
+.count,
+.role,
 .seal {
   flex: none;
   padding: 2px 6px;
@@ -161,6 +164,18 @@ h1 {
   background: var(--room-surface);
   color: var(--room-dim);
   font-size: 11px;
+  line-height: 1.4;
+}
+
+.count {
+  min-width: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.count:empty,
+.role:empty {
+  display: none;
 }
 
 .seal[hidden] {
@@ -172,16 +187,7 @@ h1 {
 }
 
 .seal[data-state="failed"] {
-  color: var(--room-down);
-}
-
-.role {
-  flex: none;
-  padding: 2px 6px;
-  border-radius: var(--room-radius-sm);
-  background: var(--room-surface);
-  color: var(--room-dim);
-  font-size: 11px;
+  color: var(--room-danger);
 }
 
 .icon-button {
@@ -189,8 +195,8 @@ h1 {
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
   border-radius: var(--room-radius-sm);
@@ -210,30 +216,27 @@ h1 {
   color: var(--room-text);
 }
 
-/* The menu is the only place a room action hides, so every row carries an
-   icon and a plain name. The two rules split the safe actions from hiding the
-   panel and leaving, and the last row keeps the one colour that means stop. */
 .menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  right: 10px;
   z-index: 20;
   display: grid;
-  gap: 1px;
+  gap: 6px;
   min-width: 196px;
-  max-width: min(248px, calc(100vw - 16px));
-  padding: 5px;
+  max-width: min(248px, calc(100vw - 20px));
+  padding: 6px;
   border: 1px solid var(--room-border);
   border-radius: var(--room-radius);
-  background: var(--room-menu-bg);
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--room-base) 55%, transparent);
+  background: var(--room-card);
+  box-shadow: var(--room-shadow);
   transform-origin: top right;
   animation: menu-in 120ms ease-out;
 }
 
 .menu-sep {
   height: 1px;
-  margin: 4px 2px;
+  margin: 6px 2px;
   background: var(--room-border);
 }
 
@@ -241,8 +244,6 @@ h1 {
   display: none;
 }
 
-/* A row is a 32px target with the icon on its own column, so the labels line
-   up even when one wraps at a narrow width. */
 .menu button {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
@@ -287,28 +288,54 @@ h1 {
 }
 
 .menu .menu-danger {
-  color: var(--room-down);
+  color: var(--room-danger);
 }
 
 .menu .menu-danger:hover {
-  background: color-mix(in srgb, var(--room-down) 12%, transparent);
+  background: color-mix(in srgb, var(--room-danger) 12%, transparent);
+}
+
+.room-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+body[data-state="missing"] .peers-section,
+body[data-state="missing"] .watch,
+body[data-state="missing"] #playback-section,
+body[data-state="missing"] #tabs-section,
+body[data-state="missing"] footer {
+  display: none;
+}
+
+body[data-state="missing"] .status {
+  padding: 10px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius);
+  background: var(--room-card);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--room-border);
+  border-radius: var(--room-radius);
+  background: var(--room-card);
 }
 
 .status,
 .notice {
-  min-height: 1.45em;
+  min-height: 0;
   color: var(--room-dim);
   font-size: 11px;
 }
 
-.status[data-state="error"],
-.notice[data-bad="1"] {
-  color: var(--room-down);
-}
-
-/* An empty notice takes no height, but it stays a live region so the next line
-   still reaches a screen reader. The short panel needs that room for the
-   watch card. */
+.status:empty,
 .notice:empty {
   position: absolute;
   width: 1px;
@@ -317,17 +344,38 @@ h1 {
   clip-path: inset(50%);
 }
 
+.status[data-state="error"],
+.notice[data-bad="1"] {
+  color: var(--room-danger);
+}
+
 .section-title {
-  margin-bottom: 6px;
+  color: var(--room-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.section-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.watch-state {
   color: var(--room-dim);
   font-size: 11px;
-  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.watch-state[data-state="playing"] {
+  color: var(--room-text);
 }
 
 ul {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -340,7 +388,7 @@ li {
   min-width: 0;
   min-height: 32px;
   padding: 6px 8px;
-  border-radius: var(--room-radius);
+  border-radius: var(--room-radius-sm);
   background: transparent;
   transition: background-color 120ms ease;
 }
@@ -456,16 +504,16 @@ button:focus-visible,
   min-width: 0;
   padding: 4px 8px;
   border: 1px solid var(--room-border);
+  background: var(--room-surface);
   font-size: 11px;
-}
-
-.control {
-  padding-top: 10px;
-  border-top: 1px solid var(--room-border);
 }
 
 .control .history {
   margin: 0;
+}
+
+.control .history:empty {
+  display: none;
 }
 
 .control .history li {
@@ -480,8 +528,6 @@ button:focus-visible,
 }
 
 .invite label {
-  display: block;
-  margin-bottom: 6px;
   color: var(--room-dim);
   font-size: 11px;
 }
@@ -494,11 +540,16 @@ button:focus-visible,
 }
 
 .invite-copy {
-  flex: none;
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--room-border);
+  background: var(--room-primary);
+  color: var(--room-primary-text);
   font-size: 11px;
+  font-weight: 500;
+}
+
+.invite-copy:hover {
+  background: color-mix(in srgb, var(--room-primary) 88%, var(--room-text));
 }
 
 .invite input {
@@ -506,10 +557,11 @@ button:focus-visible,
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--room-border);
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--room-input);
   border-radius: var(--room-radius-sm);
-  background: var(--room-surface);
+  background: var(--room-card);
   color: inherit;
   font: inherit;
   font-size: 11px;
@@ -521,7 +573,6 @@ button:focus-visible,
   outline-offset: 1px;
 }
 
-/* A tile dropped on the panel lands above the peer list. */
 .site-list {
   display: flex;
   flex-wrap: wrap;
@@ -546,32 +597,6 @@ button:focus-visible,
   background: var(--room-surface-hover);
 }
 
-/* The watch card reports playback now and holds the control for the media
-   bridge, so the panel never shows a button that looks live and is not. */
-.watch {
-  display: grid;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--room-border);
-}
-
-.watch-head {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.watch-head .section-title {
-  margin-bottom: 0;
-}
-
-.watch-state {
-  color: var(--room-dim);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
 .watch-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -579,23 +604,30 @@ button:focus-visible,
   align-items: center;
 }
 
-.watch-row .watch-copy {
-  flex: 1;
+.watch-copy {
   min-width: 0;
   color: var(--room-dim);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .watch-button {
-  flex: none;
-  padding: 4px 8px;
-  border: 1px solid var(--room-border);
+  height: 32px;
+  padding: 0 10px;
+  background: var(--room-primary);
+  color: var(--room-primary-text);
   font-size: 11px;
-  color: var(--room-dim);
+  font-weight: 500;
+}
+
+.watch-button:hover {
+  background: color-mix(in srgb, var(--room-primary) 88%, var(--room-text));
 }
 
 .watch-button:disabled {
-  opacity: 0.6;
+  border: 1px solid var(--room-border);
+  background: transparent;
+  color: var(--room-dim);
+  opacity: 0.7;
   cursor: not-allowed;
 }
 
@@ -603,33 +635,15 @@ button:focus-visible,
   background: transparent;
 }
 
-.watch-state[data-state="playing"] {
-  color: var(--room-text);
-}
-
-/* The last person-caused change, so a room that paused can say who did it
-   without waiting for the notice in the film tab. */
 .watch-action {
-  margin: 0;
   color: var(--room-text);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
-.tabs-notice {
-  justify-self: start;
-  margin-top: 4px;
-}
-
-/* A viewer row says what each peer's own tab does with the film, so the gap is
-   visible without asking anyone. The badge is the only coloured part, and its
-   two colours keep the status contrast the rest of the panel uses. */
 .watch-viewers {
   display: grid;
   gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
 .watch-viewers li {
@@ -637,7 +651,13 @@ button:focus-visible,
   gap: 8px;
   align-items: baseline;
   justify-content: space-between;
+  min-height: 0;
+  padding: 0;
   font-size: 11px;
+}
+
+.watch-viewers li:hover {
+  background: transparent;
 }
 
 .watch-name {
@@ -664,42 +684,25 @@ button:focus-visible,
 }
 
 .watch-badge[data-sync="0"] {
-  border-color: color-mix(in srgb, var(--room-down) 40%, var(--room-border));
-  color: var(--room-down);
+  border-color: color-mix(in srgb, var(--room-danger) 40%, var(--room-border));
+  color: var(--room-danger);
 }
 
-/* Tab sharing lists one row per shareable tab. The row is a label, so the
-   checkbox and the title take one click and the host can mute a tab without
-   hunting for the box. */
-.tabs {
-  display: grid;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--room-border);
-}
-
-.tabs-head {
+.switch-row {
   display: flex;
   gap: 8px;
   align-items: center;
   justify-content: space-between;
-}
-
-.tabs-head .section-title {
-  margin-bottom: 0;
-}
-
-.tabs-auto {
-  display: inline-flex;
-  flex: none;
-  gap: 6px;
-  align-items: center;
-  color: var(--room-dim);
-  font-size: 11px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: var(--room-radius-sm);
+  background: var(--room-surface);
+  color: var(--room-text);
+  font-size: 12px;
   cursor: pointer;
 }
 
-.tabs-auto input,
+.switch-row input,
 .tab-row input {
   flex: none;
   width: 14px;
@@ -709,23 +712,23 @@ button:focus-visible,
   cursor: pointer;
 }
 
-.tabs-auto input:disabled,
+.switch-row input:disabled,
 .tab-row input:disabled {
   cursor: not-allowed;
 }
 
-.tabs-note {
+.note {
   color: var(--room-dim);
   font-size: 11px;
 }
 
-.tabs-note[hidden] {
+.note[hidden] {
   display: none;
 }
 
 .tab-list li {
   min-height: 32px;
-  padding: 6px;
+  padding: 6px 8px;
 }
 
 .tab-row {
@@ -800,8 +803,6 @@ footer .stat:last-child {
   border: 1px solid var(--room-border);
 }
 
-/* A narrow column drops the role chip and stacks the two rows that carry a
-   button. Nothing is hidden that a person needs to reach the room. */
 @container (max-width: 260px) {
   .role {
     display: none;
@@ -815,10 +816,6 @@ footer .stat:last-child {
   .invite-copy,
   .watch-button {
     justify-self: start;
-  }
-
-  .tabs-head {
-    flex-wrap: wrap;
   }
 
   footer {
@@ -838,6 +835,7 @@ footer .stat:last-child {
     opacity: 0;
     transform: translateY(3px);
   }
+
   to {
     opacity: 1;
     transform: none;
@@ -849,6 +847,7 @@ footer .stat:last-child {
     opacity: 0;
     transform: translateY(-3px) scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: none;

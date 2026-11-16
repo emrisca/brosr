@@ -29,10 +29,15 @@ fn node_binary() -> Result<PathBuf, String> {
         }
     }
     if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
-            let candidate = PathBuf::from(dir).join("node");
-            if candidate.exists() {
-                return Ok(candidate);
+        // Windows separates PATH entries with `;`, and its executable carries
+        // the `.exe` suffix. `split_paths` handles both platforms, and trying
+        // both names keeps a Windows shell and a Unix build on one path.
+        for dir in std::env::split_paths(&path) {
+            for name in ["node", "node.exe"] {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }

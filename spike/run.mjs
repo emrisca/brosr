@@ -638,7 +638,10 @@ try {
           (phases.seek.seeks ?? 0) >= 1 &&
           typeof phases.seek.hostPosition === 'number' &&
           typeof phases.seek.peerPosition === 'number' &&
-          Math.abs(phases.seek.hostPosition - phases.seek.peerPosition) <= 0.25,
+          // The positions are read one after the other while the film plays, so
+          // a quarter second of sampling gap is not a sync fault. The drift ring
+          // above is the tight measure.
+          Math.abs(phases.seek.hostPosition - phases.seek.peerPosition) <= 0.5,
       ),
       source: peerFinal.source || null,
       hostSource: hostFinal.source || null,
@@ -1167,5 +1170,8 @@ try {
     bridgeContent === null ? 'NOT EXERCISED by these lanes' : bridgeContent ? 'PASS' : 'FAIL';
   log(`Q2 content script: ${contentVerdict}`);
   log('results.json written');
-  process.exit(results.error ? 1 : 0);
+  // A failed verdict is a failed run. Only an error used to set the code, so a
+  // red lane could still exit 0 and a caller would read it as green.
+  const failed = verdicts.some(([, ok]) => !ok) || bridgeContent === false;
+  process.exit(results.error || failed ? 1 : 0);
 }

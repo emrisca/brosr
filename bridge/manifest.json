@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Brosr bridge",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Loads the Brosr core into a room tab: cursors, presence and media sync.",
   "browser_specific_settings": {
     "gecko": {

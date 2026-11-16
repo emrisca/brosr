@@ -1436,6 +1436,7 @@ const INJECT = `(() => {
         const backBox = back ? back.getBoundingClientRect() : null;
         return {
           count: doc.querySelectorAll('.titlebar-button').length,
+          left: rowBox ? Math.round(rowBox.left) : 0,
           right: rowBox ? Math.round(rowBox.right) : 0,
           backLeft: backBox ? Math.round(backBox.left) : 0,
         };

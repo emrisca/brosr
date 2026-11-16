@@ -43,7 +43,7 @@ export function InviteBanner({ invite, browserId, onClose }: Props) {
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{invite.name} invited you</p>
           <p className="text-xs text-muted-foreground">
-            A room is ready in {invite.room}. This closes in 15 seconds.
+            Room {invite.room}. Closes in 15 seconds.
           </p>
         </div>
         <Button

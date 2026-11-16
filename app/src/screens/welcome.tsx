@@ -13,11 +13,11 @@ type Props = {
 export function Welcome({ name, onName, onNext, onJoin, onFriends }: Props) {
   return (
     <div className="flex flex-col gap-2.5">
-      <h1 className="text-xl font-medium tracking-tight">A room is a page you share.</h1>
+      <h1 className="text-xl font-medium tracking-tight">Start a room</h1>
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="room-name" className="text-xs text-muted-foreground">
-          Your name in the room
+          Your name
         </label>
         <Input
           id="room-name"
