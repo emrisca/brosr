@@ -21,6 +21,14 @@
 // Syncthing churns on the profile while a check runs, so no machine syncs it.
 /zen/.runtime
 
+// Per-machine browser profiles and run scratch at the root. A run rebuilds them, and a
+// shared copy produced conflict files inside a Chrome profile on 15 November 2026.
+/.runtime
+/host/.run
+
+// Conflict copies stay on the machine that made them.
+*.sync-conflict-*
+
 // Node and package manager state.
 node_modules
 .npm

@@ -14,6 +14,7 @@ import { Room } from '@/screens/room';
 import { Welcome } from '@/screens/welcome';
 import { InviteBanner } from '@/components/invite-banner';
 import { useTheme } from '@/lib/theme';
+import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { friends as listFriends, status, type Browser, type Invite, type Run } from '@/lib/host';
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
@@ -55,10 +56,25 @@ export default function App() {
   const [friendsOpen, setFriendsOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [invite, setInvite] = useState<Invite | null>(null);
+  const [version, setVersion] = useState('');
   const seenInvites = useRef<Set<string>>(new Set());
 
   // A room can outlive the window. On launch, adopt the run that is already
   // going instead of asking a second time.
+  // The running build is the only place a version can come from. A browser
+  // preview has no Tauri app to ask, so the stamp stays hidden there.
+  useEffect(() => {
+    let live = true;
+    getVersion()
+      .then((next) => {
+        if (live) setVersion(next);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   useEffect(() => {
     let live = true;
     status()
@@ -296,6 +312,15 @@ export default function App() {
         browserId={browser?.id}
       />
       <UpdateDialog update={update} open={updateOpen} onLater={later} />
+
+      {version ? (
+        <span
+          className="pointer-events-none absolute right-3 bottom-2 font-mono text-[11px] text-muted-foreground"
+          title={`Brosr ${version}`}
+        >
+          v{version}
+        </span>
+      ) : null}
     </div>
   );
 }
