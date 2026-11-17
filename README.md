@@ -45,6 +45,20 @@ The host lifecycle has its own suite, and the two run in one pass from the repo 
 node --test core/test/*.test.mjs host/test/*.test.mjs
 ```
 
+## Check the landing links
+
+The Watch directory in `landing/index.html` mirrors the starred FMHY sites in Stream
+Aggregators, P-Stream Forks and Anime Streaming. The check fetches the current FMHY
+source and compares every name and URL:
+
+```bash
+node scripts/check-fmhy-links.mjs
+```
+
+It prints the count for each group and exits nonzero when a link is missing, extra or
+changed. Point it at a saved copy with `--source=.runtime/fmhy-video.md`. The check also
+runs every Monday from `.github/workflows/fmhy-links.yml`.
+
 ## Run a room
 
 The Brosr app sets up a room and opens it. It is a Tauri window with a React interface, and

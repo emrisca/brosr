@@ -1,0 +1,27 @@
+# Checks that the landing Watch directory still matches the starred FMHY
+# sections. A red run means a site was added, removed or changed upstream.
+# The check needs no install because it uses Node's built-in fetch.
+
+name: FMHY links
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: landing links match FMHY
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - name: Compare the FMHY source with landing/index.html
+        working-directory: apps/brosr
+        run: node scripts/check-fmhy-links.mjs
