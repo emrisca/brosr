@@ -1,5 +1,9 @@
 # Brosr
 
+[![Brosr check](https://github.com/emrisca/brosr/actions/workflows/brosr-check.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/brosr-check.yml)
+[![Core tests](https://github.com/emrisca/brosr/actions/workflows/core-tests.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/core-tests.yml)
+[![Lint](https://github.com/emrisca/brosr/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/lint.yml)
+
 Brosr is a room of people in one browser page. Each person's cursor, scroll, navigation and
 media controls show up in every other window. Brosr sends no video. A room costs about
 10 KB/s per peer. A screen share needs 2 Mbps on a bad link.
@@ -11,6 +15,24 @@ Chrome refuses the flag that loads a local add-on from version 137, so Chrome ap
 list with that reason.
 
 Status: `v0.3.18` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
+
+## How a room fits together
+
+```mermaid
+flowchart LR
+  user(["User"]) --> app["Tauri app<br/>React setup"]
+  app -->|"one JSON line per command"| host["host/cli.mjs<br/>detect, prepare, start"]
+  host -->|"builds the profile and opens"| hostBrowser["Host browser<br/>bridge extension, room tab"]
+  host -->|"starts for a LAN room"| relay["Relay<br/>axum, one table per room"]
+  hostBrowser <-->|"sealed frames over WebSocket"| relay
+  relay <-->|"sealed frames over WebSocket"| peer["Peer browsers<br/>bridge extension, same invite key"]
+  hostBrowser -.->|"invite link, key in the fragment"| peer
+```
+
+The app never draws the room. It asks `host/cli.mjs` to build a room profile, start the relay
+and open the host browser, then it reads and changes room settings through the panel command.
+Every browser in the room holds one WebSocket to the relay. Frames are sealed with the key from
+the invite fragment, so the relay forwards bytes it cannot read.
 
 ## What the repository holds
 
