@@ -80,6 +80,30 @@ test('the first site toggle keeps the other sites on', () => {
   assert.match(source, /published\.cursorSeen \|\| \[\]/);
 });
 
+test('the host room tab reads its own film without the page helper', () => {
+  // pageHref() lives inside startPageMedia. The room tab tick called it from
+  // start(), so every pass threw a ReferenceError and a host that played the
+  // film in the room tab never sent its state to the room.
+  const tick = source.slice(source.indexOf('A host that plays the film in the room tab'));
+  const body = tick.slice(0, tick.indexOf('}, 500);'));
+  assert.match(body, /mediaStateFromDocument\(document, location\.href, location\.hostname\)/);
+  assert.doesNotMatch(body, /pageHref\(\)/);
+});
+
+test('a host greets a guest that joins a paused room', () => {
+  // The host sent its anchor only when the state changed. A guest that joined a
+  // paused room received no frame at all, so its film tab applied nothing and
+  // the film never started there.
+  const greet = source.slice(source.indexOf('const greeted = new Set()'));
+  const body = greet.slice(0, greet.indexOf('}, 500);'));
+  assert.match(body, /relayedMedia\.state\(\)/);
+  assert.match(body, /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor \}\)/);
+  assert.match(body, /greeted\.delete\(id\)/, 'a rejoin is greeted again');
+  // A guest usually opens the room first, so the greet can arrive before its
+  // film tab exists. The refresh covers a film that opens after the join.
+  assert.match(body, /Date\.now\(\) - greetedAt < 2000/);
+});
+
 test('a click flushes at once, so a link cannot unload the page first', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
   assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);

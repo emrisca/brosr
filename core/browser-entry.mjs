@@ -816,12 +816,45 @@ export async function start() {
   // A host that plays the film in the room tab has no other tab to report it,
   // so the room tab reads its own player. A fresh report from a film tab wins,
   // because two senders under one id would pull the anchor against each other.
+  // This tab is always top level, so its own address names the film.
   setInterval(() => {
     if (role !== 'host') return;
     if (Date.now() - lastFilmReportAt < 2000) return;
-    const state = mediaStateFromDocument(document, pageHref(), location.hostname);
+    const state = mediaStateFromDocument(document, location.href, location.hostname);
     if (!state || !state.key) return;
     if (relayedMedia.set(state)) client.sendHostMedia(state);
+  }, 500);
+
+  // The host sends an anchor only when its state changes. A guest that joins a
+  // paused room therefore misses it, and its film tab applies nothing and never
+  // starts the film. The host repeats the anchor for each new peer, and keeps a
+  // slow refresh while the room has one, because a guest usually opens the room
+  // before it opens the film and a greet that arrives first finds no film tab.
+  const greeted = new Set();
+  let greetedAt = 0;
+  setInterval(() => {
+    if (role !== 'host') return;
+    const live = new Set();
+    for (const peer of client.roomState.peers.values()) {
+      if (!peer || peer.id === peerId) continue;
+      live.add(peer.id);
+    }
+    // A peer that leaves is forgotten, so a rejoin is greeted at once.
+    for (const id of [...greeted]) if (!live.has(id)) greeted.delete(id);
+    let fresh = false;
+    for (const id of live) {
+      if (greeted.has(id)) continue;
+      greeted.add(id);
+      fresh = true;
+    }
+    if (!fresh && (!live.size || Date.now() - greetedAt < 2000)) return;
+    // The projected position is where the film is now, so a guest that joins a
+    // playing film does not start from the last report. The ad and buffering
+    // flags ride along, because a guest waits out the host's ad.
+    const anchor = relayedMedia.state();
+    if (!anchor) return;
+    greetedAt = Date.now();
+    client.sendHostMedia({ ...relayedMedia.latest, ...anchor });
   }, 500);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees
