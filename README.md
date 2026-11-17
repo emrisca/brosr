@@ -16,6 +16,25 @@ list with that reason.
 
 Status: `v0.3.18` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
 
+## Quick start for non-developers
+
+You do not need Node, Rust or a checkout to try Brosr. Take the build for your machine from
+[the latest release](https://github.com/emrisca/brosr/releases/latest):
+
+| Machine | File |
+| --- | --- |
+| macOS on Apple silicon | [`Brosr_0.3.18_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_aarch64.dmg) |
+| macOS on Intel | [`Brosr_0.3.18_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64.dmg) |
+| Windows, 64-bit | [`Brosr_0.3.18_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64-setup.exe) or [`Brosr_0.3.18_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64_en-US.msi) |
+
+The macOS build carries an ad hoc signature and no notarisation, so the first launch needs one
+extra step. Move Brosr to Applications, try to open it, then allow it in System Settings,
+Privacy and Security, Open Anyway. On Windows, SmartScreen says "Windows protected your PC", so
+click More info, then Run anyway.
+
+There is no Linux build yet, and no `.AppImage` to download. The release workflow builds macOS
+and Windows only.
+
 ## How a room fits together
 
 ```mermaid
@@ -201,6 +220,12 @@ The `.runtime` directory stays out of git, because a run rebuilds it.
 | Identical pixels | Each person renders the page on their own machine, so a different window size gives a different layout. |
 | One shared login | Each person signs in on their own copy. Cookies never cross the relay. |
 | Trusted input in v1 | v1 relays synthetic events. Typing into a native control needs the Firefox remote agent, which is M7. |
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the dev setup, the spike, the good first issues and
+what a pull request needs. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) sets the tone for issues
+and reviews.
 
 ## Where to read the detail
 

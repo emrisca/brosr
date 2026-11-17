@@ -1,7 +1,8 @@
 # Brosr spike
 
-This harness answers the M0 questions in [../plan.md](../plan.md) and exercises the M1, M3 and
-M4 work in [../core/](../core/) on this machine. It is a spike, not the app.
+This harness answers the M0 questions in [the milestones](../docs/milestones.md) and
+exercises the M1, M3 and M4 work in [../core/](../core/) on this machine. It is a spike, not the
+app.
 
 Run it with `node run.mjs`. The harness downloads Firefox Nightly and uBlock Origin into
 `.runtime/` and encodes a 120 s test clip with ffmpeg. Then it starts a relay on
