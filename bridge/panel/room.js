@@ -70,6 +70,9 @@ function latencyLabel(data) {
 }
 
 let lastReply = null;
+// When the last good reply arrived. A failed poll keeps that render on screen
+// for a while, so a room tab reload does not empty the panel.
+let lastLiveAt = 0;
 
 const FALLBACK_COLOURS = [
   '#e2603f',
@@ -1005,8 +1008,22 @@ function render(reply) {
 
 }
 
+// A room tab can reload, or a sidebar can lose its channel for a moment. The
+// last good reply stays on screen and only the status line says it is
+// reconnecting, so one failed poll never takes the grant controls away.
+function offline(reason) {
+  if (lastReply && Date.now() - lastLiveAt < 15000) {
+    render(lastReply);
+    setStatus('Reconnecting...', 'error');
+    $('dot').dataset.state = 'down';
+    return;
+  }
+  return missing(reason);
+}
+
 function missing(reason) {
   lastReply = null;
+  lastLiveAt = 0;
   document.body.dataset.state = 'missing';
   $('dot').dataset.state = 'down';
   setStatus(reason || 'This tab is not in a room.', 'error');
@@ -1144,6 +1161,7 @@ async function refresh() {
       const reply = await askStatus(tab);
       if (reply) {
         await readFilm(reply);
+        lastLiveAt = Date.now();
         return render(reply);
       }
     } else {
@@ -1153,12 +1171,13 @@ async function refresh() {
     const cached = await cachedStatus();
     if (cached) {
       await readFilm(cached);
+      lastLiveAt = Date.now();
       return render(cached);
     }
-    return missing(tab ? 'This tab is not in a room.' : 'Open a room tab first.');
+    return offline(tab ? 'This tab is not in a room.' : 'Open a room tab first.');
   } catch {
     // A tab without the content script rejects the message.
-    missing('This tab is not in a room.');
+    offline('This tab is not in a room.');
   }
 }
 
