@@ -128,6 +128,7 @@ export type PanelTab = {
 
 export type PanelState = {
   roomName: string;
+  hostId: string;
   peers: PanelPeer[];
   media: {
     key: string;
@@ -136,6 +137,7 @@ export type PanelState = {
     buffering?: boolean;
     ad?: boolean;
   } | null;
+  sameFate: boolean;
   sync: boolean;
   notices: boolean;
   auto: boolean;
@@ -156,7 +158,12 @@ export const roomPanel = (
   return host<PanelState>(args);
 };
 
-export const status = () => host<Status | { ok: true; running: false }>(['status']);
+// A guest asks its own room tab for the people list. The call is read-only and
+// uses the token written into join.json, so it never borrows host control.
+export const guestPanel = () =>
+  host<PanelState>(['panel', '--guest', '--action=status']);
+
+export const status = () => host<Status | GuestStatus | { ok: true; running: false }>(['status']);
 
 export const stop = () => host<{ ok: true; stopped: boolean }>(['stop']);
 
@@ -205,9 +212,20 @@ export type Joined = {
   port: number;
   url: string;
   name: string;
+  peer: string;
   browser: { id: string; name: string; path: string; family?: 'gecko' | 'chromium' };
   profile: string;
   browserPid: number;
+  panelToken?: string;
+};
+
+export type GuestStatus = Joined & {
+  role: 'peer';
+  running: boolean;
+  relayAlive: boolean;
+  browserAlive: boolean;
+  relayReady: boolean;
+  peers: number;
 };
 
 export type AnswerResult = FriendsState & {
@@ -220,7 +238,27 @@ export type AnswerResult = FriendsState & {
 // the lobby, so the screen can show it beside a room it already opened.
 export type Address = { ok: true; address: string };
 
+export type DiscoveredRoom = {
+  room: string;
+  roomName: string;
+  host: string;
+  port: number;
+  address: string;
+  url: string;
+  peers: number;
+  started: string | null;
+};
+
+export type DiscoveryState = {
+  ok: true;
+  tailnet: boolean;
+  peers: number;
+  rooms: DiscoveredRoom[];
+};
+
 export const address = () => host<Address>(['address']);
+
+export const discover = () => host<DiscoveryState>(['discover']);
 
 export const friends = () => host<FriendsState>(['friends']);
 

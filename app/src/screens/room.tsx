@@ -50,7 +50,7 @@ export function Room({ run, onLeave }: Props) {
     const tick = async () => {
       try {
         const next = await status();
-        if (open) setLive('relayReady' in next ? next : null);
+        if (open) setLive('invite' in next ? next : null);
       } catch {
         if (open) setLive(null);
       }
@@ -113,7 +113,7 @@ export function Room({ run, onLeave }: Props) {
     try {
       await reopen();
       const next = await status();
-      if ('relayReady' in next) setLive(next);
+      if ('invite' in next) setLive(next);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

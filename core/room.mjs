@@ -21,6 +21,9 @@ export class Room {
     this.role = role;
     this.peerId = peerId;
     this.roomName = roomName;
+    // A host can make every player wait for a starved player. The setting
+    // travels in the snapshot, so a late guest learns it with the room.
+    this.sameFate = false;
     this.now = now;
     this.peers = new Map();
     this.seen = new Map();
@@ -136,6 +139,7 @@ export class Room {
       type: 'snapshot',
       sequence: this.sequence,
       roomName: this.roomName,
+      sameFate: this.sameFate,
       peers: [...this.peers.values()],
       url: this.url,
       scroll: this.scroll,
@@ -150,6 +154,7 @@ export class Room {
     if (typeof snapshot.roomName === 'string' && snapshot.roomName.trim()) {
       this.roomName = snapshot.roomName;
     }
+    if (typeof snapshot.sameFate === 'boolean') this.sameFate = snapshot.sameFate;
     if (snapshot.url) this.url = snapshot.url;
     if (typeof snapshot.scroll === 'number') {
       this.scroll = Math.max(0, Math.min(1, snapshot.scroll));

@@ -32,6 +32,9 @@ export const HOST_TICK_MS = 250;
 // arrive just after it, and without this window the host's pause looked like it
 // did nothing. The peer still drives the room when the host is idle.
 export const HOST_MEDIA_PRIORITY_MS = 1500;
+// A starved player reports every tick. One low sample is not worth holding the
+// whole room, so a stutter has to survive this long before it travels.
+export const STUTTER_GRACE_MS = 500;
 // The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
 // fresh target, and the overlay eases between them.
 export const PRESENCE_TICK_MS = 33;
@@ -72,6 +75,8 @@ export function createRoomClient({
   cursorSites = null,
   // A viewer can hide every pointer name without hiding the pointers.
   showNames = true,
+  // The host can make the room wait for a starved host or granted peer.
+  sameFate = false,
   // Sites the host took off the list stay off, so a visit does not bring the
   // row back.
   cursorForgot = null,
@@ -99,6 +104,9 @@ export function createRoomClient({
   // A media frame for a film this tab does not hold. The room hands it to the
   // tab that does, and a false reply keeps the frame unhandled.
   onMedia = null,
+  // A room hold from a stutter. The page pauses its own player, or hands the
+  // hold to the tab that holds the film.
+  onHold = null,
   // The page this tab shows. Presence carries it so another tab knows where
   // the pointer is.
   pageUrl = null,
@@ -114,6 +122,15 @@ export function createRoomClient({
   let media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
   const initialRoomName = cleanRoomName(roomName);
   const state = new Room({ role, peerId, roomName: initialRoomName, now });
+  let currentSameFate = Boolean(sameFate);
+  state.sameFate = currentSameFate;
+  // A room can hold for more than one starved source. One active hold is enough
+  // to pause every player; the last one to clear releases the room.
+  const stutters = new Map();
+  let lastHold = null;
+  let ownBuffering = false;
+  let ownBufferingSince = null;
+  let ownStutterKey = '';
   let currentColour = isColour(colour) ? colour : '#e2603f';
   let currentRoomName = initialRoomName;
   let currentCursor = cleanCursor(customCursor);
@@ -161,6 +178,9 @@ export function createRoomClient({
     lastControl: null,
     controls: [],
     sentControls: [],
+    stutterSent: 0,
+    stutterReceived: 0,
+    holds: 0,
     appSent: 0,
     appReceived: 0,
     appDropped: 0,
@@ -456,7 +476,9 @@ export function createRoomClient({
       currentRole = 'host';
       stats.role = 'host';
       state.role = 'host';
+      currentSameFate = Boolean(state.sameFate);
       sendSnapshot();
+      sendFate();
     }
     return next;
   }
@@ -511,6 +533,7 @@ export function createRoomClient({
   function sendHostMedia(state, local = now()) {
     if (!isHost()) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
+    noteMedia(state, local);
     const position = Number(state.position || 0);
     const changed = Boolean(state.action) || stats.playing !== Boolean(state.playing);
     if (changed) lastHostActAt = local;
@@ -532,6 +555,152 @@ export function createRoomClient({
       // The host owns the room clock, so its local time is room time.
       roomTime: local,
     });
+    return true;
+  }
+
+  function activeHold() {
+    return [...stutters.values()][0] || null;
+  }
+
+  // One hold is enough to pause the room. When it releases, the next active
+  // hold keeps the pause; only the last release resumes the players.
+  function notifyHold() {
+    if (!onHold) return;
+    const hold = activeHold();
+    if (hold) {
+      lastHold = hold;
+      try {
+        onHold({ ...hold, active: true });
+      } catch {
+        // A listener cannot break the room.
+      }
+      return;
+    }
+    if (!lastHold) return;
+    const released = { ...lastHold, active: false };
+    lastHold = null;
+    try {
+      onHold(released);
+    } catch {
+      // A listener cannot break the room.
+    }
+  }
+
+  function broadcastStutter(peer, active, hold, local) {
+    sendMessage({
+      type: 'stutter',
+      peerId: peer,
+      // Guests accept a hold only from the host. The source travels separately,
+      // so every player knows whose connection is holding the room.
+      from: peerId,
+      key: String(hold.key),
+      position: Number(hold.position || 0),
+      playing: Boolean(hold.playing),
+      active: Boolean(active),
+      roomTime: roomTimeOf(local),
+    });
+    stats.stutterSent += 1;
+  }
+
+  function setStutter(peer, active, hold, local, { broadcast = false } = {}) {
+    if (!peer || !hold || !hold.key) return false;
+    if (active) {
+      stutters.set(peer, {
+        peerId: peer,
+        key: String(hold.key),
+        position: Number(hold.position || 0),
+        playing: Boolean(hold.playing),
+        at: local,
+      });
+    } else {
+      stutters.delete(peer);
+    }
+    stats.holds = stutters.size;
+    notifyHold();
+    if (broadcast) broadcastStutter(peer, active, hold, local);
+    return true;
+  }
+
+  function clearStutters() {
+    stutters.clear();
+    stats.holds = 0;
+    notifyHold();
+  }
+
+  function sendFate() {
+    sendMessage({
+      type: 'fate',
+      peerId,
+      enabled: currentSameFate,
+      roomTime: roomTimeOf(),
+    });
+  }
+
+  function setSameFate(on) {
+    if (!isHost()) return false;
+    const next = Boolean(on);
+    if (next === currentSameFate) return currentSameFate;
+    currentSameFate = next;
+    state.sameFate = next;
+    sendFate();
+    if (!next) clearStutters();
+    return currentSameFate;
+  }
+
+  // The source says whether its player is starved. A stutter that survives the
+  // grace window travels once, and the recovery travels once. An ungranted peer
+  // never reaches the wire.
+  function noteMedia(mediaState, local = now()) {
+    if (!mediaState || !mediaState.key) return false;
+    if (!currentSameFate) {
+      ownBufferingSince = null;
+      ownBuffering = false;
+      return false;
+    }
+    const key = String(mediaState.key);
+    const buffering = Boolean(mediaState.buffering);
+    if (!buffering) {
+      ownBufferingSince = null;
+      if (!ownBuffering) return false;
+      ownBuffering = false;
+      if (isHost()) {
+        setStutter(peerId, false, mediaState, local, { broadcast: true });
+      } else if (remoteGrant) {
+        sendMessage({
+          type: 'stutter',
+          peerId,
+          key,
+          position: Number(mediaState.position || 0),
+          playing: Boolean(mediaState.playing),
+          active: false,
+          roomTime: roomTimeOf(local),
+        });
+        stats.stutterSent += 1;
+      }
+      return false;
+    }
+    if (ownBufferingSince === null || ownStutterKey !== key) {
+      ownBufferingSince = local;
+      ownStutterKey = key;
+    }
+    if (ownBuffering) return false;
+    if (local - ownBufferingSince < STUTTER_GRACE_MS) return false;
+    if (!isHost() && !remoteGrant) return false;
+    ownBuffering = true;
+    if (isHost()) {
+      setStutter(peerId, true, mediaState, local, { broadcast: true });
+    } else {
+      sendMessage({
+        type: 'stutter',
+        peerId,
+        key,
+        position: Number(mediaState.position || 0),
+        playing: Boolean(mediaState.playing),
+        active: true,
+        roomTime: roomTimeOf(local),
+      });
+      stats.stutterSent += 1;
+    }
     return true;
   }
 
@@ -824,6 +993,9 @@ export function createRoomClient({
       stats.mediaEcho += 1;
       return { ok: true, ignored: 'self' };
     }
+    // A hold freezes the room. A routine tick during the hold must not start
+    // the player underneath it; the hold release carries the resume position.
+    if (activeHold()) return { ok: true, ignored: 'hold' };
     // A host follows only a peer it granted control to. Without this check a
     // viewer could pull the host's film around, and a grant would change
     // nothing about playback.
@@ -1049,6 +1221,10 @@ export function createRoomClient({
           // the grant again, or the new page never learns it holds control.
           sendSnapshot();
           helloAnswer();
+          sendFate();
+          for (const hold of stutters.values()) {
+            broadcastStutter(hold.peerId, true, hold, local);
+          }
           const held = grants.active().find((grant) => grant.peerId === message.peerId);
           if (held) {
             sendMessage({
@@ -1085,6 +1261,10 @@ export function createRoomClient({
         if (!isHost() && message.roomName) {
           currentRoomName = cleanRoomName(message.roomName);
           state.roomName = currentRoomName;
+        }
+        if (!isHost()) {
+          currentSameFate = Boolean(state.sameFate);
+          if (!currentSameFate) clearStutters();
         }
         applyPeers();
         followSnapshot(message);
@@ -1149,6 +1329,34 @@ export function createRoomClient({
           }
         }
         return { ok: true, sites: next };
+      }
+      case 'fate': {
+        if (isHost()) return { ok: true, ignored: 'host' };
+        if (message.peerId !== currentHost) return { ok: true, ignored: 'not-host' };
+        currentSameFate = Boolean(message.enabled);
+        state.sameFate = currentSameFate;
+        if (!currentSameFate) clearStutters();
+        return { ok: true, sameFate: currentSameFate };
+      }
+      case 'stutter': {
+        stats.stutterReceived += 1;
+        if (!currentSameFate) return { ok: true, ignored: 'fate-off' };
+        if (isHost()) {
+          // The host is the authority. A peer needs a live grant, so an
+          // ungranted stutter never holds the room.
+          if (!grants.active().some((grant) => grant.peerId === message.peerId)) {
+            return { ok: true, ignored: 'no-grant' };
+          }
+          setStutter(message.peerId, message.active, message, local, { broadcast: true });
+          return { ok: true, accepted: true };
+        }
+        // A guest accepts only the host's rebroadcast. The peer's own frame has
+        // no from field, so it cannot hold the room on its own.
+        if (!message.from || message.from !== currentHost) {
+          return { ok: true, ignored: 'not-host' };
+        }
+        setStutter(message.peerId, message.active, message, local);
+        return { ok: true, accepted: true };
       }
       case 'media':
         return applyMedia(message, local);
@@ -1337,6 +1545,7 @@ export function createRoomClient({
       // why the film is not moving yet.
       const flags = media.flags(element);
       if (nowState) {
+        noteMedia({ ...nowState, buffering: Boolean(flags.buffering) }, local);
         stats.key = nowState.key;
         stats.position = Math.round(nowState.position * 1000) / 1000;
         stats.playing = nowState.playing;
@@ -1408,6 +1617,12 @@ export function createRoomClient({
         granted: peer.id === peerId ? remoteGrant : grantedPeers.has(peer.id),
       })),
       roomName: currentRoomName,
+      sameFate: currentSameFate,
+      stutter: {
+        active: Boolean(activeHold()),
+        peerId: activeHold() ? activeHold().peerId : null,
+        holds: stutters.size,
+      },
       colour: currentColour,
       cursor: currentCursor,
       sharePointer: sharingPointer,
@@ -1473,6 +1688,8 @@ export function createRoomClient({
     setPageUrl,
     setColour,
     setRoomName,
+    setSameFate,
+    noteMedia,
     setCursor,
     setSharePointer,
     setCursorSites,

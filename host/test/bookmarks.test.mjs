@@ -29,6 +29,52 @@ test('the shared list writes no toolbar bookmarks for a Chromium profile', () =>
   }
 });
 
+test('a prepared profile loses a bar left by an earlier run', () => {
+  const profile = tempProfile();
+  try {
+    const file = path.join(profile, 'Default', 'Bookmarks');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        roots: {
+          bookmark_bar: {
+            children: [{ type: 'url', id: '7', name: 'Old', url: 'https://example.test/' }],
+          },
+          other: { children: [] },
+          synced: { children: [] },
+        },
+      })
+    );
+    const bookmarks = writeChromiumBookmarks(profile);
+    assert.deepEqual(bookmarks.roots.bookmark_bar.children, []);
+    const disk = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(disk.roots.bookmark_bar.children, []);
+    assert.match(disk.checksum, /^[0-9a-f]{32}$/);
+  } finally {
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
+test('a prepared profile pins only the folders it loads', () => {
+  const profile = tempProfile();
+  try {
+    const file = path.join(profile, 'Default', 'Preferences');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ extensions: { pinned_extensions: ['aaaabbbbccccddddeeeeffffgggghhhh'] } })
+    );
+    const out = pinChromeExtension(profile, [profile]);
+    const prefs = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(prefs.extensions.pinned_extensions, out.ids);
+    assert.equal(prefs.extensions.pinned_extensions.includes('aaaabbbbccccddddeeeeffffgggghhhh'), false);
+  } finally {
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
+
 test('Chromium prefs hide the storefront and keep the bookmark bar visible', () => {
   const profile = tempProfile();
   try {

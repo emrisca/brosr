@@ -19,6 +19,8 @@ export const TYPES = [
   'cursor',
   'cursorpolicy',
   'control',
+  'fate',
+  'stutter',
   'ping',
   'pong',
   'bye',
@@ -98,6 +100,20 @@ export function validate(message) {
     case 'control':
       if (typeof message.peerId !== 'string') fail('control needs a peerId');
       if (typeof message.allowed !== 'boolean') fail('control needs an allowed flag');
+      break;
+    case 'fate':
+      if (typeof message.peerId !== 'string' || !message.peerId) fail('fate needs a peerId');
+      if (typeof message.enabled !== 'boolean') fail('fate needs an enabled flag');
+      break;
+    case 'stutter':
+      if (typeof message.peerId !== 'string' || !message.peerId) fail('stutter needs a peerId');
+      if (typeof message.active !== 'boolean') fail('stutter needs an active flag');
+      if (typeof message.key !== 'string' || !message.key) fail('stutter needs a key');
+      if (!isNumber(message.position)) fail('stutter needs a position');
+      if (typeof message.playing !== 'boolean') fail('stutter needs a playing flag');
+      if (message.from !== undefined && typeof message.from !== 'string') {
+        fail('stutter from must be text');
+      }
       break;
     case 'ping':
       if (!isNumber(message.t0)) fail('ping needs t0');

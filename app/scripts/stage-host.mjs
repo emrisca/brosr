@@ -28,6 +28,7 @@ const FILES = [
   'host/bookmarks.mjs',
   'host/friends.mjs',
   'host/lobby.mjs',
+  'host/discovery.mjs',
   // The CLI imports both for the stop and session commands.
   'host/blockers.mjs',
   'host/session.mjs',

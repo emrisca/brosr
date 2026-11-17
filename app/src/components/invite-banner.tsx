@@ -1,19 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { answerInvite, type Invite } from '@/lib/host';
+import { answerInvite, type Invite, type Joined } from '@/lib/host';
 
 type Props = {
   invite: Invite;
   browserId?: string;
   name?: string;
   onClose: () => void;
+  onJoined: (joined: Joined) => void;
 };
 
 // A friend's invite reaches the lobby while the app is open. The banner is the
 // short window to take it, and it closes on its own so an ignored invite does
 // not sit over the screen.
-export function InviteBanner({ invite, browserId, name, onClose }: Props) {
+export function InviteBanner({ invite, browserId, name, onClose, onJoined }: Props) {
   const [busy, setBusy] = useState<'accept' | 'decline' | ''>('');
   const [error, setError] = useState('');
 
@@ -26,7 +27,8 @@ export function InviteBanner({ invite, browserId, name, onClose }: Props) {
     setBusy(accept ? 'accept' : 'decline');
     setError('');
     try {
-      await answerInvite(invite.id, accept, browserId, name);
+      const answer = await answerInvite(invite.id, accept, browserId, name);
+      if (answer.joined) onJoined(answer.joined);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

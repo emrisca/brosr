@@ -12,12 +12,16 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isAllowedHost, isLoopbackHost } from '../core/friends.mjs';
+import { formatAddress, isAllowedHost, isLoopbackHost, isTailnetHost } from '../core/friends.mjs';
 import { addInvite, lobbyBinds, LOBBY_PORT, readInvites, STATE } from './friends.mjs';
 
 const LOBBY_FILE = path.join(STATE, 'lobby.json');
+const ROOM_FILE = path.join(STATE, 'room.json');
 const MAX_BODY = 16 * 1024;
 const MAX_PORT_ATTEMPTS = 1;
+// A lobby from an older build may lack /rooms or may have bound before
+// Tailscale connected. The record carries this number so the app replaces it.
+const LOBBY_VERSION = 2;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,9 +59,86 @@ function alive(pid) {
   }
 }
 
+// A running lobby is good only while it listens on every address this machine
+// has now. A lobby that started before Tailscale connected holds loopback only
+// and would otherwise be reused for as long as its process lives.
+function sameBinds(saved, binds) {
+  const addresses = Array.isArray(saved.addresses) ? saved.addresses : [];
+  return addresses.length === binds.length && binds.every((host) => addresses.includes(host));
+}
+
+async function stopLobby(pid) {
+  if (!alive(pid)) return;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // A lobby that exited first has nothing to stop.
+  }
+  const until = Date.now() + 1500;
+  while (Date.now() < until && alive(pid)) await delay(50);
+}
+
 function remoteHost(value) {
   const text = String(value || '').replace(/%.+$/, '');
   return text.startsWith('::ffff:') ? text.slice(7) : text.replace(/^\[|\]$/g, '');
+}
+
+function readRun() {
+  try {
+    return JSON.parse(fs.readFileSync(ROOM_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function relayStatus(run) {
+  return new Promise((resolve) => {
+    const host = run.host === '0.0.0.0' ? '127.0.0.1' : run.host;
+    const request = http.get(
+      {
+        host,
+        port: run.port,
+        path: `/status?room=${encodeURIComponent(run.room)}`,
+        timeout: 700,
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    request.on('timeout', () => request.destroy());
+    request.on('error', () => resolve(null));
+  });
+}
+
+// A room is advertised only while its relay answers. The room file can outlive
+// a crashed relay, so the endpoint reads the live count instead of trusting it.
+async function currentRoom() {
+  const run = readRun();
+  if (!run || !run.room || !run.host || !run.port || !run.invite) return null;
+  const live = await relayStatus(run);
+  if (!live) return null;
+  const people = Number.isFinite(live.people) ? live.people : live.peers;
+  return {
+    room: String(run.room),
+    roomName: String(run.roomName || 'Room'),
+    host: String(run.host),
+    port: Number(run.port),
+    address: formatAddress(String(run.host), Number(run.port)),
+    url: String(run.invite),
+    peers: Math.max(0, Number(people) || 0),
+    started: typeof run.started === 'string' ? run.started : null,
+  };
 }
 
 function json(res, status, body) {
@@ -95,6 +176,17 @@ function handler(addresses) {
 
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, pid: process.pid, port: LOBBY_PORT, addresses });
+    }
+
+    // A room discovery request lists the active room on this machine. The
+    // endpoint answers the tailnet and this machine only, and the join link is
+    // included so another app can enter the room in one step.
+    if (req.method === 'GET' && url.pathname === '/rooms') {
+      if (!isLoopbackHost(from) && !isTailnetHost(from)) {
+        return json(res, 403, { ok: false, error: `${from} is not on the tailnet` });
+      }
+      const room = await currentRoom();
+      return json(res, 200, { ok: true, rooms: room ? [room] : [] });
     }
 
     // The inbox holds invite links, and a link holds the room key. Only this
@@ -156,6 +248,7 @@ function start() {
       if (ready !== binds.length) return;
       const saved = {
         ok: true,
+        version: LOBBY_VERSION,
         pid: process.pid,
         port: LOBBY_PORT,
         addresses: [...addresses],
@@ -201,7 +294,14 @@ function healthy(port, ms = 700) {
 // calls this on every poll, so the second call costs one health request.
 export async function ensureLobby() {
   const saved = readLobby();
-  if (saved && alive(saved.pid) && (await healthy(saved.port || LOBBY_PORT))) {
+  const binds = lobbyBinds();
+  if (
+    saved &&
+    saved.version === LOBBY_VERSION &&
+    alive(saved.pid) &&
+    sameBinds(saved, binds) &&
+    (await healthy(saved.port || LOBBY_PORT))
+  ) {
     return {
       running: true,
       started: false,
@@ -210,6 +310,7 @@ export async function ensureLobby() {
       addresses: Array.isArray(saved.addresses) ? saved.addresses : [],
     };
   }
+  if (saved && alive(saved.pid)) await stopLobby(saved.pid);
 
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], {
     detached: true,

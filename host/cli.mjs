@@ -26,6 +26,7 @@ import {
   sendInvite,
 } from './friends.mjs';
 import { ensureLobby } from './lobby.mjs';
+import { discoverRooms } from './discovery.mjs';
 import { makeInvite } from '../core/friends.mjs';
 
 const isAlive = (pid) => {
@@ -147,7 +148,7 @@ const COMMANDS = {
     if (has('on')) payload.on = arg('on') !== 'false';
     if (has('shared')) payload.shared = arg('shared') !== 'false';
     if (has('tab')) payload.tabId = Number(arg('tab'));
-    return { ok: true, ...(await panelCommand(payload)) };
+    return { ok: true, ...(await panelCommand(payload, { guest: flag('guest') })) };
   },
 
   async stop() {
@@ -251,6 +252,12 @@ const COMMANDS = {
   // screen says the invite works on this machine only.
   async address() {
     return { ok: true, address: localLobbyAddress() };
+  },
+
+  // Active rooms on the tailnet. Each peer's lobby advertises only its current
+  // live room, so this is a short scan rather than a room registry.
+  async discover() {
+    return { ok: true, ...(await discoverRooms()) };
   },
 };
 

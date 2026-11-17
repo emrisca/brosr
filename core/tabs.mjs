@@ -26,3 +26,11 @@ export function tabOpen(data) {
   const key = data.key === undefined || data.key === null ? null : String(data.key);
   return { url: data.url, key };
 }
+
+// A close names the shared tab by key. The URL is not needed, and a tab that
+// was never shared has no key, so it cannot close anything here.
+export function tabClose(data) {
+  if (!data || typeof data !== 'object' || data.action !== 'close') return null;
+  const key = data.key === undefined || data.key === null ? '' : String(data.key);
+  return key ? { key } : null;
+}

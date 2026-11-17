@@ -63,6 +63,18 @@ fn project_root() -> PathBuf {
         }
     }
 
+    // A debug build belongs to the source tree. Prefer its host over the
+    // staged copy beside the executable, because a frontend-only change does
+    // not refresh that copy and can leave an older backend behind a newer UI.
+    if cfg!(debug_assertions) {
+        let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Some(root) = here.parent().and_then(|app| app.parent()) {
+            if root.join("host").join("cli.mjs").exists() {
+                return root.to_path_buf();
+            }
+        }
+    }
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));

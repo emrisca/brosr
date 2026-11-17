@@ -4,7 +4,7 @@
 // numbers whether the core runs in the content script or in the page.
 
 import { createRoomClient, PEER_IDLE_MS, PRESENCE_TICK_MS } from './sync.mjs';
-import { TAB_APP, tabOpen } from './tabs.mjs';
+import { TAB_APP, tabClose, tabOpen } from './tabs.mjs';
 import { PANEL_APP } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
@@ -490,6 +490,9 @@ export async function start() {
   applyOwnCursor(showOwnCursor ? ownCursor : null);
   const sharePointer = readSetting('brosr-share-pointer') !== '0';
   let showNames = readSetting('brosr-cursor-names') !== '0';
+  // A host keeps its choice between rooms. A guest starts off and takes the
+  // host's setting from the room snapshot or a fate frame.
+  const sameFate = role === 'host' && readSetting('brosr-same-fate') === '1';
   // A host names the sites that show pointers. A peer keeps the last list it
   // learned, or the two brosr apps until the host sends its own.
   const savedSites = cleanCursorSites((() => {
@@ -649,6 +652,7 @@ export async function start() {
     roomName,
     customCursor: savedCursor,
     sharePointer,
+    sameFate,
     cursorSites,
     cursorForgot,
     showNames,
@@ -707,6 +711,12 @@ export async function start() {
         // it, and copying an announcement back to its own sender opens the film
         // again on the machine that asked for it.
         if (message.from === peerId) return;
+        const close = tabClose(message.data);
+        if (close && api && api.runtime && api.runtime.sendMessage) {
+          api.runtime
+            .sendMessage({ type: 'brosr:tab-close-local', key: close.key })
+            .catch(() => {});
+        }
         const open = tabOpen(message.data);
         if (open && api && api.runtime && api.runtime.sendMessage) {
           api.runtime
@@ -740,6 +750,41 @@ export async function start() {
       lastPresenceSent = at;
       api.runtime
         .sendMessage({ type: 'brosr:presence-draw', position })
+        .catch(() => {});
+    },
+    onHold: (hold) => {
+      if (!hold || !hold.key) return;
+      // This tab may hold the film itself. Apply the hold here before asking
+      // the background, because a room tab is not in the film tab list.
+      if (hasLocalMedia) {
+        const element = client.media.pick(hold.key);
+        const reading = element ? client.media.state(element) : null;
+        if (reading && reading.key === hold.key) {
+          if (hold.active) {
+            client.media.apply(element, { action: 'pause' });
+          } else {
+            client.media.apply(element, { action: 'seek', position: hold.position });
+            client.media.apply(element, { action: 'tick', rate: 1 });
+            if (hold.playing) client.media.apply(element, { action: 'play' });
+          }
+          return;
+        }
+      }
+      if (!api || !api.runtime || !api.runtime.sendMessage) return;
+      api.runtime
+        .sendMessage({
+          type: 'brosr:media-apply',
+          from: hold.peerId || null,
+          name: null,
+          action: hold.active ? 'hold' : 'tick',
+          key: hold.key,
+          position: hold.position,
+          playing: Boolean(hold.playing && !hold.active),
+          rate: 1,
+          volume: 1,
+          hold: Boolean(hold.active),
+          at: Date.now(),
+        })
         .catch(() => {});
     },
     onMedia: (message) => {
@@ -812,7 +857,9 @@ export async function start() {
   async function panelSnapshot() {
     const live = status();
     let browser = null;
-    if (api && api.runtime && api.runtime.sendMessage) {
+    // Only the host has controls to feed from the tab list. A guest asks for
+    // the people view, so it never waits on the background page for it.
+    if (role === 'host' && api && api.runtime && api.runtime.sendMessage) {
       try {
         // The tab list is useful but not required to control the room. A
         // background page that is still starting must not hold the snapshot.
@@ -839,8 +886,10 @@ export async function start() {
     ];
     return {
       roomName: live.roomName || roomName,
+      hostId: live.hostId || hostId,
       peers,
       media: live.media || null,
+      sameFate: Boolean(live.sameFate),
       sync: !browser || browser.sync !== false,
       notices: !browser || browser.notices !== false,
       auto: Boolean(browser && browser.auto),
@@ -903,6 +952,12 @@ export async function start() {
         if (key === 'sync') await runtime({ type: 'brosr:sync-toggle', on });
         else if (key === 'notices') await runtime({ type: 'brosr:notice-toggle', on });
         else if (key === 'auto') await runtime({ type: 'brosr:tabs-auto', on });
+        else if (key === 'fate') {
+          if (!client.setSameFate(on)) {
+            throw new Error('Only the host can change this setting.');
+          }
+          writeSetting('brosr-same-fate', on ? '1' : '0');
+        }
         else throw new Error('Unknown room setting.');
       } else if (data.action === 'tab') {
         const tabId = Number(data.tabId);
@@ -1526,6 +1581,10 @@ export async function start() {
         // already stopped this report when playback sync is off, so the room
         // tab only has to put it on the socket under this peer's id.
         if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
+        // A stutter is not a playhead act, but it still travels while the
+        // player samples. The host checks the peer's grant before it holds the
+        // room, so an ungranted stutter changes nothing.
+        client.noteMedia(state);
         // A granted peer drives the room with an act, never with its own
         // clock. Its film may sit behind the anchor, and that lag sent four
         // times a second dragged the host's film back and made the host's own

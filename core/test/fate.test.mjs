@@ -1,0 +1,205 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createRoomClient } from '../sync.mjs';
+import { encode } from '../protocol.mjs';
+import { RemoteMediaSync } from '../media-relay.mjs';
+
+const KEY = 'http://127.0.0.1:8787/media/clip.webm';
+
+function fakeVideo() {
+  return {
+    src: KEY,
+    currentSrc: KEY,
+    duration: 120,
+    currentTime: 0,
+    paused: true,
+    seeking: false,
+    readyState: 4,
+    playbackRate: 1,
+    volume: 1,
+    play() {
+      this.paused = false;
+      return Promise.resolve();
+    },
+    pause() {
+      this.paused = true;
+    },
+    getAttribute(name) {
+      return name === 'src' ? this.src : null;
+    },
+  };
+}
+
+test('a granted peer stutter holds the host and an ungranted one is ignored', () => {
+  let local = 1000;
+  const hostSent = [];
+  const hostHolds = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    send: (frame) => hostSent.push(JSON.parse(frame)),
+    onMedia: () => true,
+    onHold: (hold) => hostHolds.push(hold),
+  });
+  const peerSent = [];
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'brave',
+    name: 'Bob',
+    hostId: 'host',
+    now: () => local,
+    overlay: false,
+    send: (frame) => peerSent.push(JSON.parse(frame)),
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    local
+  );
+  peer.receive(encode({ type: 'fate', peerId: 'host', enabled: true, roomTime: local }), local);
+
+  const starved = { key: KEY, position: 12, playing: true, buffering: true };
+  peer.noteMedia(starved, 1000);
+  assert.equal(peerSent.some((message) => message.type === 'stutter'), false);
+  peer.noteMedia(starved, 1600);
+  const active = peerSent.at(-1);
+  assert.equal(active.type, 'stutter');
+  assert.equal(active.active, true);
+
+  host.receive(encode(active), 1600);
+  assert.equal(hostHolds.at(-1).active, true);
+  const relayed = hostSent.filter((message) => message.type === 'stutter').at(-1);
+  assert.equal(relayed.from, 'host');
+  assert.equal(relayed.peerId, 'brave');
+
+  peer.noteMedia({ ...starved, buffering: false }, 2000);
+  host.receive(encode(peerSent.at(-1)), 2000);
+  assert.equal(hostHolds.at(-1).active, false);
+
+  const bogus = host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'lurker',
+      key: KEY,
+      position: 5,
+      playing: true,
+      active: true,
+      roomTime: 2000,
+    }),
+    2000
+  );
+  assert.equal(bogus.ignored, 'no-grant');
+});
+
+test('a host stutter holds a guest and a routine tick cannot resume it', () => {
+  const local = 1000;
+  const video = fakeVideo();
+  video.paused = false;
+  const holds = [];
+  const guest = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    mediaRoot: { querySelectorAll: () => [video] },
+    send: () => {},
+    onHold: (hold) => {
+      holds.push(hold);
+      if (hold.active) video.pause();
+      else {
+        video.currentTime = hold.position;
+        video.paused = false;
+      }
+    },
+  });
+
+  guest.receive(encode({ type: 'fate', peerId: 'host', enabled: true, roomTime: local }), local);
+  guest.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'host',
+      from: 'host',
+      key: KEY,
+      position: 10,
+      playing: true,
+      active: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(holds.at(-1).active, true);
+  assert.equal(video.paused, true);
+
+  const ignored = guest.receive(
+    encode({
+      type: 'media',
+      peerId: 'host',
+      key: KEY,
+      action: 'tick',
+      position: 10,
+      playing: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(ignored.ignored, 'hold');
+  assert.equal(video.paused, true);
+
+  guest.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'host',
+      from: 'host',
+      key: KEY,
+      position: 10,
+      playing: true,
+      active: false,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(holds.at(-1).active, false);
+  const applied = guest.receive(
+    encode({
+      type: 'media',
+      peerId: 'host',
+      key: KEY,
+      action: 'tick',
+      position: 10,
+      playing: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(applied.ok, true);
+  assert.equal(video.paused, false);
+});
+
+test('a held film stays paused until the release carries the resume point', () => {
+  const now = 10000;
+  const video = fakeVideo();
+  video.paused = false;
+  const sync = new RemoteMediaSync({
+    document: { querySelector: () => video },
+    href: KEY,
+    hostname: '127.0.0.1',
+    now: () => now,
+  });
+
+  assert.equal(sync.handle({ key: KEY, position: 10, playing: true, hold: true, at: now }).action, 'hold');
+  assert.equal(video.paused, true);
+  assert.equal(sync.handle({ key: KEY, position: 10, playing: true, at: now }).skipped, 'held');
+  assert.equal(video.paused, true);
+
+  sync.handle({ key: KEY, position: 10, playing: true, hold: false, at: now });
+  assert.equal(sync.held, false);
+  assert.equal(video.paused, false);
+});

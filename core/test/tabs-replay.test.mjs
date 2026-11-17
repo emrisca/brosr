@@ -41,6 +41,13 @@ test('the replay is not gated on a film anchor', () => {
   assert.ok(replay < anchor, 'the replay ask sits below the anchor early return');
 });
 
+test('a shared or mirrored tab announces its close to the room', () => {
+  assert.match(background, /const shared = announced\.has\(id\) \|\| remoteOrigins\.has\(id\);/);
+  assert.match(background, /if \(shared && !remotelyClosed\)/);
+  assert.match(background, /announceClose\(key\)/);
+  assert.match(background, /if \(message\.type === 'brosr:tab-close-local'\)/);
+});
+
 test('the replay only sends tabs that already went out', () => {
   assert.match(background, /if \(message\.type === 'brosr:tabs-replay'\) \{/);
   assert.match(

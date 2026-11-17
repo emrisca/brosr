@@ -122,6 +122,11 @@ api.tabs.query({}).then((tabs) => {
 }).catch(() => {});
 
 api.tabs.onRemoved.addListener((id) => {
+  // A tab this browser shared, or its copy of a tab another browser shared,
+  // belongs to the room. Closing either one is a room close.
+  const shared = announced.has(id) || remoteOrigins.has(id);
+  const key = remoteOrigins.get(id) ?? id;
+  const remotelyClosed = closing.delete(id);
   announced.delete(id);
   remoteTabs.delete(id);
   remoteOrigins.delete(id);
@@ -139,6 +144,16 @@ api.tabs.onRemoved.addListener((id) => {
       save({ roomTabId: null, roomRole: null });
     }
   });
+  // A close from someone with control closes the same tab everywhere. A close
+  // this browser just applied from the room is already accounted for, so it
+  // does not echo back.
+  if (shared && !remotelyClosed) {
+    mayShare()
+      .then((allowed) => {
+        if (allowed) announceClose(key);
+      })
+      .catch(() => {});
+  }
 });
 
 // Sharing is host-led. A guest opens what the host announces and never sends
@@ -279,6 +294,22 @@ async function announce(url, key) {
   }
 }
 
+async function announceClose(key) {
+  if (key === undefined || key === null || key === '') return false;
+  const id = await roomTab();
+  if (!validId(id)) return false;
+  try {
+    await api.tabs.sendMessage(id, {
+      type: 'brosr:tabs-announce',
+      action: 'close',
+      key: String(key),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Control allows a tab to go out, and a granted peer holds it just as the host
 // does. A plain peer shares nothing.
 async function mayShare() {
@@ -290,6 +321,7 @@ async function mayShare() {
 // between the first event and the record that the tab went out, so a host tab
 // opens one copy, not three.
 const announcing = new Set();
+const closing = new Set();
 async function shareTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return false;
   if (announcing.has(tab.id)) return false;
@@ -630,6 +662,20 @@ async function handle(message, sender) {
   }
   // A frame arrived from the room. The tab opens in the background, and it is
   // marked so this browser never announces it back.
+  if (message.type === 'brosr:tab-close-local') {
+    const key = String(message.key || '');
+    if (!key) return { ok: false, reason: 'key' };
+    const id = remoteKeys.get(key);
+    if (!validId(id)) return { ok: true, closed: 0 };
+    closing.add(id);
+    try {
+      await api.tabs.remove(id);
+      return { ok: true, closed: 1 };
+    } catch (error) {
+      closing.delete(id);
+      return { ok: false, reason: 'close', error: text(error) };
+    }
+  }
   if (message.type === 'brosr:tab-open-local') {
     if (!shareable(message.url)) return { ok: false, reason: 'url' };
     const key = message.key === undefined || message.key === null ? null : String(message.key);
@@ -831,6 +877,7 @@ async function handle(message, sender) {
             rate: message.rate,
             volume: message.volume,
             ad: Boolean(message.ad),
+            ...(typeof message.hold === 'boolean' ? { hold: message.hold } : {}),
             at: message.at,
           })
           .then(() => true)

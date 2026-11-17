@@ -3,7 +3,6 @@
 // read and the launch arguments.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { SITES } from './bookmarks.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -521,26 +520,9 @@ function bookmarkRoots(bookmarks) {
   return roots;
 }
 
-function bookmarkMaxId(node, max = 0) {
-  if (!node || typeof node !== 'object') return max;
-  const id = Number.parseInt(String(node.id || '0'), 10);
-  if (Number.isFinite(id)) max = Math.max(max, id);
-  for (const child of Array.isArray(node.children) ? node.children : []) {
-    max = bookmarkMaxId(child, max);
-  }
-  return max;
-}
-
-function bookmarkUrls(node, urls = new Set()) {
-  if (!node || typeof node !== 'object') return urls;
-  if (node.type === 'url' && typeof node.url === 'string') urls.add(node.url);
-  for (const child of Array.isArray(node.children) ? node.children : []) bookmarkUrls(child, urls);
-  return urls;
-}
-
-// A room profile starts with no bookmarks. The file is written before the
-// browser starts, and an existing bar is kept so a person's own bookmarks
-// survive a later prepare.
+// A room profile carries no bookmarks. The landing page is the only site a room
+// opens, so a bar of links is noise, and a bar from an earlier run would put
+// those sites back on screen. Every prepare writes an empty set.
 export function writeChromiumBookmarks(profile) {
   const file = path.join(profile, 'Default', 'Bookmarks');
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -552,21 +534,7 @@ export function writeChromiumBookmarks(profile) {
   }
   bookmarks.version = 1;
   const roots = bookmarkRoots(bookmarks);
-  const seen = bookmarkUrls(roots.bookmark_bar);
-  let nextId = bookmarkMaxId(roots) + 1;
-  for (const site of SITES) {
-    if (seen.has(site.url)) continue;
-    roots.bookmark_bar.children.push({
-      date_added: CHROME_TIME(),
-      date_last_used: '0',
-      guid: BOOKMARK_GUID(`url:${site.url}`),
-      id: String(nextId++),
-      name: site.name,
-      type: 'url',
-      url: site.url,
-    });
-    seen.add(site.url);
-  }
+  roots.bookmark_bar.children = [];
   bookmarks.checksum = bookmarkChecksum(roots);
   fs.writeFileSync(file, JSON.stringify(bookmarks, null, 2) + '\n');
   return bookmarks;
@@ -684,14 +652,13 @@ export function pinChromeExtension(profile, extensionDir) {
   }
   if (!prefs.profile.default_content_setting_values) prefs.profile.default_content_setting_values = {};
   prefs.profile.default_content_setting_values.cookies = 1;
-  const pinned = new Set(
-    Array.isArray(prefs.extensions.pinned_extensions) ? prefs.extensions.pinned_extensions : []
-  );
+  // A room pins exactly the add-ons it loads. A pin from an earlier folder
+  // keeps a toolbar slot for an extension that is no longer there, so the list
+  // is replaced rather than added to.
   const ids = dirs.map((dir) => chromeExtensionId(dir));
-  for (const id of ids) pinned.add(id);
-  prefs.extensions.pinned_extensions = [...pinned];
+  prefs.extensions.pinned_extensions = ids;
   fs.writeFileSync(prefsPath, JSON.stringify(prefs));
-  return { id: ids[0] || null, ids, pinned: [...pinned] };
+  return { id: ids[0] || null, ids, pinned: ids };
 }
 
 export { PLATFORM };

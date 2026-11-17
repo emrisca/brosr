@@ -9,16 +9,28 @@ import { Browsers } from '@/screens/browsers';
 import { Prepare } from '@/screens/prepare';
 import { FriendsDialog } from '@/screens/friends';
 import { JoinDialog } from '@/screens/join';
+import { PeerRoom } from '@/screens/peer-room';
 import { Room } from '@/screens/room';
 import { Welcome } from '@/screens/welcome';
 import { InviteBanner } from '@/components/invite-banner';
 import { useTheme } from '@/lib/theme';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { friends as listFriends, status, type Browser, type Invite, type Run } from '@/lib/host';
+import {
+  detect,
+  discover,
+  friends as listFriends,
+  join as joinRoom,
+  status,
+  type Browser,
+  type DiscoveredRoom,
+  type Invite,
+  type Joined,
+  type Run,
+} from '@/lib/host';
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
 
-type Step = 'welcome' | 'browsers' | 'prepare' | 'room';
+type Step = 'welcome' | 'browsers' | 'prepare' | 'room' | 'peer';
 
 const NAME_KEY = 'brosr-name';
 const ROOM_NAME_KEY = 'brosr-room-name';
@@ -43,6 +55,13 @@ export default function App() {
   });
   const [browser, setBrowser] = useState<Browser | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [guest, setGuest] = useState<Joined | null>(null);
+  const [rooms, setRooms] = useState<DiscoveredRoom[]>([]);
+  const [discovering, setDiscovering] = useState(true);
+  const [tailnet, setTailnet] = useState(false);
+  const [joiningRoom, setJoiningRoom] = useState('');
+  const [discoveryError, setDiscoveryError] = useState('');
+  const [joinError, setJoinError] = useState('');
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
@@ -75,6 +94,9 @@ export default function App() {
         if ('invite' in state && state.running) {
           setRun(state);
           setStep('room');
+        } else if ('joined' in state) {
+          setGuest(state);
+          setStep('peer');
         }
       })
       .catch(() => {})
@@ -150,10 +172,58 @@ export default function App() {
     };
   }, []);
 
+  // The welcome screen watches the tailnet for open rooms. A scan starts the
+  // lobby through the friends poll, then asks every peer's lobby for its room.
+  useEffect(() => {
+    if (step !== 'welcome') return;
+    let live = true;
+    const tick = async () => {
+      setDiscovering(true);
+      try {
+        const next = await discover();
+        if (!live) return;
+        setRooms(next.rooms);
+        setTailnet(next.tailnet);
+        setDiscoveryError('');
+      } catch (cause) {
+        if (live) setDiscoveryError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (live) setDiscovering(false);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 10000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [step]);
+
   const later = () => {
     if (update) skip(update.version);
     setUpdateOpen(false);
   };
+
+  function enterPeer(next: Joined) {
+    setJoinError('');
+    setGuest(next);
+    setStep('peer');
+  }
+
+  async function joinDiscovered(room: DiscoveredRoom) {
+    setJoiningRoom(room.room);
+    setJoinError('');
+    try {
+      const found = await detect();
+      const chosen = found.browsers.find((entry) => entry.supported);
+      if (!chosen) throw new Error('No browser on this machine can join a room.');
+      enterPeer(await joinRoom(room.url, chosen.id, name));
+    } catch (cause) {
+      setJoinError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setJoiningRoom('');
+    }
+  }
 
   // The window has no title bar, so the strip at the top is the handle. A
   // declared drag region reaches only the element under the press, and every
@@ -243,11 +313,15 @@ export default function App() {
             {step === 'welcome' ? (
               <Welcome
                 name={name}
-                roomName={roomName}
+                rooms={rooms}
+                discovering={discovering}
+                tailnet={tailnet}
+                joining={joiningRoom}
+                discoveryError={discoveryError || joinError}
                 onName={setName}
-                onRoomName={setRoomName}
                 onNext={() => setStep('browsers')}
                 onJoin={() => setJoinOpen(true)}
+                onJoinRoom={joinDiscovered}
                 onFriends={() => setFriendsOpen(true)}
               />
             ) : null}
@@ -266,6 +340,7 @@ export default function App() {
                 browser={browser}
                 name={name}
                 roomName={roomName}
+                onRoomName={setRoomName}
                 onReady={(next) => {
                   setRun(next);
                   setStep('room');
@@ -283,6 +358,16 @@ export default function App() {
                 }}
               />
             ) : null}
+
+            {step === 'peer' && guest ? (
+              <PeerRoom
+                joined={guest}
+                onLeave={() => {
+                  setGuest(null);
+                  setStep('welcome');
+                }}
+              />
+            ) : null}
           </div>
         )}
       </main>
@@ -293,16 +378,23 @@ export default function App() {
           browserId={browser?.id}
           name={name}
           onClose={() => setInvite(null)}
+          onJoined={enterPeer}
         />
       ) : null}
 
-      <JoinDialog open={joinOpen} onOpenChange={setJoinOpen} name={name} />
+      <JoinDialog
+        open={joinOpen}
+        onOpenChange={setJoinOpen}
+        name={name}
+        onJoined={enterPeer}
+      />
       <FriendsDialog
         open={friendsOpen}
         onOpenChange={setFriendsOpen}
         run={run}
         browserId={browser?.id}
         name={name}
+        onJoined={enterPeer}
       />
       <UpdateDialog update={update} open={updateOpen} onLater={later} />
 

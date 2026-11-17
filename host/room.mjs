@@ -720,7 +720,8 @@ export function readJoin() {
 
 function writeJoin(run) {
   ensureDir(RUN_DIR);
-  fs.writeFileSync(JOIN_FILE, JSON.stringify(run, null, 2));
+  // The join file carries the app panel token, so only this user reads it.
+  fs.writeFileSync(JOIN_FILE, JSON.stringify(run, null, 2), { mode: 0o600 });
   return run;
 }
 
@@ -747,6 +748,14 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
   // this app, so it replaces the URL parameter the room tab reads as its own.
   const openUrl = new URL(link.url);
   openUrl.searchParams.set('name', guestName);
+  // The invite names one default peer. Every app join needs its own id, or two
+  // people using the same link replace each other in the room roster.
+  const peer = guestId();
+  openUrl.searchParams.set('peer', peer);
+  // The app reads the people list from this tab. The token stays in the join
+  // record and the tab URL, so another peer cannot ask this browser for it.
+  const panelToken = crypto.randomBytes(18).toString('base64url');
+  openUrl.searchParams.set('panel', panelToken);
   const prepared = await prepare({ browser: browser.id, guest: true });
   const args = launchArgs(browser, {
     profile: prepared.profile,
@@ -766,7 +775,8 @@ export async function joinRoom({ url, browser: browserId, name = '' } = {}) {
     port: link.relayPort,
     url: openUrl.toString(),
     name: guestName,
-    peer: link.peer,
+    peer,
+    panelToken,
     profile: prepared.profile,
     browserPid: launched.pid,
     pipePid: launched.holderPid,

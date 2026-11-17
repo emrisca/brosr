@@ -43,23 +43,28 @@ function cleanName(value, fallback) {
   return text ? text.slice(0, 64) : fallback;
 }
 
-// The tailnet hands this machine one address in 100.64/10. A second interface
-// is possible, so every candidate is returned and the first usable one wins.
+// The tailnet hands this machine one address in 100.64/10 and one in the
+// fd7a:115c:a1e0 block. Every candidate is returned with IPv4 first, because
+// that is the address discovery asks a peer for.
 export function tailnetHosts() {
-  const out = [];
+  const v4 = [];
+  const v6 = [];
   for (const list of Object.values(os.networkInterfaces())) {
     for (const entry of list || []) {
       if (!entry || entry.internal) continue;
       const family = entry.family;
       if ((family === 'IPv4' || family === 4) && entry.address.startsWith('100.')) {
         const second = Number(entry.address.split('.')[1]);
-        if (second >= 64 && second <= 127) out.push(entry.address);
-      } else if ((family === 'IPv6' || family === 6) && /^f[cd]/i.test(entry.address)) {
-        out.push(entry.address);
+        if (second >= 64 && second <= 127) v4.push(entry.address);
+      } else if (
+        (family === 'IPv6' || family === 6) &&
+        /^fd7a:115c:a1e0:/i.test(entry.address)
+      ) {
+        v6.push(entry.address);
       }
     }
   }
-  return [...new Set(out)];
+  return [...new Set([...v4, ...v6])];
 }
 
 // One address for the relay. A tailnet address is reachable by a friend, so it
@@ -76,8 +81,12 @@ export function bindHost() {
   return tailnetHosts()[0] || '127.0.0.1';
 }
 
+// A room has to answer on the address the other machine picks. This machine
+// may list IPv6 first while the peer scans IPv4, so the lobby binds every
+// tailnet address instead of only the relay's one.
 export function lobbyBinds() {
-  return [...new Set([bindHost(), '127.0.0.1'])];
+  const binds = process.env.BROSR_BIND ? [bindHost()] : tailnetHosts();
+  return [...new Set([...binds, '127.0.0.1'])];
 }
 
 // The address friends see. With no tailnet it is loopback, which is only

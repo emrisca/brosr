@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { makeZip } from '../../spike/zip.mjs';
-import { crxPayload, pstreamCopy, unpackCrx } from '../pstream.mjs';
+import { crxPayload, grantHostAccess, pstreamCopy, stagePStream, unpackCrx } from '../pstream.mjs';
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brosr-pstream-'));
@@ -59,4 +59,37 @@ test('an unpacked CRX loses store metadata and keeps its folder', () => {
   assert.equal(pstreamCopy(dir), path.join(dir, 'p-stream-chrome'));
   assert.ok(fs.existsSync(path.join(out.dir, 'static', 'background', 'index.js')));
   assert.equal(fs.existsSync(path.join(out.dir, '_metadata')), false);
+});
+
+test('a staged copy requires host access instead of asking on a page', async () => {
+  const dir = tempDir();
+  const folder = path.join(dir, 'p-stream-chrome');
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(
+    path.join(folder, 'manifest.json'),
+    JSON.stringify({
+      manifest_version: 3,
+      version: '1.0.0',
+      permissions: ['storage'],
+      optional_host_permissions: ['<all_urls>'],
+    })
+  );
+  const hit = await stagePStream(dir);
+  assert.equal(hit.staged, false);
+  const manifest = JSON.parse(fs.readFileSync(path.join(folder, 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.host_permissions, ['<all_urls>']);
+  assert.equal('optional_host_permissions' in manifest, false);
+  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.equal(grantHostAccess(folder).changed, false);
+});
+
+test('an unpacked copy with no optional host access is left as it is', () => {
+  const dir = tempDir();
+  const folder = path.join(dir, 'p-stream-chrome');
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, 'manifest.json');
+  const original = JSON.stringify({ manifest_version: 3, version: '9.9.9' });
+  fs.writeFileSync(file, original);
+  assert.equal(grantHostAccess(folder).changed, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
 });

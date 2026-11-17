@@ -364,6 +364,13 @@ export function RoomControls({ open, onOpenChange }: Props) {
                   onChange={(next) => act('set', { key: 'sync', on: next })}
                 />
                 <Toggle
+                  label="Suffer the same fate"
+                  note="Pause everyone while the host or a person with control buffers. People without control never hold the room."
+                  on={state.sameFate}
+                  disabled={disabled}
+                  onChange={(next) => act('set', { key: 'fate', on: next })}
+                />
+                <Toggle
                   label="Action notices"
                   note="Show who paused, played, or sought the film."
                   on={state.notices}

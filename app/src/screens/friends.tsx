@@ -20,6 +20,7 @@ import {
   sendInvite,
   type FriendsState,
   type Invite,
+  type Joined,
   type Run,
 } from '@/lib/host';
 
@@ -29,13 +30,14 @@ type Props = {
   run: Run | null;
   browserId?: string;
   name?: string;
+  onJoined: (joined: Joined) => void;
 };
 
 function message(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-export function FriendsDialog({ open, onOpenChange, run, browserId, name }: Props) {
+export function FriendsDialog({ open, onOpenChange, run, browserId, name, onJoined }: Props) {
   const [state, setState] = useState<FriendsState | null>(null);
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState('');
@@ -167,7 +169,8 @@ export function FriendsDialog({ open, onOpenChange, run, browserId, name }: Prop
       if (!accept) {
         setNotice('Invite declined.');
       } else if (next.joined) {
-        setNotice(`Room open in ${next.joined.browser.name}.`);
+        onJoined(next.joined);
+        onOpenChange(false);
       } else {
         setNotice('Room open.');
       }

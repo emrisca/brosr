@@ -6,35 +6,43 @@ import { formatAddress } from '../core/friends.mjs';
 import { PANEL_APP, PANEL_PEER } from '../core/panel.mjs';
 import { decode, encode } from '../core/protocol.mjs';
 import { openFrame, roomKey, sealFrame } from '../core/seal.mjs';
-import { readRun } from './room.mjs';
+import { readJoin, readRun } from './room.mjs';
 
 const TIMEOUT_MS = 8000;
 
-export async function panelCommand({ action = 'status', ...params } = {}) {
-  const run = readRun();
-  if (!run || !run.panelToken) throw new Error('Open a room before using its controls.');
-  const host = run.host === '0.0.0.0' ? '127.0.0.1' : run.host || '127.0.0.1';
+export async function panelCommand({ action = 'status', ...params } = {}, { guest = false } = {}) {
+  // The host tab owns the full control state. A guest tab owns a read-only
+  // people view, and its token lives in join.json instead of room.json.
+  const record = guest ? readJoin() : readRun();
+  if (!record || !record.panelToken) {
+    throw new Error(
+      guest
+        ? 'Join a room before reading its people.'
+        : 'Open a room before using its controls.'
+    );
+  }
+  const host = record.host === '0.0.0.0' ? '127.0.0.1' : record.host || '127.0.0.1';
   const requestId = crypto.randomUUID();
   const inviteKey = (() => {
     try {
-      return new URLSearchParams(new URL(run.url).hash.replace(/^#/, '')).get('k');
+      return new URLSearchParams(new URL(record.url).hash.replace(/^#/, '')).get('k');
     } catch {
       return null;
     }
   })();
   const key = inviteKey ? await roomKey(inviteKey) : null;
   const url =
-    `ws://${formatAddress(host, run.port)}/room` +
-    `?room=${encodeURIComponent(run.room)}&role=panel&peer=${PANEL_PEER}`;
+    `ws://${formatAddress(host, record.port)}/room` +
+    `?room=${encodeURIComponent(record.room)}&role=panel&peer=${PANEL_PEER}`;
   const plain = encode({
     type: 'app',
     peerId: PANEL_PEER,
     name: PANEL_APP,
-    data: { token: run.panelToken, requestId, action, ...params },
+    data: { token: record.panelToken, requestId, action, ...params },
     roomTime: Date.now(),
   });
   const frame = key
-    ? sealFrame(key, new TextEncoder().encode(plain), { room: run.room })
+    ? sealFrame(key, new TextEncoder().encode(plain), { room: record.room })
     : plain;
 
   return new Promise((resolve, reject) => {
@@ -61,7 +69,7 @@ export async function panelCommand({ action = 'status', ...params } = {}) {
         if (typeof frame === 'string') return;
         if (frame instanceof Blob) frame = await frame.arrayBuffer();
         try {
-          frame = new TextDecoder().decode(openFrame(key, new Uint8Array(frame), { room: run.room }));
+          frame = new TextDecoder().decode(openFrame(key, new Uint8Array(frame), { room: record.room }));
         } catch {
           return;
         }

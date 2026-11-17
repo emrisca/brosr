@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shareable, tabOpen } from '../tabs.mjs';
+import { shareable, tabClose, tabOpen } from '../tabs.mjs';
 
 test('a plain web page is shareable and a browser page is not', () => {
   assert.equal(shareable('https://example.com/article'), true);
@@ -22,6 +22,16 @@ test('an open message needs an action and a shareable url', () => {
   assert.equal(tabOpen({ action: 'open', url: 'chrome://settings' }), null);
   assert.equal(tabOpen({ action: 'close', url: 'https://example.com/' }), null);
   assert.equal(tabOpen(null), null);
+});
+
+test('a close needs a key and never carries a URL', () => {
+  assert.deepEqual(tabClose({ action: 'close', key: 42 }), { key: '42' });
+  assert.deepEqual(tabClose({ action: 'close', key: '42', url: 'https://example.com/' }), {
+    key: '42',
+  });
+  assert.equal(tabClose({ action: 'close' }), null);
+  assert.equal(tabClose({ action: 'open', key: '42' }), null);
+  assert.equal(tabClose(null), null);
 });
 
 test('the host tab rides along as a key', () => {

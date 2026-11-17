@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Check, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { prepare, start, type Browser, type Prepared, type Progress as Stage, type Run } from '@/lib/host';
@@ -10,6 +11,7 @@ type Props = {
   browser: Browser;
   name: string;
   roomName: string;
+  onRoomName: (value: string) => void;
   onReady: (run: Run) => void;
   onBack: () => void;
 };
@@ -33,7 +35,7 @@ function build(browser: string) {
   return pending;
 }
 
-export function Prepare({ browser, name, roomName, onReady, onBack }: Props) {
+export function Prepare({ browser, name, roomName, onRoomName, onReady, onBack }: Props) {
   const [phase, setPhase] = useState<Phase>('working');
   const [prepared, setPrepared] = useState<Prepared | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -94,6 +96,21 @@ export function Prepare({ browser, name, roomName, onReady, onBack }: Props) {
     <div className="flex flex-col gap-2.5">
       <h1 className="text-xl font-medium tracking-tight">Setting up your room</h1>
 
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="prepare-room-name" className="text-xs text-muted-foreground">
+          Room name
+        </label>
+        <Input
+          id="prepare-room-name"
+          value={roomName}
+          onChange={(event) => onRoomName(event.target.value)}
+          placeholder="Movie night"
+          autoComplete="off"
+          maxLength={48}
+          disabled={phase === 'starting'}
+        />
+      </div>
+
       <div className="flex flex-col gap-2 rounded-md bg-muted p-2">
         {phase === 'working' ? (
           <div className="flex flex-col gap-1.5" aria-live="polite">
@@ -148,7 +165,7 @@ export function Prepare({ browser, name, roomName, onReady, onBack }: Props) {
         </Button>
         <Button
           onClick={begin}
-          disabled={phase !== 'ready' || !prepared}
+          disabled={phase !== 'ready' || !prepared || !roomName.trim()}
           aria-busy={phase === 'starting'}
         >
           {phase === 'starting' ? (

@@ -374,7 +374,11 @@ export class RemoteMediaSync {
     // A tab that has never applied a frame has no position of its own. Its
     // first frame seeds the player, so it seeks rather than nudges.
     this.primed = false;
-    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, last: null };
+    // A room hold pauses the film until the source that stuttered is ready.
+    // Without this flag a routine host tick would start it again underneath
+    // the hold.
+    this.held = false;
+    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, holds: 0, last: null };
   }
 
   video() {
@@ -403,6 +407,23 @@ export class RemoteMediaSync {
     const yt = isYouTubeHost(this.pageHostname());
     const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
+    // A hold is not a playhead correction. It pauses this tab and keeps it
+    // paused until the room sends the release that carries the source's
+    // position. A normal tick during that window must not resume the film.
+    if (frame.hold === true) {
+      if (!video.paused) video.pause();
+      this.held = true;
+      this.stats.holds += 1;
+      this.stats.last = 'hold';
+      return { ok: true, action: 'hold' };
+    }
+    if (this.held && frame.hold !== false) {
+      if (!video.paused) video.pause();
+      this.stats.skips += 1;
+      this.stats.last = 'held';
+      return { ok: true, skipped: 'held' };
+    }
+    if (frame.hold === false) this.held = false;
     // The host sits in an ad, so its frame names the ad clock and not the film.
     // Applying it would drag this tab off the film and back again on every
     // tick. The ad lasts seconds, so the tab waits it out and the room resumes.

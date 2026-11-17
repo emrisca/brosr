@@ -65,6 +65,19 @@ export function isPrivateHost(host) {
   return clean.endsWith('.ts.net') || clean.endsWith('.local');
 }
 
+// A Tailscale node uses 100.64/10, the fd7a:115c:a1e0 block, or a ts.net
+// name. Room discovery stays inside those addresses and never opens to an
+// ordinary LAN by accident.
+export function isTailnetHost(host) {
+  const clean = stripBrackets(host);
+  const octets = ipv4(clean);
+  if (octets) {
+    const [a, b] = octets;
+    return a === 100 && b >= 64 && b <= 127;
+  }
+  return clean.startsWith('fd7a:115c:a1e0:') || clean.endsWith('.ts.net');
+}
+
 // The one rule the whole feature rests on. Everything else checks this.
 export function isAllowedHost(host) {
   return isLoopbackHost(host) || isPrivateHost(host);

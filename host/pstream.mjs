@@ -52,6 +52,44 @@ function readVersion(dir) {
   }
 }
 
+// The store build asks the person to press "Grant Permission" on a page of its
+// own before a single site loads, because it only declares host access as
+// optional. Nobody is at the keyboard when a room starts, so the unpacked copy
+// requires that access in its manifest instead. Chromium grants required host
+// permissions at load for an unpacked folder, which leaves the extension's page
+// reading contains() true and doing nothing. A copy that already requires the
+// access is left alone, so this can run on every start.
+const HOST_ACCESS = '<all_urls>';
+
+export function grantHostAccess(dir) {
+  const file = path.join(dir, 'manifest.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return { changed: false };
+  }
+  const required = Array.isArray(manifest.host_permissions) ? manifest.host_permissions : [];
+  const optional = Array.isArray(manifest.optional_host_permissions)
+    ? manifest.optional_host_permissions
+    : [];
+  if (required.includes(HOST_ACCESS) && !optional.includes(HOST_ACCESS)) {
+    return { changed: false };
+  }
+  if (!required.includes(HOST_ACCESS) && !optional.includes(HOST_ACCESS)) {
+    return { changed: false };
+  }
+  const next = {
+    ...manifest,
+    host_permissions: required.includes(HOST_ACCESS) ? required : [...required, HOST_ACCESS],
+  };
+  const rest = optional.filter((entry) => entry !== HOST_ACCESS);
+  if (rest.length) next.optional_host_permissions = rest;
+  else delete next.optional_host_permissions;
+  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  return { changed: true };
+}
+
 // A CRX holds a small header before the ZIP payload. CRX3 stores one header
 // length, and CRX2 stores a public key and a signature length.
 export function crxPayload(buf) {
@@ -105,6 +143,7 @@ export function unpackCrx(crxPath, dir) {
   }
   const ready = pstreamCopy(dir);
   if (!ready) throw new Error('the unpacked folder has no manifest');
+  grantHostAccess(ready);
   return { dir: ready, version: readVersion(ready) };
 }
 
@@ -113,6 +152,7 @@ export function unpackCrx(crxPath, dir) {
 export async function stagePStream(dir, options = {}) {
   const hit = pstreamCopy(dir);
   if (hit && !options.refresh) {
+    grantHostAccess(hit);
     return { dir: hit, staged: false, version: readVersion(hit) };
   }
   fs.mkdirSync(dir, { recursive: true });
