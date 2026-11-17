@@ -90,7 +90,10 @@ export function validate(message) {
       }
       break;
     case 'cursorpolicy':
-      if (!Array.isArray(message.sites)) fail('cursorpolicy needs a sites list');
+      // null means "every site is allowed". An empty list means "no sites".
+      if (message.sites !== null && !Array.isArray(message.sites)) {
+        fail('cursorpolicy needs a sites list or null');
+      }
       break;
     case 'control':
       if (typeof message.peerId !== 'string') fail('control needs a peerId');

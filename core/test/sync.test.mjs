@@ -1245,6 +1245,46 @@ test('the host site list gates cursors and travels to a late guest', () => {
   assert.equal(client.publish().cursors, 0);
 });
 
+test('a host that never edited the list shares a rule that allows every site', () => {
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 0,
+    send: (frame) => sent.push(decode(frame)),
+  });
+  // No list is every site. An empty list is the host switching all of them off,
+  // so the two rules must stay distinct on the wire.
+  assert.equal(host.publish().cursorSites, null);
+  assert.equal(host.sendPolicy(), true);
+  assert.equal(sent.filter((frame) => frame.type === 'cursorpolicy').at(-1).sites, null);
+
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    hostId: 'host',
+    now: () => 0,
+    document: cursorDocument(),
+    pageUrl: () => 'https://www.youtube.com/watch?v=abc',
+  });
+  peer.receive(encode({ type: 'cursorpolicy', sites: null }), 0);
+  assert.equal(peer.publish().cursorSites, null);
+  peer.receive(
+    encode({
+      type: 'presence',
+      peerId: 'p2',
+      name: 'P',
+      colour: '#fff',
+      point: { x: 0.2, y: 0.2 },
+      url: 'https://www.youtube.com/watch?v=abc',
+      roomTime: 0,
+    }),
+    0
+  );
+  assert.equal(peer.publish().cursors, 1, 'a pointer on any site is drawn');
+});
+
 test('the host takes a site off the list, and a later visit does not bring it back', () => {
   const sent = [];
   const host = createRoomClient({

@@ -23,7 +23,6 @@ import {
   cleanCursorSites,
   cleanRoomName,
   cursorSiteOf,
-  defaultCursorSites,
   isColour,
   randomColour,
   siteOf,
@@ -70,6 +69,11 @@ function applyOwnCursor(cursor) {
 // opened with room params, or a fixture whose name starts with one of the room
 // words. This stays in step with isRoomPage() in bridge/background.js.
 const ROOM_FIXTURE = /^https?:\/\/[^/]+\/(room|media|board|form|ad|sync|layout)[^/]*\.html/;
+// Canvas, Notes and Chess hold their own room socket for their own content.
+// The core must not open a second room client there under the same peer id,
+// because two clients fight over presence and navigation. It still relays the
+// pointer and the film from such a page, which is what the room tab draws from.
+const ownsRoom = () => Boolean(document.querySelector('meta[name="brosr-own-room"]'));
 function isRoomPage(href) {
   try {
     const url = new URL(href);
@@ -163,18 +167,21 @@ async function startPageMedia() {
   // Cursors reach every tab of this browser, and each tab draws only the
   // peers on its own site. The room tab owns the socket and forwards each
   // frame here.
+  // A page that owns its room draws its own pointers, so a second layer here
+  // would put a duplicate dot beside every one of them.
   const cursorLayer =
-    window.top === window ? new CursorOverlay({ document }).attach() : null;
+    window.top === window && !ownsRoom() ? new CursorOverlay({ document }).attach() : null;
   const cursorPoints = new Map();
   // The host names the sites that show pointers, and every tab keeps its own
-  // copy. Canvas and Notes are the only sites on until the host says more.
-  let allowedSites = defaultCursorSites(location.href);
+  // copy. A host that never edited the list allows every site, which null says.
+  let allowedSites = null;
   let showNames = readSetting('brosr-cursor-names') !== '0';
   // The harness reads this the same way it reads the cursor count.
   document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
   const siteAllowed = (href) => {
     const key = cursorSiteOf(href);
-    return Boolean(key) && allowedSites.includes(key);
+    if (!key) return false;
+    return allowedSites === null || allowedSites.includes(key);
   };
   const pixelPoint = (point) => ({
     x: Math.max(0, Math.min(1, Number(point && point.x) || 0)) * window.innerWidth,
@@ -381,6 +388,10 @@ export async function start() {
   // nothing else.
   if (window.top !== window) return startPageMedia();
 
+  // Canvas, Notes and Chess hold their own room socket. The core relays their
+  // pointer and film to the room tab and starts no client of its own there.
+  if (ownsRoom()) return startPageMedia();
+
   const params = new URLSearchParams(location.search);
   // The invite key rides in the fragment, so the search params alone would
   // drop it on the first navigation and turn a sealed room back into text.
@@ -459,7 +470,7 @@ export async function start() {
       return null;
     }
   })());
-  let cursorSites = savedSites || defaultCursorSites(location.href);
+  let cursorSites = savedSites;
   // Sites the host removed from the panel list. The list belongs to the host,
   // so only the room tab of the host browser ever writes this.
   const savedForgot = cleanCursorSites((() => {
@@ -510,6 +521,9 @@ export async function start() {
   // A forwarded pointer runs at most twenty times a second, which is enough
   // for a cursor and cheap for every tab in this browser.
   let lastPresenceSent = 0;
+  // When the tab that shows the film last reported. A room tab that holds the
+  // film itself reads its own player only while that report is stale.
+  let lastFilmReportAt = 0;
 
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
@@ -612,7 +626,7 @@ export async function start() {
     // A learned list is written here and sent to the rest of this browser, so
     // every tab follows the host without holding a socket.
     onPolicy: (sites) => {
-      const list = Array.isArray(sites) ? sites : [];
+      const list = Array.isArray(sites) ? sites : null;
       cursorSites = list;
       writeSetting('brosr-cursor-sites', JSON.stringify(list));
       if (api && api.runtime && api.runtime.sendMessage) {
@@ -628,6 +642,15 @@ export async function start() {
     pageUrl: () => cursorKey(location.href),
     navigate,
     scrollTo,
+    // A tile names a new tab. This page has no user gesture to open one with,
+    // so its browser opens the page beside the room tab instead.
+    openTab: (href) => {
+      if (!api || !api.runtime || !api.runtime.sendMessage) return false;
+      api.runtime
+        .sendMessage({ type: 'brosr:tab-open-local', url: href, key: null })
+        .catch(() => {});
+      return true;
+    },
     mediaAdapter,
     onApp: (message) => {
       // A viewer report is panel data, not page data. It stays in this tab.
@@ -789,6 +812,17 @@ export async function start() {
       }
     }
   }, 1000);
+
+  // A host that plays the film in the room tab has no other tab to report it,
+  // so the room tab reads its own player. A fresh report from a film tab wins,
+  // because two senders under one id would pull the anchor against each other.
+  setInterval(() => {
+    if (role !== 'host') return;
+    if (Date.now() - lastFilmReportAt < 2000) return;
+    const state = mediaStateFromDocument(document, pageHref(), location.hostname);
+    if (!state || !state.key) return;
+    if (relayedMedia.set(state)) client.sendHostMedia(state);
+  }, 500);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees
   // where the room is, and the panel offers to open it.
@@ -1216,7 +1250,7 @@ export async function start() {
         const published = client.publish();
         const base = Array.isArray(published.cursorSites)
           ? published.cursorSites
-          : [...(published.cursorSeen || []), ...defaultCursorSites(location.href)];
+          : published.cursorSeen || [];
         const next = new Set(base);
         if (message.on) next.add(key);
         else next.delete(key);
@@ -1272,6 +1306,7 @@ export async function start() {
         if (state && typeof state === 'object' && state.key) localMedia = state;
         if (client.stats.role === 'host') {
           const stored = relayedMedia.set(state);
+          lastFilmReportAt = Date.now();
           if (stored) client.sendHostMedia(state);
           return reply({ ok: stored });
         }

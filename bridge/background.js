@@ -484,8 +484,14 @@ async function handle(message, sender) {
     const id = await roomTab();
     const from = sender && sender.tab ? sender.tab.id : null;
     if (!validId(id) || id !== from) return { ok: false, reason: 'not-room-tab' };
-    if (!Array.isArray(message.sites)) return { ok: false, reason: 'sites' };
-    const sites = message.sites.filter((site) => typeof site === 'string');
+    // Null is the host's allow-every-site rule. An empty array is the host
+    // switching every site off, so the two must not collapse into one.
+    if (message.sites !== null && !Array.isArray(message.sites)) {
+      return { ok: false, reason: 'sites' };
+    }
+    const sites = Array.isArray(message.sites)
+      ? message.sites.filter((site) => typeof site === 'string')
+      : null;
     await savePrefs({ cursorSites: sites });
     await broadcastCursor(
       {

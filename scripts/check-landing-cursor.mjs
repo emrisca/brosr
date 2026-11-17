@@ -387,9 +387,35 @@ async function checkBridge(browser, devPort, relayPort, extension) {
     );
     await sleep(1000);
 
+    // The room tab speaks for this person with presence, because that is the
+    // frame every peer draws from. The old app/cursor frame belonged to the
+    // landing page's own socket, which the room tab keeps shut. The URL alone
+    // arrives first through the active-page report, so the frame has to carry
+    // the pointer the canvas tab forwarded to count as the shared tab's cursor.
+    const moves = [
+      [300, 240],
+      [420, 300],
+      [560, 360],
+    ];
+    const sharedView = await shared.eval(`({ width: innerWidth, height: innerHeight })`);
+    const near = (a, b) => Math.abs(a - b) < 0.004;
+    // A background room tab has its presence timer throttled, so the frame may
+    // carry any of the points this tab moved to and not only the newest one.
+    // Each of them proves the same thing: the point came from this canvas tab.
+    const isMovedPoint = (point) =>
+      Boolean(point) &&
+      moves.some(
+        ([x, y]) =>
+          near(point.x, x / sharedView.width) && near(point.y, y / sharedView.height)
+      );
     const fromCanvas = () =>
       probe.frames.find(
-        (frame) => frame.type === 'app' && frame.name === 'cursor' && frame.data && frame.data.page === canvas
+        (frame) =>
+          frame.type === 'presence' &&
+          frame.peerId === 'host' &&
+          typeof frame.url === 'string' &&
+          frame.url.startsWith(canvas) &&
+          isMovedPoint(frame.point)
       );
     for (let round = 0; round < 3 && !fromCanvas(); round += 1) {
       for (const [x, y] of [
@@ -403,48 +429,51 @@ async function checkBridge(browser, devPort, relayPort, extension) {
       await sleep(500);
     }
     const frame = fromCanvas();
-    assert.ok(frame, 'the shared tab sent no cursor frame through the room tab');
+    if (!frame) {
+      const sharedState = await shared.eval(`({
+        meta: !!document.querySelector('meta[name="brosr-own-room"]'),
+        sites: document.documentElement.dataset.brosrCursorSites || null,
+        error: document.documentElement.dataset.brosrError || null,
+        ready: document.readyState,
+        width: innerWidth,
+        height: innerHeight,
+      })`);
+      const seen = probe.frames
+        .filter((item) => item.type === 'presence' && item.peerId === 'host')
+        .slice(-6)
+        .map((item) => ({ url: item.url, point: item.point }));
+      throw new Error(
+        'the shared tab sent no presence frame through the room tab: ' +
+          JSON.stringify({ sharedState, seen })
+      );
+    }
     // The room tab adds the name, because the shared tab has none. A frame that
     // carries no name would draw an unnamed dot for everyone in the room.
     assert.equal(
-      frame.data.name,
+      frame.name,
       'Host',
-      `the room tab sent ${JSON.stringify(frame.data.name)} as the sender name`
+      `the room tab sent ${JSON.stringify(frame.name)} as the sender name`
+    );
+    assert.ok(
+      frame.point &&
+        frame.point.x > 0 &&
+        frame.point.x <= 1 &&
+        frame.point.y > 0 &&
+        frame.point.y <= 1,
+      `the frame carried ${JSON.stringify(frame.point)} as its point`
     );
     console.log(
-      `  shared tab sent ${Math.round(frame.data.x * 1000) / 10}% / ${Math.round(frame.data.y * 1000) / 10}% as ${frame.data.name} through the room tab`
+      `  shared tab sent ${Math.round(frame.point.x * 1000) / 10}% / ${Math.round(frame.point.y * 1000) / 10}% as ${frame.name} through the room tab`
     );
 
-    probe.socket.send(
-      JSON.stringify({
-        v: 1,
-        type: 'app',
-        peerId: 'probe-1',
-        name: 'cursor',
-        data: { page: canvas, x: 0.25, y: 0.3, name: 'Probe' },
-      })
+    // The canvas page holds its own room and draws its own pointers. The core
+    // must not add a second layer beside them, or every peer dot shows twice.
+    assert.equal(
+      await shared.eval(`!!document.querySelector('[data-brosr-overlay]')`),
+      false,
+      'the canvas page grew a second cursor layer beside its own'
     );
-    const drawn = await waitFor(
-      () =>
-        shared.eval(
-          `(() => {
-            const box = document.querySelector('#brosr-cursors > div');
-            if (!box) return null;
-            return {
-              count: document.querySelectorAll('#brosr-cursors > div').length,
-              name: box.lastElementChild ? box.lastElementChild.textContent : '',
-              left: box.style.left,
-              top: box.style.top,
-            };
-          })()`
-        ),
-      'dot on the shared tab'
-    );
-    assert.equal(drawn.count, 1, 'the shared tab drew more than one dot');
-    assert.equal(drawn.name, 'Probe');
-    assert.equal(drawn.left, '25%');
-    assert.equal(drawn.top, '30%');
-    console.log('  a probe frame drew one named dot on the shared tab at 25% / 30%');
+    console.log('  the canvas page keeps one pointer layer, its own');
 
     probe.socket.send(
       JSON.stringify({

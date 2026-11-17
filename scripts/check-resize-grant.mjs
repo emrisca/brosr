@@ -147,8 +147,7 @@ async function launch({ browser, port, extension }) {
   return { chrome, profile, cdp, stop };
 }
 
-async function openTab(cdp, tabs, url, ready) {
-  const target = await (await fetch(`${cdp}/json/new?about:blank`, { method: 'PUT' })).json();
+async function attachTab(tabs, target) {
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     ws.addEventListener('open', resolve, { once: true });
@@ -158,6 +157,12 @@ async function openTab(cdp, tabs, url, ready) {
   tabs.push(tab);
   await tab.send('Page.enable');
   await tab.send('Runtime.enable');
+  return tab;
+}
+
+async function openTab(cdp, tabs, url, ready) {
+  const target = await (await fetch(`${cdp}/json/new?about:blank`, { method: 'PUT' })).json();
+  const tab = await attachTab(tabs, target);
   await tab.send('Page.navigate', { url });
   await waitFor(() => ready(tab), url);
   return tab;
@@ -320,7 +325,7 @@ async function main() {
     // link, so this also proves the receiver repeats that default.
     await peerTab.send('Page.bringToFront');
     const tile = await peerTab.eval(`(() => {
-      const box = document.querySelector('a.tile-live');
+      const box = document.querySelector('a.tile-canvas');
       if (!box) return null;
       const rect = box.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -341,24 +346,36 @@ async function main() {
       clickCount: 1,
     });
 
-    const landed = await waitFor(
-      async () => {
-        const seen = await view(hostTab);
-        return seen.path === '/canvas/' ? seen : null;
-      },
-      'the host opened the Canvas page',
-      12000
+    // The tile names a new tab, so the host opens the app beside its room tab.
+    // The room tab keeps the socket, which is what lets both people draw and
+    // still see each other move without a reload.
+    const landed = await waitFor(async () => {
+      const list = await (await fetch(`${hostBrowser.cdp}/json/list`)).json();
+      return (
+        list.find(
+          (item) => item.type === 'page' && String(item.url).startsWith(`${base}/canvas/`)
+        ) || null
+      );
+    }, 'the host opened the Canvas page', 12000);
+    const canvasTab = await attachTab(tabs, landed);
+    await waitFor(
+      () =>
+        canvasTab.eval(
+          `document.readyState === 'complete' && !!document.getElementById('sheet')`
+        ),
+      'the host canvas page'
     );
-    // The new page starts the core again, so its own status arrives a moment
-    // after the navigation.
+    const landedView = await view(canvasTab);
     const hostState = await waitFor(async () => {
       const seen = await state(hostTab);
       return seen && seen.role === 'host' ? seen : null;
-    }, 'the host joined the room on the Canvas page');
-    assert.equal(hostState.role, 'host', 'the host lost the room on the Canvas page');
-    const shotCanvas = await shot(hostTab, 'host-canvas.png');
+    }, 'the host still holds the room');
+    assert.equal(hostState.role, 'host', 'the host lost the room when the tile opened');
+    const shotCanvas = await shot(canvasTab, 'host-canvas.png');
 
-    console.log(`  the peer tile click opened ${landed.path} on the host, still ${hostState.role}`);
+    console.log(
+      `  the peer tile click opened ${landedView.path} beside the room tab, still ${hostState.role}`
+    );
     console.log(`  screenshots: ${shotBefore}`);
     console.log(`               ${shotAfter}`);
     console.log(`               ${shotCanvas}`);

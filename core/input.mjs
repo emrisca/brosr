@@ -218,16 +218,25 @@ function dispatch(root, element, event) {
 // A real click follows a link. A dispatched click does not, because a browser
 // never runs an untrusted event's default action. A tile that opens a page is
 // a link, so the room repeats the one default it needs after the page has seen
-// the click.
-function activateLink(target, root, record = {}) {
+// the click. A tile names a new tab. Replaying that click cannot open one from
+// the page, because a page without a gesture is refused, so the receiver asks
+// its browser through the hook the entry passes in.
+function activateLink(target, root, record = {}, openTab = null) {
   if (record.button) return false;
   const link =
     target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
   if (!link) return false;
   if (link.hasAttribute && link.hasAttribute('download')) return false;
-  if (link.target && link.target !== '_self') return false;
   const href = String(link.href || '');
   if (!href || /^\s*javascript:/i.test(href)) return false;
+  const targetName = String(link.target || '').toLowerCase();
+  if (targetName && targetName !== '_self') {
+    // A named frame or window has no meaning on this page, so only a new tab
+    // is repeated. The room tab itself must keep its socket, which is why the
+    // page is not assigned here.
+    if (targetName !== '_blank' || !openTab) return false;
+    return openTab(href) !== false;
+  }
   const doc = root && root.location ? root : link.ownerDocument;
   const location = doc && doc.location;
   if (!location || typeof location.assign !== 'function') return false;
@@ -259,7 +268,14 @@ function setFieldValue(element, value) {
 // guards before anything reaches the page.
 export function replayInput(
   records,
-  { root, allowed = () => true, onDrop = () => {}, layoutMatches = true } = {}
+  {
+    root,
+    allowed = () => true,
+    onDrop = () => {},
+    layoutMatches = true,
+    // A link that asks for a new tab. The receiver's own browser opens it.
+    openTab = null,
+  } = {}
 ) {
   const view = root && root.defaultView ? root.defaultView : globalThis;
   const result = { applied: 0, dropped: 0, reasons: {} };
@@ -315,7 +331,7 @@ export function replayInput(
       }
       // The page saw the click first, so a handler that cancels it keeps its
       // say. Only an unhandled click on a link follows the link.
-      if (record.kind === 'click' && !canceled) activateLink(target, root, record);
+      if (record.kind === 'click' && !canceled) activateLink(target, root, record, openTab);
       result.applied += 1;
       continue;
     }

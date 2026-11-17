@@ -84,6 +84,9 @@ export function createRoomClient({
   viewport = null,
   navigate = null,
   scrollTo = null,
+  // A link the peer clicked that asks for a new tab. The browser opens it,
+  // because a replayed click has no gesture to open one from the page.
+  openTab = null,
   // A page-level message from another peer. The room does not interpret it.
   onApp = null,
   // A cursor from another peer. The room tab hands each one to its browser,
@@ -349,7 +352,9 @@ export function createRoomClient({
     sendMessage({
       type: 'cursorpolicy',
       peerId,
-      sites: allowedSites === null ? [] : [...allowedSites],
+      // No list means every site, and the peer has to hear that rule as it
+      // is. An empty array is the host switching every site off instead.
+      sites: allowedSites === null ? null : [...allowedSites],
       roomTime: roomTimeOf(),
     });
     return true;
@@ -560,6 +565,7 @@ export function createRoomClient({
         // elsewhere here. Drop the record and say so.
         layoutMatches: !stats.layoutMismatch,
         allowed,
+        openTab,
         onDrop: (reason) => {
           stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
         },
@@ -1117,8 +1123,10 @@ export function createRoomClient({
         // The host is the authority. A frame that echoes its own list back is
         // not a change.
         if (isHost()) return { ok: true, ignored: 'host' };
-        const next = cleanCursorSites(message.sites);
-        if (next === null) return { ok: false, reason: 'bad-sites' };
+        if (message.sites !== null && !Array.isArray(message.sites)) {
+          return { ok: false, reason: 'bad-sites' };
+        }
+        const next = message.sites === null ? null : cleanCursorSites(message.sites) || [];
         allowedSites = next;
         dropDisallowed();
         if (onPolicy) {
