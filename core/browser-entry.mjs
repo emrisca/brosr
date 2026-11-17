@@ -5,6 +5,7 @@
 
 import { createRoomClient, PEER_IDLE_MS, PRESENCE_TICK_MS } from './sync.mjs';
 import { TAB_APP, tabOpen } from './tabs.mjs';
+import { PANEL_APP } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
   RELAY_TICK_MS,
@@ -295,8 +296,24 @@ async function startPageMedia() {
       for (const [id, entry] of cursorPoints) placeCursor({ ...entry, id });
       return undefined;
     }
+    // The panel asks the tab that holds the film what it has done with it. The
+    // room status cannot carry these counts, because the room tab is a separate
+    // page, so the panel reads them here through the background page.
+    if (message.type === 'brosr:relay-reading') {
+      const video = remote.video();
+      // A bare object is not an answer in Gecko, so this page returns a
+      // promise like the room tab does through sendResponse.
+      return Promise.resolve({
+        ok: true,
+        relay: { ...relay },
+        position: video ? Number(video.currentTime || 0) : null,
+        duration: video ? Number(video.duration || 0) : null,
+        paused: video ? Boolean(video.paused) : null,
+      });
+    }
     if (message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
+    const previous = lastApplied;
     const result = remote.handle(message);
     relay.last = result;
     publishRelay();
@@ -307,7 +324,15 @@ async function startPageMedia() {
     // the other case, because the seek would report itself as a person's act
     // and pull the host's film back to this tab's own idea of the position.
     const corrected = Boolean(result) && (result.action === 'seek' || result.action === 'seek-retry');
-    if (result && result.ok && !result.skipped && (message.action || corrected)) {
+    // A routine host tick keeps the local player in the state it already had,
+    // so it must not open the window. A host pause or play also travels labelled
+    // tick, so compare the applied playing flag instead of the label. The change
+    // is an act, and the player's own event is the echo to keep home.
+    const playingChanged =
+      !previous ||
+      previous.key !== message.key ||
+      previous.playing !== Boolean(message.playing);
+    if (result && result.ok && !result.skipped && (playingChanged || corrected)) {
       remoteAppliedAt = Date.now();
     }
     if (!result || !result.ok || result.skipped) {
@@ -425,6 +450,9 @@ export async function start() {
         trustToken: hashParams.get('t') || null,
         trustPort: hashParams.get('tp') || params.get('tp') || null,
         openPanel: params.get('panel') === '1',
+        // The app panel token is a random string, not the old '1' marker. A
+        // guest invite never carries it.
+        panelToken: params.get('panel') && params.get('panel') !== '1' ? params.get('panel') : null,
         selftest: params.get('selftest') === '1',
       }
     : stored;
@@ -439,6 +467,7 @@ export async function start() {
   // and nothing else, so the mouse never follows anyone to another tab.
   if (!fresh && !stored && !isRoomPage(location.href)) return startPageMedia();
   const role = config.role === 'host' ? 'host' : 'peer';
+  const panelToken = config.panelToken || null;
   const room = config.room || 'spike';
   const peerId = config.peerId;
   const hostId = config.hostId || 'host';
@@ -528,7 +557,7 @@ export async function start() {
   // The room parameters describe this tab, not the page. A peer that follows
   // the host's URL must not inherit the host's role, so the announced URL is
   // the page alone.
-  const roomParams = ['role', 'peer', 'host', 'room', 'rname', 'name', 'bias', 'relay'];
+  const roomParams = ['role', 'peer', 'host', 'room', 'rname', 'name', 'bias', 'relay', 'panel'];
   const cleanUrl = (href) => {
     try {
       const url = new URL(href);
@@ -653,6 +682,14 @@ export async function start() {
     },
     mediaAdapter,
     onApp: (message) => {
+      // The host app's control panel uses a private app channel. A guest has no
+      // token, so the same message from a guest is ignored here.
+      if (message.name === PANEL_APP) {
+        const data = message.data && typeof message.data === 'object' ? message.data : {};
+        if (!panelToken || data.token !== panelToken) return;
+        handlePanel(data).catch(() => {});
+        return;
+      }
       // A viewer report is panel data, not page data. It stays in this tab.
       if (message.name === VIEWER_APP) {
         const data = message.data && typeof message.data === 'object' ? message.data : {};
@@ -769,6 +806,127 @@ export async function start() {
     send: (frame) => sendText(frame),
   });
 
+  // The app control panel asks for one snapshot and sends one change at a
+  // time. The room tab already owns the roster, grants and media view, so this
+  // handler turns those into JSON instead of adding a second state store.
+  async function panelSnapshot() {
+    const live = status();
+    let browser = null;
+    if (api && api.runtime && api.runtime.sendMessage) {
+      try {
+        // The tab list is useful but not required to control the room. A
+        // background page that is still starting must not hold the snapshot.
+        browser = await Promise.race([
+          api.runtime.sendMessage({ type: 'brosr:tabs-list' }),
+          new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+        ]);
+      } catch {
+        // The background page may still be starting.
+      }
+    }
+    const self = {
+      id: peerId,
+      name,
+      self: true,
+      granted: true,
+      colour: live.colour || null,
+    };
+    const peers = [
+      self,
+      ...(Array.isArray(live.peerList) ? live.peerList : []).filter(
+        (peer) => peer && peer.id !== peerId && !peer.self
+      ),
+    ];
+    return {
+      roomName: live.roomName || roomName,
+      peers,
+      media: live.media || null,
+      sync: !browser || browser.sync !== false,
+      notices: !browser || browser.notices !== false,
+      auto: Boolean(browser && browser.auto),
+      tabs: browser && Array.isArray(browser.tabs) ? browser.tabs : [],
+      cursorSites: Array.isArray(live.cursorSites) ? live.cursorSites : null,
+      cursorSeen: Array.isArray(live.cursorSeen) ? live.cursorSeen : [],
+      cursorForgot: Array.isArray(live.cursorForgot) ? live.cursorForgot : [],
+      trust: Boolean(trust),
+      trustTarget: trustTarget || null,
+    };
+  }
+
+  async function handlePanel(data) {
+    const requestId = String(data.requestId || '');
+    const answer = (state, extra = {}) =>
+      client.sendApp(PANEL_APP, { requestId, ok: true, ...extra, state });
+    const refuse = (error) =>
+      client.sendApp(PANEL_APP, { requestId, ok: false, error: String(error && error.message || error) });
+    const runtime = (message) => {
+      if (!api || !api.runtime || !api.runtime.sendMessage) {
+        throw new Error('This browser has no room bridge.');
+      }
+      return api.runtime.sendMessage(message);
+    };
+
+    try {
+      if (data.action === 'grant') {
+        if (role !== 'host') throw new Error('Only the host can change control.');
+        if (!client.setGrant(String(data.peerId || ''), Boolean(data.allowed))) {
+          throw new Error('That person is no longer in the room.');
+        }
+      } else if (data.action === 'cursor-site' || data.action === 'cursor-forget') {
+        if (role !== 'host') throw new Error('Only the host can change cursor sites.');
+        const site = cursorSiteOf(String(data.site || ''));
+        if (!site) throw new Error('That site is not valid.');
+        if (data.action === 'cursor-forget') {
+          cursorForgot = client.forgetSite(site, data.on !== false) || cursorForgot;
+          writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
+        } else {
+          const published = client.publish();
+          const base = Array.isArray(published.cursorSites)
+            ? published.cursorSites
+            : published.cursorSeen || [];
+          const next = new Set(base);
+          if (data.on) next.add(site);
+          else next.delete(site);
+          cursorSites = client.setCursorSites([...next]) || [];
+          writeSetting('brosr-cursor-sites', JSON.stringify(cursorSites));
+          if (data.on) {
+            cursorForgot = client.forgetSite(site, false) || cursorForgot;
+            writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
+          }
+        }
+      } else if (data.action === 'room-name') {
+        if (role !== 'host') throw new Error('Only the host can rename the room.');
+        client.setRoomName(String(data.value || ''));
+      } else if (data.action === 'set') {
+        const key = String(data.key || '');
+        const on = Boolean(data.on);
+        if (key === 'sync') await runtime({ type: 'brosr:sync-toggle', on });
+        else if (key === 'notices') await runtime({ type: 'brosr:notice-toggle', on });
+        else if (key === 'auto') await runtime({ type: 'brosr:tabs-auto', on });
+        else throw new Error('Unknown room setting.');
+      } else if (data.action === 'tab') {
+        const tabId = Number(data.tabId);
+        if (!Number.isInteger(tabId) || tabId < 0) throw new Error('Choose a tab first.');
+        const reply = await runtime({
+          type: 'brosr:tab-share',
+          tabId,
+          shared: Boolean(data.shared),
+        });
+        if (!reply || !reply.ok) throw new Error(reply && reply.error ? reply.error : 'That tab is not available.');
+      } else if (data.action === 'trust') {
+        if (!trust) throw new Error('This room has no trusted input channel.');
+        const url = String(data.url || '').trim();
+        trustTarget = /^https?:\/\//i.test(url) ? url : null;
+      } else if (data.action !== 'status') {
+        throw new Error('Unknown room command.');
+      }
+      publish();
+      answer(await panelSnapshot());
+    } catch (error) {
+      refuse(error);
+    }
+  }
+
   // A page can name its own ad signal. The probe is read on every tick, so a
   // page script that loads after this entry still works. Without a probe the
   // HTML adapter never claims an ad.
@@ -825,15 +983,17 @@ export async function start() {
     if (relayedMedia.set(state)) client.sendHostMedia(state);
   }, 500);
 
-  // The host sends an anchor only when its state changes. A guest that joins a
-  // paused room therefore misses it, and its film tab applies nothing and never
-  // starts the film. The host repeats the anchor for each new peer, and keeps a
-  // slow refresh while the room has one, because a guest usually opens the room
-  // before it opens the film and a greet that arrives first finds no film tab.
+  // A greeting runs for every new peer, whatever this browser's role. Two
+  // things are lost when a peer joins late. The host sends its anchor only when
+  // its state changes, so a guest that joins a paused room applies nothing. A
+  // tab shared before the peer arrived has no frame in the room, because the
+  // relay keeps no history. Every browser therefore replays the tabs it shared,
+  // and the host repeats the anchor, with a slow refresh while the room has a
+  // peer, because a guest usually opens the room before it opens the film and a
+  // greet that arrives first finds no film tab.
   const greeted = new Set();
   let greetedAt = 0;
   setInterval(() => {
-    if (role !== 'host') return;
     const live = new Set();
     for (const peer of client.roomState.peers.values()) {
       if (!peer || peer.id === peerId) continue;
@@ -847,6 +1007,16 @@ export async function start() {
       greeted.add(id);
       fresh = true;
     }
+    // A tab shared before this peer arrived has no frame in the room, because
+    // the relay keeps no history. Each browser asks for one replay of the tabs
+    // it shared, so the newcomer opens the copy it missed instead of waiting for
+    // a second share.
+    if (fresh && api && api.runtime && api.runtime.sendMessage) {
+      api.runtime.sendMessage({ type: 'brosr:tabs-replay' }).catch(() => {});
+    }
+    // Only the host holds the anchor. A peer's own frame would pull the room
+    // against it.
+    if (role !== 'host') return;
     if (!fresh && (!live.size || Date.now() - greetedAt < 2000)) return;
     // The projected position is where the film is now, so a guest that joins a
     // playing film does not start from the last report. The ad and buffering
@@ -1178,6 +1348,15 @@ export async function start() {
   setInterval(() => {
     client.presence();
   }, PRESENCE_TICK_MS);
+  // A background tab throttles that timer, and the host would then prune a
+  // peer that is still connected. Returning to the tab sends presence at once.
+  const wakePresence = () => {
+    if (document.visibilityState === 'hidden') return;
+    client.presence();
+  };
+  document.addEventListener('visibilitychange', wakePresence);
+  window.addEventListener('focus', wakePresence);
+  window.addEventListener('pageshow', wakePresence);
 
   setInterval(publish, 200);
   publish();

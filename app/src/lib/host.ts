@@ -69,6 +69,7 @@ export type Run = {
   extensions: number;
   pstream?: boolean;
   pstreamError?: string | null;
+  panelToken?: string;
   timings?: Timings;
 };
 
@@ -97,8 +98,63 @@ export const detect = () => host<DetectResult>(['detect']);
 export const prepare = (browser: string) =>
   host<Prepared>(['prepare', `--browser=${browser}`]);
 
-export const start = (browser: string, name: string, roomName = 'Room') =>
-  host<Run>(['start', `--browser=${browser}`, `--name=${name}`, `--room-name=${roomName}`]);
+export const start = (browser: string, name: string, roomName = 'Room', trusted = false) =>
+  host<Run>([
+    'start',
+    `--browser=${browser}`,
+    `--name=${name}`,
+    `--room-name=${roomName}`,
+    ...(trusted ? ['--trusted'] : []),
+  ]);
+
+// The host app's room controls. Each call is one loopback round trip to the
+// host tab, so the browser remains the owner of the room state.
+export type PanelPeer = {
+  id: string;
+  name: string;
+  self?: boolean;
+  granted?: boolean;
+  colour?: string | null;
+};
+
+export type PanelTab = {
+  id: number;
+  title: string;
+  url: string;
+  active: boolean;
+  room: boolean;
+  shared: boolean;
+};
+
+export type PanelState = {
+  roomName: string;
+  peers: PanelPeer[];
+  media: {
+    key: string;
+    position: number;
+    playing: boolean;
+    buffering?: boolean;
+    ad?: boolean;
+  } | null;
+  sync: boolean;
+  notices: boolean;
+  auto: boolean;
+  tabs: PanelTab[];
+  cursorSites: string[] | null;
+  cursorSeen: string[];
+  cursorForgot: string[];
+  trust: boolean;
+  trustTarget: string | null;
+};
+
+export const roomPanel = (
+  action: string,
+  values: Record<string, string | number | boolean> = {}
+) => {
+  const args = ['panel', `--action=${action}`];
+  for (const [key, value] of Object.entries(values)) args.push(`--${key}=${String(value)}`);
+  return host<PanelState>(args);
+};
 
 export const status = () => host<Status | { ok: true; running: false }>(['status']);
 
@@ -178,14 +234,23 @@ export const sendInvite = (address: string) =>
   host<FriendsState>(['invite-send', `--to=${address}`]);
 
 // A pasted invite opens the invited room in the guest profile. The link
-// carries the relay and the room key, so nothing here starts a room.
-export const join = (url: string, browser?: string) =>
-  host<Joined>(['join', `--url=${url}`, ...(browser ? [`--browser=${browser}`] : [])]);
+// carries the relay and the room key, so nothing here starts a room. The local
+// name goes along because the invite itself only knows a generic guest name.
+export const join = (url: string, browser?: string, name?: string) =>
+  host<Joined>([
+    'join',
+    `--url=${url}`,
+    ...(browser ? [`--browser=${browser}`] : []),
+    ...(name?.trim() ? [`--name=${name.trim()}`] : []),
+  ]);
 
-export const answerInvite = (id: string, accept: boolean, browser?: string) =>
+export const answerInvite = (id: string, accept: boolean, browser?: string, name?: string) =>
   host<AnswerResult>([
     'invite-answer',
     `--id=${id}`,
     accept ? '--accept' : '--decline',
     ...(browser ? [`--browser=${browser}`] : []),
+    ...(name?.trim() ? [`--name=${name.trim()}`] : []),
   ]);
+
+export const reopen = () => host<Run | Joined>(['reopen']);

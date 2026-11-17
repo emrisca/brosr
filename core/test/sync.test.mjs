@@ -163,6 +163,75 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   assert.equal(relayed.length, 2);
 });
 
+test('a host act stays in front of a granted peer for a moment', () => {
+  let local = 1000;
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: () => true,
+  });
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+
+  host.sendHostMedia({ key: KEY, position: 12, playing: false, action: true }, local);
+  const blocked = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'tick',
+      position: 12,
+      playing: true,
+      roomTime: local,
+    }),
+    local + 100
+  );
+  assert.equal(blocked.ignored, 'host-priority');
+
+  local += 2000;
+  const allowed = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'tick',
+      position: 12,
+      playing: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.relayed, true);
+});
+
+test('a granted peer stays on the host roster when presence is quiet', () => {
+  let local = 1000;
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+  });
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+
+  local = 20000;
+  host.tick(local);
+  assert.equal(host.publish().peers, 1);
+
+  host.setGrant('brave', false);
+  local = 40000;
+  host.tick(local);
+  assert.equal(host.publish().peers, 0);
+});
+
 test('one large drift causes one seek, and the next message does not stack another', () => {
   const video = fakeVideo();
   const { client, at, frame } = makeClient(video);

@@ -48,8 +48,9 @@ node --test core/test/*.test.mjs host/test/*.test.mjs
 ## Check the landing links
 
 The Watch directory in `landing/index.html` mirrors the starred FMHY sites in Stream
-Aggregators, P-Stream Forks and Anime Streaming. The check fetches the current FMHY
-source and compares every name and URL:
+Aggregators and Anime Streaming. P-Stream forks sit in Stream Aggregators, so the
+check compares them with that group. The check fetches the current FMHY source and
+compares every name and URL:
 
 ```bash
 node scripts/check-fmhy-links.mjs

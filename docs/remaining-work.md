@@ -217,14 +217,23 @@ browser profile sits inside the share.
 1. **Finish the media retest before changing any media code.** One host, one guest, one paused
    mark. Without that reading every later change is a guess. The guest is already sitting in
    the room.
-2. **Put the media state on the panel.** Key, `applies`, drift and the last action are already
-   in the film tab's dataset. A panel line that shows them turns "it does not sync" into a
-   reading the person can send, with no BiDi session on their machine.
+2. **Put the media state on the panel.** Done on 17 November and measured in the real toolbar
+   popup, not only in a tab. The Watch card carries one line: the film, the frames this
+   browser's film tab applied, the drift on the last frame, and the gap between this tab and
+   the room. The reading comes from the film tab through the background page, so a person can
+   send it with no BiDi session on their machine. `scripts/check-panel-popup.mjs` opened a
+   window at 360x408 and read `127.0.0.1 · 0 applied · 0.00 s from the room` with the footer
+   ending at 397 and no sideways scroll. The read needed a promise from the film page: a bare
+   object is not an answer in Gecko, so the page returned `undefined` and the panel line stayed
+   empty until it did.
 3. **Cut `0.3.14` with the version stamp** once the retest is done. The stamp is the only way a
-   person can tell which build they are on, and that was the complaint that started this.
+   person can tell which build they are on, and that was the complaint that started this.Cut on 16 November from the Windows side as `1676127`, and the tree now reads `0.3.17`.
 4. **Add a loopback two-peer media check** under `scripts/` that opens a host film and a guest
    film on one machine and fails when `applies` stays 0 or drift passes 1 s. It would have
-   caught a broken apply path without Windows in the room.
+   caught a broken apply path without Windows in the room. Done on 17 November as
+   `scripts/check-media-loopback.mjs`: two browsers, a room tab and a film tab each, one clip
+   on its own relay port. A first run read 64 applies at the guest, a median drift of 0.001 s,
+   p95 0.022 s, max 0.022 s, and a pause and an 18 s seek both inside a second.
 5. **Take one measurement per claim.** The plan's numbers section asks for p95 drift, seeks per
    ten minutes and relay bytes. A retest that reports "it felt fine" does not close a done-when.
 6. **Keep the Cinecat row in the matrix and add Movy next.** Two sites, one of them a plain

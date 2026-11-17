@@ -31,6 +31,7 @@ const CORE = [
   'trust.mjs',
   'sync.mjs',
   'browser-entry.mjs',
+  'panel.mjs',
   'tabs.mjs',
   'youtube.mjs',
   'media-relay.mjs',

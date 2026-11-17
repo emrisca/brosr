@@ -6,13 +6,14 @@ import { answerInvite, type Invite } from '@/lib/host';
 type Props = {
   invite: Invite;
   browserId?: string;
+  name?: string;
   onClose: () => void;
 };
 
 // A friend's invite reaches the lobby while the app is open. The banner is the
 // short window to take it, and it closes on its own so an ignored invite does
 // not sit over the screen.
-export function InviteBanner({ invite, browserId, onClose }: Props) {
+export function InviteBanner({ invite, browserId, name, onClose }: Props) {
   const [busy, setBusy] = useState<'accept' | 'decline' | ''>('');
   const [error, setError] = useState('');
 
@@ -25,7 +26,7 @@ export function InviteBanner({ invite, browserId, onClose }: Props) {
     setBusy(accept ? 'accept' : 'decline');
     setError('');
     try {
-      await answerInvite(invite.id, accept, browserId);
+      await answerInvite(invite.id, accept, browserId, name);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

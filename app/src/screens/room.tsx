@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Check, Copy, DoorOpen } from 'lucide-react';
+import { Check, Copy, DoorOpen, RotateCw, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { address, status, stop, type Run, type Status } from '@/lib/host';
+import { address, reopen, status, stop, type Run, type Status } from '@/lib/host';
+import { RoomControls } from '@/screens/controls';
 
 type Props = {
   run: Run;
@@ -40,6 +41,8 @@ export function Room({ run, onLeave }: Props) {
   const [copied, setCopied] = useState(false);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [reopening, setReopening] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -101,6 +104,20 @@ export function Room({ run, onLeave }: Props) {
       window.setTimeout(() => setCopiedAddress(false), 1600);
     } catch {
       setError('Select the address and press Command C to copy it.');
+    }
+  }
+
+  async function openBrowser() {
+    setReopening(true);
+    setError('');
+    try {
+      await reopen();
+      const next = await status();
+      if ('relayReady' in next) setLive(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -207,12 +224,26 @@ export function Room({ run, onLeave }: Props) {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {!browserOpen ? (
+            <Button variant="secondary" onClick={openBrowser} disabled={reopening}>
+              <RotateCw />
+              {reopening ? 'Opening browser' : 'Open browser'}
+            </Button>
+          ) : null}
+          <Button variant="secondary" onClick={() => setControlsOpen(true)}>
+            <SlidersHorizontal />
+            Room controls
+          </Button>
+        </div>
         <Button variant="destructive" onClick={leave} disabled={leaving}>
           <DoorOpen />
           {leaving ? 'Closing' : 'Close room'}
         </Button>
       </div>
+
+      <RoomControls open={controlsOpen} onOpenChange={setControlsOpen} />
     </div>
   );
 }

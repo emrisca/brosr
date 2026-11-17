@@ -12,7 +12,8 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detect } from './browsers.mjs';
-import { freePort, joinRoom, prepare, readRun, start, status, stop } from './room.mjs';
+import { freePort, joinRoom, prepare, readRun, reopen as reopenRoom, start, status, stop } from './room.mjs';
+import { panelCommand } from './panel.mjs';
 import { shareSession } from './session.mjs';
 import {
   addFriend,
@@ -123,6 +124,30 @@ const COMMANDS = {
   async status() {
     const state = await status();
     return { ok: true, ...state };
+  },
+
+  // Bring back the browser for the room that is already open. The relay and the
+  // room record stay, so this is not a second room.
+  async reopen() {
+    return reopenRoom();
+  },
+
+  // The host app reads and changes the room settings through the host tab.
+  // One short panel socket keeps the app independent from the browser chrome.
+  async panel() {
+    const action = arg('action') || 'status';
+    const payload = { action };
+    const has = (name) => process.argv.some((value) => value.startsWith(`--${name}=`));
+    if (has('peer')) payload.peerId = arg('peer');
+    if (has('site')) payload.site = arg('site');
+    if (has('value')) payload.value = arg('value');
+    if (has('key')) payload.key = arg('key');
+    if (has('url')) payload.url = arg('url');
+    if (has('allow')) payload.allowed = arg('allow') !== 'false';
+    if (has('on')) payload.on = arg('on') !== 'false';
+    if (has('shared')) payload.shared = arg('shared') !== 'false';
+    if (has('tab')) payload.tabId = Number(arg('tab'));
+    return { ok: true, ...(await panelCommand(payload)) };
   },
 
   async stop() {

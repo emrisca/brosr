@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Minus, Users, X } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
-import { StepRail } from '@/components/step-rail';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UpdateDialog } from '@/components/update-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -20,13 +19,6 @@ import { friends as listFriends, status, type Browser, type Invite, type Run } f
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
 
 type Step = 'welcome' | 'browsers' | 'prepare' | 'room';
-
-const INDEX: Record<Step, number> = {
-  welcome: 0,
-  browsers: 1,
-  prepare: 2,
-  room: 3,
-};
 
 const NAME_KEY = 'brosr-name';
 const ROOM_NAME_KEY = 'brosr-room-name';
@@ -206,7 +198,6 @@ export default function App() {
           >
             <Users />
           </Button>
-          <StepRail current={INDEX[step]} />
           <ThemeToggle theme={theme} onToggle={toggle} />
           <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
           <Button
@@ -300,16 +291,18 @@ export default function App() {
         <InviteBanner
           invite={invite}
           browserId={browser?.id}
+          name={name}
           onClose={() => setInvite(null)}
         />
       ) : null}
 
-      <JoinDialog open={joinOpen} onOpenChange={setJoinOpen} />
+      <JoinDialog open={joinOpen} onOpenChange={setJoinOpen} name={name} />
       <FriendsDialog
         open={friendsOpen}
         onOpenChange={setFriendsOpen}
         run={run}
         browserId={browser?.id}
+        name={name}
       />
       <UpdateDialog update={update} open={updateOpen} onLater={later} />
 

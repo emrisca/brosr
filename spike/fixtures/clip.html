@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Brosr clip fixture</title>
+  <style>
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; background: #111; color: #eee; }
+    video { width: 640px; max-width: 100%; display: block; background: #000; }
+    pre { font-family: monospace; background: #000; padding: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Brosr clip fixture</h1>
+  <!-- A plain page, so the bridge treats it as a film tab and not as a room.
+       The loopback media check opens this in both browsers. -->
+  <video id="clip" src="/media/clip.webm" muted playsinline preload="auto"></video>
+  <pre id="state">waiting for the clip</pre>
+  <script>
+    const clip = document.getElementById('clip');
+    const state = document.getElementById('state');
+    setInterval(() => {
+      const relay = document.documentElement.dataset.brosrRelay;
+      const error = document.documentElement.dataset.brosrError;
+      if (error) {
+        state.textContent = 'core error: ' + error;
+        return;
+      }
+      const data = relay ? JSON.parse(relay) : null;
+      state.textContent =
+        'currentTime: ' + clip.currentTime.toFixed(3) + ' s\n' +
+        'paused: ' + clip.paused + '\n' +
+        'key: ' + ((data && data.key) || 'none') + '\n' +
+        'sends: ' + (data ? data.sends : 0) + ', applies: ' + (data ? data.applies : 0);
+    }, 200);
+  </script>
+</body>
+</html>

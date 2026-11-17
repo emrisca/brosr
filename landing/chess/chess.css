@@ -62,7 +62,7 @@ html {
 
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -188,6 +188,10 @@ body::before {
   background: var(--line-strong);
 }
 
+.room-state[data-state="queued"]::before {
+  background: var(--accent);
+}
+
 .ghost {
   appearance: none;
   padding: 7px 10px;
@@ -219,9 +223,11 @@ body::before {
   position: relative;
   z-index: 1;
   display: grid;
+  flex: 1;
   grid-template-columns: minmax(0, 1fr) 286px;
   gap: 22px;
   align-items: start;
+  align-content: safe center;
   width: 100%;
   max-width: 1120px;
   margin: 0 auto;
@@ -238,7 +244,7 @@ body::before {
 
 .board-shell {
   position: relative;
-  width: min(100%, 640px);
+  width: min(100%, 700px, calc(100dvh - 150px));
   aspect-ratio: 1;
 }
 
@@ -380,6 +386,7 @@ body::before {
 .panel {
   display: flex;
   flex-direction: column;
+  align-self: stretch;
   gap: 14px;
   min-width: 0;
   padding: 14px;
@@ -471,8 +478,134 @@ body::before {
   text-transform: uppercase;
 }
 
+.session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.session-state {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.session-state[data-state="live"] {
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--line));
+  background: color-mix(in oklch, var(--accent) 9%, transparent);
+  color: var(--fg);
+}
+
+.session-state[data-state="finished"] {
+  color: var(--fg);
+}
+
+.seat-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.join {
+  appearance: none;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--brand);
+  color: var(--bg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.join:hover {
+  background: color-mix(in oklch, var(--brand) 86%, var(--fg));
+}
+
+.join.is-quiet {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.join.is-quiet:hover {
+  border-color: var(--line-strong);
+  background: var(--brand-soft);
+  color: var(--fg);
+}
+
+.join:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.queue-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.queue-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.queue-pos {
+  flex: none;
+  width: 13px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .turns {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
@@ -502,9 +635,11 @@ body::before {
 
 .moves {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 1px;
-  max-height: 260px;
+  min-height: 0;
+  max-height: none;
   margin: 0;
   padding: 0;
   overflow-y: auto;
@@ -638,10 +773,6 @@ body::before {
     gap: 14px;
   }
 
-  .board-shell {
-    width: min(100%, 560px);
-  }
-
   .panel {
     width: min(100%, 560px);
     justify-self: center;
@@ -684,7 +815,8 @@ body::before {
 @media (prefers-reduced-motion: reduce) {
   .ghost,
   .player,
-  .status {
+  .status,
+  .join {
     transition: none;
   }
 }

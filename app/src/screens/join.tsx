@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -10,23 +10,25 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { detect, join, type Browser } from '@/lib/host';
+import { detect, join, reopen, type Browser } from '@/lib/host';
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  name: string;
 };
 
 // A pasted link is not a page a browser can open on its own. The room needs the
 // bridge, and the bridge lives in the profile this app builds, so the link comes
 // here and the app starts the browser for it.
-export function JoinDialog({ open, onOpenChange }: Props) {
+export function JoinDialog({ open, onOpenChange, name }: Props) {
   const [link, setLink] = useState('');
   const [browsers, setBrowsers] = useState<Browser[]>([]);
   const [browserId, setBrowserId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [joined, setJoined] = useState('');
+  const [reopening, setReopening] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -56,12 +58,25 @@ export function JoinDialog({ open, onOpenChange }: Props) {
     setBusy(true);
     setError('');
     try {
-      const answer = await join(value, browserId || undefined);
+      const answer = await join(value, browserId || undefined, name);
       setJoined(answer.browser.name);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function reopenBrowser() {
+    setReopening(true);
+    setError('');
+    try {
+      const answer = await reopen();
+      setJoined(answer.browser.name);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -79,6 +94,16 @@ export function JoinDialog({ open, onOpenChange }: Props) {
           <div className="flex flex-col gap-2">
             <p className="text-sm">The room is open in {joined}.</p>
             <DialogFooter>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={reopenBrowser}
+                disabled={reopening}
+              >
+                <RotateCw />
+                {reopening ? 'Opening' : 'Reopen browser'}
+              </Button>
               <Button size="sm" onClick={() => onOpenChange(false)}>
                 Done
               </Button>
@@ -124,6 +149,16 @@ export function JoinDialog({ open, onOpenChange }: Props) {
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
             <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={reopenBrowser}
+                disabled={busy || reopening}
+              >
+                <RotateCw />
+                {reopening ? 'Opening' : 'Reopen browser'}
+              </Button>
               <Button
                 type="button"
                 variant="ghost"

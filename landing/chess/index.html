@@ -43,6 +43,11 @@
     </section>
 
     <aside class="panel" aria-label="Game state">
+      <div class="session">
+        <span class="session-label">Game <span id="session-number">1</span></span>
+        <span id="session-state" class="session-state" data-state="waiting" aria-live="polite">Open seat</span>
+      </div>
+
       <section class="players" aria-label="Players">
         <div id="white-player" class="player">
           <span class="player-piece white" aria-hidden="true">&#9818;</span>
@@ -62,6 +67,16 @@
         </div>
       </section>
 
+      <div class="seat-actions">
+        <button id="join-game" type="button" class="join" hidden>Join as Black</button>
+        <button id="leave-seat" type="button" class="ghost" hidden>Leave seat</button>
+      </div>
+
+      <section id="queue-block" class="queue-block" aria-label="Waiting players" hidden>
+        <h2 class="queue-title">Waiting</h2>
+        <ol id="queue" class="queue"></ol>
+      </section>
+
       <section class="turns" aria-labelledby="moves-title">
         <div class="moves-head">
           <h2 id="moves-title">Moves</h2>
@@ -70,7 +85,7 @@
         <ol id="moves" class="moves" aria-label="Move list"></ol>
       </section>
 
-      <p id="hint" class="hint">Share the room invite. The first guest takes Black.</p>
+      <p id="hint" class="hint">Share the room invite. A guest presses Join game for Black.</p>
     </aside>
   </main>
 

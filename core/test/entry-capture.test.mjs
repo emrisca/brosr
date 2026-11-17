@@ -35,10 +35,13 @@ test('a granted peer sends an act and not its own clock', () => {
   // and beat the host's play and pause. Only a real act crosses the room.
   assert.match(source, /if \(!state\.action\) return reply\(\{ ok: true, skipped: 'tick' \}\)/);
   assert.match(source, /Date\.now\(\) - remoteAppliedAt < 600/);
-  // The echo window opens on an act, not on a tick. A tick lands four times a
-  // second, so refreshing the window on every apply kept a granted peer's own
-  // pause and seek home while the host's play ran on.
-  assert.match(source, /message\.action \|\| corrected/);
+  // The echo window opens on an act, not on a tick. A host pause also carries
+  // action: "tick", so the label cannot decide it. A changed playing flag is
+  // the act; a routine sample leaves the flag alone and must not keep a granted
+  // peer's own pause home.
+  assert.match(source, /previous\.playing !== Boolean\(message\.playing\)/);
+  assert.match(source, /playingChanged \|\| corrected/);
+  assert.doesNotMatch(source, /message\.action \|\| corrected/);
   // A correction seek issues a seek of its own, and that seek would arrive at
   // the host as a person's act. It opens the window too.
   assert.match(source, /result\.action === 'seek' \|\| result\.action === 'seek-retry'/);

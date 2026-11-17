@@ -750,6 +750,11 @@ function renderSeal(seal) {
 // The tab list is read from the background page, which knows the role and the
 // tab ids. The panel writes the same state back, so one render pass draws both.
 let tabState = null;
+// The film tab keeps its own counters, and the panel reads them from there.
+let filmReading = null;
+// The last reply from the background page, so a failed read names its reason
+// instead of looking the same as a room with no film tab.
+let filmReadingReply = null;
 
 // A film key names a page. The card shows a short label and keeps the full key
 // in a title, so a long URL never pushes the button off the row.
@@ -826,6 +831,7 @@ function renderWatch(reply) {
     ? `${filmLabel(media.key)} at ${place}.${here}`
     : `${filmLabel(media.key)} at ${place}. No tab on it here.`;
   copy.title = String(media.key || '');
+  renderReading(media);
   button.textContent = media.open ? 'Show the film' : 'Open the film';
   button.disabled = !media.url;
   button.title = media.open
@@ -857,6 +863,33 @@ function renderWatch(reply) {
     row.append(name, badge);
     list.append(row);
   }
+}
+
+// One line states the reading a person can send when syncing looks wrong: the
+// film, the frames its own tab applied, where the last frame left it, and how
+// far its playhead sits from the room. It stays hidden until a tab answers.
+function renderReading(media) {
+  const node = $('watch-reading');
+  if (!node) return;
+  const reading = filmReading;
+  if (!reading || !media) {
+    node.hidden = true;
+    node.textContent = '';
+    return;
+  }
+  const parts = [filmLabel(media.key)];
+  const applied = Number(reading.relay && reading.relay.applies);
+  if (Number.isFinite(applied)) parts.push(applied + ' applied');
+  const last = reading.relay && reading.relay.last;
+  if (last && Number.isFinite(Number(last.drift))) {
+    parts.push(Math.abs(Number(last.drift)).toFixed(2) + ' s on the last frame');
+  }
+  const behind = Number(media.behind);
+  if (Number.isFinite(behind)) {
+    parts.push(Math.abs(behind).toFixed(2) + ' s from the room');
+  }
+  node.textContent = parts.join(' · ');
+  node.hidden = false;
 }
 
 // The Control section names the tab a grant types into. A room with no trusted
@@ -894,12 +927,12 @@ function render(reply) {
   $('dot').dataset.state = data.socket === 1 ? 'live' : 'down';
   if (data.socket === 1) setStatus('');
   else setStatus('Reconnecting...', 'error');
-  $('control').hidden = reply.role !== 'host';
+  // Host controls live in the Brosr app now.
   renderSeal(data.seal);
   renderTrust(data);
   const invite = inviteLink(data.inviteUrl || data.location, roomLabel);
-  $('invite-box').hidden = !invite;
-  if (invite && $('invite').value !== invite) $('invite').value = invite;
+  if ($('invite-box')) $('invite-box').hidden = !invite;
+  if (invite && $('invite')) $('invite').value = invite;
 
   const peers = Array.isArray(data.peerList)
     ? data.peerList
@@ -956,21 +989,6 @@ function render(reply) {
       badge.textContent = 'Control';
       row.append(badge);
     }
-    if (reply.role === 'host' && peer.id && !peer.self) {
-      const action = document.createElement('button');
-      action.type = 'button';
-      action.className = 'peer-control';
-      action.dataset.peer = peer.id;
-      action.textContent = peer.granted ? 'Revoke' : 'Grant';
-      action.setAttribute(
-        'aria-label',
-        peer.granted
-          ? `Revoke control from ${peer.name || peer.id}`
-          : `Grant control to ${peer.name || peer.id}`
-      );
-      action.addEventListener('click', () => control(!peer.granted, peer.id));
-      row.append(action);
-    }
     list.append(row);
   }
 
@@ -984,7 +1002,7 @@ function render(reply) {
     data.socket === 1 ? (reconnects ? `Live, ${reconnects} reconnects` : 'Live') : 'Reconnecting';
   $('playback').textContent =
     typeof data.playing === 'boolean' ? (data.playing ? 'Playing' : 'Paused') : '-';
-  renderHistory(data);
+
 }
 
 function missing(reason) {
@@ -993,12 +1011,13 @@ function missing(reason) {
   $('dot').dataset.state = 'down';
   setStatus(reason || 'This tab is not in a room.', 'error');
   $('peers').replaceChildren();
-  $('control').hidden = true;
   $('latency').textContent = '-';
   $('count').textContent = '';
   document.title = 'Brosr room';
-  $('invite-box').hidden = true;
-  $('invite').value = '';
+  const inviteBox = $('invite-box');
+  const inviteField = $('invite');
+  if (inviteBox) inviteBox.hidden = true;
+  if (inviteField) inviteField.value = '';
   $('room').textContent = 'Room';
   renderSettings(null);
   renderSeal(null);
@@ -1094,18 +1113,48 @@ async function cachedStatus() {
   }
 }
 
+// The panel shows what the tab holding the film has actually done: how many
+// frames it applied and what the last one left it at. The room status carries
+// the room's position and not those counters, so the background page asks the
+// film tab. A room with no film tab open here has nothing to show and the line
+// hides rather than reporting a zero that looks like a broken sync.
+async function readFilm(reply) {
+  const media = reply && reply.data ? reply.data.media : null;
+  if (!media || !media.key) {
+    filmReading = null;
+    filmReadingReply = { ok: false, reason: 'no-media' };
+    return;
+  }
+  try {
+    const reading = await api.runtime.sendMessage({
+      type: 'brosr:film-reading',
+      key: media.key,
+    });
+    filmReadingReply = reading || null;
+    filmReading = reading && reading.ok ? reading : null;
+  } catch {
+    filmReading = null;
+  }
+}
+
 async function refresh() {
   try {
     const tab = await targetTab();
     if (tab) {
       const reply = await askStatus(tab);
-      if (reply) return render(reply);
+      if (reply) {
+        await readFilm(reply);
+        return render(reply);
+      }
     } else {
       askRoute = null;
       askError = `no tab (background ${JSON.stringify(tabHint)})`;
     }
     const cached = await cachedStatus();
-    if (cached) return render(cached);
+    if (cached) {
+      await readFilm(cached);
+      return render(cached);
+    }
     return missing(tab ? 'This tab is not in a room.' : 'Open a room tab first.');
   } catch {
     // A tab without the content script rejects the message.
@@ -1463,26 +1512,6 @@ if (trustBox) {
   });
 }
 
-$('tabs-auto').addEventListener('change', async (event) => {
-  const box = event.currentTarget;
-  const wanted = box.checked;
-  box.disabled = true;
-  try {
-    const reply = await tabMessage({ type: 'brosr:tabs-auto', on: wanted });
-    if (reply && reply.ok) {
-      notice(wanted ? 'New tabs go to the room.' : 'New tabs stay private.');
-      await loadTabs();
-      return;
-    }
-    box.checked = !wanted;
-    notice('Ask the host for control first.', true);
-  } catch {
-    box.checked = !wanted;
-    notice('The background page did not answer.', true);
-  }
-  box.disabled = false;
-});
-
 // The room and cursor controls share one menu. Tabs keep the shared surface
 // page clean, and a keyboard reaches both panels without opening the menu.
 const tabButtons = [...document.querySelectorAll('.panel-tab')];
@@ -1515,12 +1544,6 @@ for (const button of tabButtons) {
 
 selectTab('tab-room');
 
-$('room-name-save').addEventListener('click', saveRoomName);
-$('room-name').addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter') return;
-  event.preventDefault();
-  saveRoomName();
-});
 $('cursor-load').addEventListener('click', loadCursorSet);
 $('cursor-set').addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
@@ -1590,8 +1613,6 @@ async function copyInvite(button) {
   }
 }
 
-$('invite-copy').addEventListener('click', (event) => copyInvite(event.currentTarget));
-$('copy').addEventListener('click', () => copyInvite($('invite-copy')));
 // The browser owns the popup frame, so the page closes itself. A page in a tab
 // closes that tab instead, and a bare page closes itself the same way.
 $('hide').addEventListener('click', async () => {
@@ -1645,7 +1666,7 @@ setInterval(async () => {
         visible: document.visibilityState,
         room: $('room').textContent,
         seal: lastReply && lastReply.data ? lastReply.data.seal || null : null,
-        invite: $('invite').value,
+        invite: $('invite') ? $('invite').value : '',
         count: $('count').textContent,
         playback: $('playback').textContent,
         media: lastReply && lastReply.data ? lastReply.data.media || null : null,
@@ -1658,13 +1679,23 @@ setInterval(async () => {
                 behind: entry.viewer ? entry.viewer.behind : null,
               }))
             : [],
+        reading: filmReading
+          ? {
+              applies: filmReading.relay ? filmReading.relay.applies : null,
+              last: filmReading.relay ? filmReading.relay.last : null,
+            }
+          : null,
+        readingReply: filmReadingReply,
+        // The rendered line, so a check proves the reading drew and not only
+        // that the numbers arrived.
+        readingText: $('watch-reading').textContent,
         watch:
           $('watch-state').textContent +
           ' | ' +
           [...document.querySelectorAll('#watch-viewers .watch-badge')]
             .map((node) => node.textContent)
             .join(', '),
-        control: !$('control').hidden,
+        control: false,
         tabs: tabState
           ? {
               role: tabState.role,
@@ -1720,7 +1751,7 @@ if (new URLSearchParams(location.search).get('selftest') === '1') {
   const timer = setInterval(async () => {
     tries += 1;
     await refresh();
-    if ($('control').hidden) {
+    if (false) {
       if (tries > 120) clearInterval(timer);
       return;
     }

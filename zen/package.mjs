@@ -28,6 +28,7 @@ const CORE = [
   'sync.mjs',
   'seal.mjs',
   'browser-entry.mjs',
+  'panel.mjs',
   'page-entry.mjs',
   'tabs.mjs',
   'youtube.mjs',

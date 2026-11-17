@@ -78,7 +78,8 @@ export function Prepare({ browser, name, roomName, onReady, onBack }: Props) {
       const run = await start(
         browser.id,
         name.trim() || 'Host',
-        roomName.trim() || 'Room'
+        roomName.trim() || 'Room',
+        true
       );
       onReady(run);
     } catch (cause) {

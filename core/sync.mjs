@@ -28,6 +28,10 @@ import {
 } from './input.mjs';
 
 export const HOST_TICK_MS = 250;
+// A local act by the host wins briefly. A granted peer's own pause or play can
+// arrive just after it, and without this window the host's pause looked like it
+// did nothing. The peer still drives the room when the host is idle.
+export const HOST_MEDIA_PRIORITY_MS = 1500;
 // The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
 // fresh target, and the overlay eases between them.
 export const PRESENCE_TICK_MS = 33;
@@ -168,6 +172,7 @@ export function createRoomClient({
   let firstSeen = false;
   let firstAt = 0;
   let lastHostTick = -Infinity;
+  let lastHostActAt = -Infinity;
   let lastSeekAt = -Infinity;
   let waitingSince = null;
   let lastSeekTarget = null;
@@ -507,6 +512,8 @@ export function createRoomClient({
     if (!isHost()) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
     const position = Number(state.position || 0);
+    const changed = Boolean(state.action) || stats.playing !== Boolean(state.playing);
+    if (changed) lastHostActAt = local;
     stats.key = state.key;
     stats.position = Math.round(position * 1000) / 1000;
     stats.playing = Boolean(state.playing);
@@ -822,6 +829,11 @@ export function createRoomClient({
     // nothing about playback.
     if (isHost() && !grants.active().some((grant) => grant.peerId === message.peerId)) {
       return { ok: true, ignored: 'no-grant' };
+    }
+    // A host's own play, pause or seek wins for a short window. The granted peer
+    // can still drive the film when the host is not acting.
+    if (isHost() && local - lastHostActAt < HOST_MEDIA_PRIORITY_MS) {
+      return { ok: true, ignored: 'host-priority' };
     }
     // The adapter owns every read and write. A player object and a media
     // element meet one interface, so the peer path never touches a field.
@@ -1289,7 +1301,8 @@ export function createRoomClient({
   function tick(local = now()) {
     // A dropped socket leaves its entry behind. The count only means live peers
     // once the map forgets a peer that stopped sending presence.
-    const gone = state.prune({ at: local });
+    const held = new Set(grants.active().map((grant) => grant.peerId));
+    const gone = state.prune({ at: local, keep: held });
     // A host that stops sending presence has left, and the room elects again.
     if (currentHost && currentHost !== peerId && gone.includes(currentHost)) {
       migrateHost(currentHost);

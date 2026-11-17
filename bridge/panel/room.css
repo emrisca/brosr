@@ -873,6 +873,12 @@ button:focus-visible,
   font-size: 12px;
 }
 
+.watch-reading {
+  color: var(--room-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .watch-button {
   height: 32px;
   padding: 0 10px;

@@ -91,13 +91,35 @@ const server = http.createServer((req, res) => {
     res.end(body);
     return;
   }
-  // The app asks how many people are in the room. One small read keeps that
-  // number out of the frame path and gives the webview no new transport.
+  // The app asks how many people are in the room and whether the host is one
+  // of them. One small read keeps those numbers out of the frame path and gives
+  // the webview no new transport. A room whose host left still has peers, and
+  // that is the case a guest needs to see named.
   if (url.pathname === '/status') {
     const room = url.searchParams.get('room') || '';
+    const members = room ? rooms.get(room) : null;
+    let peers = 0;
+    let hosts = 0;
+    let anonymous = 0;
+    // A page can hold more than one socket, so a socket count reads one person
+    // as two. The peer id names the person, and the app counts people.
+    const people = new Set();
+    if (members) {
+      for (const client of members) {
+        // The app control peer is a local command channel, not a person.
+        if (client.role === 'panel') continue;
+        peers += 1;
+        if (client.role === 'host') hosts += 1;
+        // An older page sends no peer id. It counts as its own socket rather
+        // than dropping out of the room.
+        people.add(client.peer || `socket:${(anonymous += 1)}`);
+      }
+    }
     const body = JSON.stringify({
       room,
-      peers: room && rooms.has(room) ? rooms.get(room).size : 0,
+      peers,
+      hosts,
+      people: people.size,
       rooms: Object.fromEntries([...rooms].map(([name, set]) => [name, set.size])),
       uptime: Math.round((Date.now() - STARTED) / 1000),
     });
@@ -445,7 +467,14 @@ server.on('upgrade', (req, socket) => {
   );
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const room = url.searchParams.get('room') || 'default';
-  const client = { socket, buf: Buffer.alloc(0), room, remote: addressOf(socket) };
+  // The core tags its socket with the role the room URL gave it. Any other
+  // value is a guest, so an older page can never count as the host.
+  const askedRole = url.searchParams.get('role');
+  const role = askedRole === 'host' ? 'host' : askedRole === 'panel' ? 'panel' : 'peer';
+  // The room URL already names the peer, so the count can tell two tabs of one
+  // person from two people without reading a frame.
+  const peer = url.searchParams.get('peer') || '';
+  const client = { socket, buf: Buffer.alloc(0), room, role, peer, remote: addressOf(socket) };
   if (!rooms.has(room)) rooms.set(room, new Set());
   rooms.get(room).add(client);
   note('join', client, rooms.get(room).size);

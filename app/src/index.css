@@ -4,6 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  color-scheme: light;
   --radius: 0.625rem;
   --background: oklch(0.975 0 0);
   --foreground: oklch(0.15 0 0);
@@ -31,6 +32,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.115 0 0);
   --foreground: oklch(0.96 0 0);
   --card: oklch(0.17 0 0);
@@ -102,6 +104,13 @@
 
   ::selection {
     @apply bg-accent text-accent-foreground;
+  }
+
+  /* Native option rows do not inherit the select's background in WebView2.
+     Naming both colours keeps the popup readable in either theme. */
+  select option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
   }
 }
 

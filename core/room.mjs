@@ -3,8 +3,10 @@
 
 export const MAX_INPUT_PER_SECOND = 120;
 export const MAX_NAV_PER_SECOND = 1;
-// Presence frames arrive every 100 ms. A peer unseen for this long has gone.
-export const PEER_TTL_MS = 5000;
+// Presence frames arrive every 100 ms, but a background tab can be throttled.
+// Keep a peer long enough for a tab switch, and let a grant hold the row even
+// when its presence timer has gone quiet.
+export const PEER_TTL_MS = 15000;
 
 // Host migration. Every peer elects the same successor without a vote, so a
 // room survives the host closing the lid. The smallest live id wins, which is
@@ -49,10 +51,11 @@ export class Room {
 
   // A room map outlives a dropped socket, so a count needs an age. Presence
   // frames arrive every 100 ms, and a peer that stops sending is gone.
-  prune({ ttl = PEER_TTL_MS, at = this.now() } = {}) {
+  prune({ ttl = PEER_TTL_MS, at = this.now(), keep = null } = {}) {
     const gone = [];
     for (const [id, seenAt] of this.seen) {
       if (id === this.peerId) continue;
+      if (keep && keep.has(id)) continue;
       if (at - seenAt > ttl) gone.push(id);
     }
     for (const id of gone) this.leave(id);

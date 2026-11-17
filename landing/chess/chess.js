@@ -28,6 +28,12 @@ const movesEl = document.getElementById('moves');
 const moveCountEl = document.getElementById('move-count');
 const newGameEl = document.getElementById('new-game');
 const openSeatEl = document.getElementById('open-seat');
+const joinEl = document.getElementById('join-game');
+const leaveEl = document.getElementById('leave-seat');
+const queueEl = document.getElementById('queue');
+const queueBlockEl = document.getElementById('queue-block');
+const sessionNumberEl = document.getElementById('session-number');
+const sessionStateEl = document.getElementById('session-state');
 const flipEl = document.getElementById('flip');
 const promotionEl = document.getElementById('promotion');
 const promotionCancelEl = document.getElementById('promotion-cancel');
@@ -52,11 +58,16 @@ let pending = null;
 let awaiting = false;
 let flipped = false;
 let autoSide = null;
+let session = 1;
+let queue = [];
+const labels = new Map();
 
 newGameEl.hidden = !HOST;
 openSeatEl.hidden = true;
 newGameEl.addEventListener('click', newGame);
 openSeatEl.addEventListener('click', openSeat);
+joinEl.addEventListener('click', onJoinClick);
+leaveEl.addEventListener('click', onLeaveClick);
 flipEl.addEventListener('click', () => {
   flipped = !flipped;
   renderBoard();
@@ -173,18 +184,17 @@ function hostMessage(peer, data) {
     seen.set(peer, Date.now());
     if (data.op === 'here') return;
 
+    labels.set(peer, cleanName(data.name) || 'Guest');
     pruneSeats();
-    if (!seats[peer] && !seatOwner('b')) {
-      seats[peer] = 'b';
-      names.b = cleanName(data.name) || 'Guest';
-      status = gameStatus();
-    }
     sendState();
     renderAll();
     return;
   }
 
-  if (data.op === 'move') applyMove(peer, data);
+  if (data.op === 'join') joinSeat(peer);
+  else if (data.op === 'leave') releaseSeat(peer);
+  else if (data.op === 'unqueue') unqueue(peer, false);
+  else if (data.op === 'move') applyMove(peer, data);
 }
 
 function guestMessage(peer, data) {
@@ -278,6 +288,8 @@ function sendState() {
     fen: game.fen(),
     seats: { ...seats },
     names: { ...names },
+    session,
+    queue: queue.map((entry) => ({ id: entry.id, name: entry.name })),
     history: game.history(),
     last: wireLast(last),
     status: status || gameStatus(),
@@ -304,6 +316,13 @@ function applyState(data) {
     w: cleanName(data.names && data.names.w) || 'White',
     b: cleanName(data.names && data.names.b) || '',
   };
+  session = Number.isInteger(data.session) && data.session > 0 ? data.session : 1;
+  queue = Array.isArray(data.queue)
+    ? data.queue
+        .filter((entry) => entry && typeof entry.id === 'string' && entry.id)
+        .map((entry) => ({ id: entry.id.slice(0, 64), name: cleanName(entry.name) || 'Guest' }))
+        .slice(0, 32)
+    : [];
   side = seats[PEER] || null;
   last = cleanLast(data.last);
   history = Array.isArray(data.history)
@@ -334,6 +353,7 @@ function newGame() {
   if (!HOST) return;
   if (history.length && !window.confirm('Start a new game? This clears the board.')) return;
   game = new Chess();
+  session += 1;
   last = null;
   history = [];
   status = gameStatus();
@@ -349,23 +369,105 @@ function openSeat() {
   if (!HOST) return;
   const blackPeer = seatOwner('b');
   if (!blackPeer) return;
-  delete seats[blackPeer];
   seen.delete(blackPeer);
-  names.b = '';
+  releaseSeat(blackPeer);
+}
+
+function joinSeat(peer) {
+  if (seats[peer]) {
+    sendState();
+    return;
+  }
+  const free = firstFreeSeat();
+  if (free) {
+    unqueue(peer, true);
+    seats[peer] = free;
+    names[free] = labels.get(peer) || 'Guest';
+    status = gameStatus();
+  } else if (!queue.some((entry) => entry.id === peer)) {
+    queue.push({ id: peer, name: labels.get(peer) || 'Guest' });
+    if (queue.length > 32) queue = queue.slice(-32);
+  }
+  sendState();
+  renderAll();
+}
+
+function unqueue(peer, quiet) {
+  const before = queue.length;
+  queue = queue.filter((entry) => entry.id !== peer);
+  if (!quiet && queue.length !== before) {
+    sendState();
+    renderAll();
+  }
+}
+
+function releaseSeat(peer) {
+  if (peer === PEER || !seats[peer]) return;
+  freeSeat(peer);
+  seatFromQueue();
   status = gameStatus();
   sendState();
   renderAll();
 }
 
-function pruneSeats() {
-  const blackPeer = seatOwner('b');
-  if (!blackPeer) return false;
-  const at = seen.get(blackPeer) || 0;
-  if (Date.now() - at <= STALE_MS) return false;
-  delete seats[blackPeer];
-  seen.delete(blackPeer);
-  names.b = '';
+function freeSeat(peer) {
+  const seat = seats[peer];
+  if (!seat) return false;
+  delete seats[peer];
+  names[seat] = '';
   return true;
+}
+
+function firstFreeSeat() {
+  if (!seatOwner('b')) return 'b';
+  if (!seatOwner('w')) return 'w';
+  return '';
+}
+
+function seatFromQueue() {
+  const free = firstFreeSeat();
+  if (!free) return false;
+  const entry = queue.shift();
+  if (!entry) return false;
+  seats[entry.id] = free;
+  names[free] = entry.name;
+  return true;
+}
+
+function onJoinClick() {
+  if (HOST || !hasState) return;
+  if (queue.some((entry) => entry.id === PEER)) {
+    send({ op: 'unqueue' });
+    return;
+  }
+  send({ op: 'join' });
+}
+
+function onLeaveClick() {
+  if (HOST || !side) return;
+  if (history.length && !window.confirm('Leave your seat? The board stays for the next player.')) {
+    return;
+  }
+  send({ op: 'leave' });
+}
+
+function pruneSeats() {
+  let changed = false;
+  const blackPeer = seatOwner('b');
+  if (blackPeer) {
+    const at = seen.get(blackPeer) || 0;
+    if (Date.now() - at > STALE_MS) {
+      freeSeat(blackPeer);
+      changed = true;
+    }
+  }
+  const kept = queue.filter((entry) => Date.now() - (seen.get(entry.id) || 0) <= STALE_MS);
+  if (kept.length !== queue.length) {
+    queue = kept;
+    changed = true;
+  }
+  if (!seatOwner('b') && seatFromQueue()) changed = true;
+  return changed;
 }
 
 function onBoardClick(event) {
@@ -486,10 +588,57 @@ function renderAll() {
   openSeatEl.hidden = !HOST || !blackPeer;
   renderBoard();
   renderPlayers();
+  renderSession();
+  renderSeatActions();
+  renderQueue();
   renderMoves();
   renderStatus();
   renderRoom();
   renderHint();
+}
+
+function renderSession() {
+  sessionNumberEl.textContent = String(session);
+  const state = game.isGameOver() ? 'finished' : isBoardFull() ? 'live' : 'waiting';
+  sessionStateEl.dataset.state = state;
+  sessionStateEl.textContent =
+    state === 'live' ? 'In play' : state === 'finished' ? 'Finished' : 'Open seat';
+}
+
+function renderSeatActions() {
+  const mine = seats[PEER] || '';
+  const queued = queue.some((entry) => entry.id === PEER);
+  const free = firstFreeSeat();
+  joinEl.hidden = HOST || Boolean(mine) || !hasState;
+  leaveEl.hidden = HOST || !mine;
+  joinEl.classList.toggle('is-quiet', queued);
+  if (!joinEl.hidden) {
+    joinEl.dataset.mode = queued ? 'unqueue' : free ? 'join' : 'queue';
+    joinEl.textContent = queued ? 'Leave queue' : free ? 'Join as ' + sideName(free) : 'Join queue';
+  }
+}
+
+function renderQueue() {
+  queueEl.replaceChildren();
+  queueBlockEl.hidden = !queue.length;
+  queue.forEach((entry, index) => {
+    const row = document.createElement('li');
+    row.className = 'queue-row';
+    const place = document.createElement('span');
+    place.className = 'queue-pos';
+    place.textContent = String(index + 1);
+    const name = document.createElement('span');
+    name.className = 'queue-name';
+    name.textContent = entry.name;
+    row.append(place, name);
+    if (entry.id === PEER) {
+      const you = document.createElement('span');
+      you.className = 'you';
+      you.textContent = 'You';
+      row.append(you);
+    }
+    queueEl.append(row);
+  });
 }
 
 function renderBoard() {
@@ -621,26 +770,37 @@ function renderStatus() {
   let text = status || gameStatus();
   if (!connected) {
     text = 'Connecting to the room.';
-  } else if (!seatOwner('b')) {
-    text = 'Waiting for Black to join.';
   } else if (awaiting) {
     text = 'Waiting for the host.';
+  } else if (!game.isGameOver() && !isBoardFull()) {
+    text = queue.length
+      ? 'Waiting for a seat. ' + queue.length + ' in line.'
+      : 'Waiting for a second player.';
   }
   statusEl.textContent = text;
   statusEl.classList.toggle('is-over', game.isGameOver());
 }
 
 function renderRoom() {
-  const state = !connected ? 'connecting' : HOST ? 'host' : side ? 'live' : 'watching';
+  const queued = queue.some((entry) => entry.id === PEER);
+  const state = !connected
+    ? 'connecting'
+    : HOST
+      ? 'host'
+      : side
+        ? 'live'
+        : queued
+          ? 'queued'
+          : 'watching';
+  const words = {
+    connecting: 'Connecting',
+    host: 'Hosting',
+    live: 'Live',
+    queued: 'In line',
+    watching: 'Spectating',
+  };
   roomStateEl.dataset.state = state;
-  roomStateEl.textContent =
-    state === 'connecting'
-      ? 'Connecting'
-      : state === 'host'
-        ? 'Hosting'
-        : state === 'live'
-          ? 'Live'
-          : 'Spectating';
+  roomStateEl.textContent = words[state];
 }
 
 function renderHint() {
@@ -650,17 +810,22 @@ function renderHint() {
     hintEl.textContent = 'Choose a piece to promote to.';
   } else if (awaiting) {
     hintEl.textContent = 'Waiting for the host to confirm the move.';
-  } else if (HOST && !seatOwner('b')) {
-    hintEl.textContent = 'Share the room invite. The first guest takes Black.';
+  } else if (HOST && !isBoardFull()) {
+    hintEl.textContent = queue.length
+      ? 'Opening the seat gives it to the first person in line.'
+      : 'Share the room invite. A guest presses Join game for Black.';
+  } else if (queue.some((entry) => entry.id === PEER)) {
+    hintEl.textContent = 'You are next in line. The seat is yours when it opens.';
   } else if (game.isGameOver()) {
     hintEl.textContent = HOST
-      ? 'New game starts a fresh board.'
-      : 'The host can start a new game.';
-  } else if (side) {
+      ? 'New game starts the next session.'
+      : 'The host can start the next session.';
+  } else if (!side) {
+    hintEl.textContent =
+      'Spectating game ' + session + '. A seat opens here when a player leaves.';
+  } else {
     hintEl.textContent =
       'You are ' + sideName(side) + '. Click a piece, then a highlighted square.';
-  } else {
-    hintEl.textContent = 'Spectating. Two players are at the board.';
   }
 }
 
@@ -710,6 +875,10 @@ function wireLast(move) {
     piece: move.piece,
     flags: move.flags,
   };
+}
+
+function isBoardFull() {
+  return Boolean(seatOwner('w') && seatOwner('b'));
 }
 
 function seatOwner(seat) {

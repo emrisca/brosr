@@ -108,28 +108,6 @@
       <p class="notice" id="notice" role="status" aria-live="polite"></p>
 
       <div class="panel-pane" id="pane-room" role="tabpanel" aria-labelledby="tab-room">
-        <section class="card" id="room-settings">
-          <label for="room-name">Room name</label>
-          <div class="invite-row">
-            <input id="room-name" type="text" maxlength="48" autocomplete="off" />
-            <button class="invite-copy" id="room-name-save" type="button">Save</button>
-          </div>
-          <p class="note">This name appears in the header, the panel and the join link.</p>
-        </section>
-
-        <section class="card invite" id="invite-box" hidden>
-          <label for="invite">Join link</label>
-          <div class="invite-row">
-            <input id="invite" type="text" readonly />
-            <button class="invite-copy" id="invite-copy" type="button">Copy</button>
-          </div>
-        </section>
-
-        <section class="card panel-sites" id="panel-sites" hidden>
-          <p class="section-title">Dropped links</p>
-          <ul class="site-list" id="panel-sites-list"></ul>
-        </section>
-
         <section class="card peers-section" aria-labelledby="peers-label">
           <p class="section-title" id="peers-label">People</p>
           <ul id="peers"></ul>
@@ -142,6 +120,7 @@
           </div>
 
           <p class="watch-copy" id="watch-copy">No film yet.</p>
+          <p class="watch-reading" id="watch-reading" hidden></p>
 
           <div class="watch-row">
             <button class="watch-button" id="watch-toggle" type="button" disabled title="No film yet">
@@ -153,45 +132,6 @@
           <ul class="watch-viewers" id="watch-viewers"></ul>
         </section>
 
-        <section class="card control" id="control" hidden>
-          <p class="section-title">Host controls</p>
-
-          <label class="switch-row" for="trust-target">
-            <span>Trusted typing</span>
-            <input type="checkbox" id="trust-target" />
-          </label>
-
-          <p class="note" id="trust-note"></p>
-          <ul class="history" id="history"></ul>
-        </section>
-
-        <section class="card" id="playback-section" aria-labelledby="playback-label">
-          <p class="section-title" id="playback-label">Playback</p>
-
-          <label class="switch-row" for="sync-media">
-            <span>Sync playback</span>
-            <input type="checkbox" id="sync-media" />
-          </label>
-
-          <label class="switch-row" for="notice-media">
-            <span>Action notices</span>
-            <input type="checkbox" id="notice-media" />
-          </label>
-
-          <p class="note" id="playback-note"></p>
-        </section>
-
-        <section class="card" id="tabs-section" aria-labelledby="tabs-label">
-          <p class="section-title" id="tabs-label">Tabs</p>
-
-          <label class="switch-row" for="tabs-auto">
-            <span>Share new tabs</span>
-            <input type="checkbox" id="tabs-auto" />
-          </label>
-
-          <p class="note" id="tabs-note" hidden></p>
-          <ul class="tab-list" id="tabs-list"></ul>
-        </section>
       </div>
 
       <div class="panel-pane" id="pane-cursor" role="tabpanel" aria-labelledby="tab-cursor" hidden>
@@ -245,11 +185,6 @@
           <p class="note" id="own-cursor-note">Off keeps your pointer off every other screen.</p>
         </section>
 
-        <section class="card" aria-labelledby="cursor-sites-label" id="cursor-sites" hidden>
-          <p class="section-title" id="cursor-sites-label">Where cursors show</p>
-          <p class="note">Only the host picks the sites. Canvas and Notes start on.</p>
-          <ul class="cursor-sites-list" id="cursor-sites-list"></ul>
-        </section>
       </div>
 
       <footer>

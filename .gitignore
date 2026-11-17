@@ -52,6 +52,13 @@ coverage/
 # Local credentials. The AMO key and secret live here, never in a tracked file.
 /.secrets/
 
+# The handoff watcher is tied to one machine, and the app writes pid files while
+# it runs.
+/docs/watcher.md
+/handoff-watcher.js
+/.freebuff/
+/app/.runtime/
+
 # OS and editor metadata.
 .DS_Store
 Thumbs.db

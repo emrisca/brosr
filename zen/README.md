@@ -39,10 +39,11 @@ because Chromium loads an unpacked folder and not an XPI.
    window `maximized`, so a room opens zoomed to the screen instead of at Zen's stored size.
    Then it prints the command that starts Zen on that profile. The room gets the window, not the
    toolbar.
-2. **A room panel.** The bridge gains a panel at `bridge/panel/room.html`. It shows the room id, each peer by name, who holds
-   control, the socket state and the latency. It asks the active tab for the same numbers the
-   harness reads from `dataset.brosr`, so one renderer serves both. On the host each peer row has a
-   Grant or Revoke button, and the panel lists the last three control changes.
+2. **A room panel.** The bridge gains a panel at `bridge/panel/room.html`. It shows the room id, each peer by name, whether that
+   person holds control, the socket state and the latency. It asks the active tab for the same
+   numbers the harness reads from `dataset.brosr`, so one renderer serves both. Host controls live
+   in the Brosr app's Room controls dialog; the panel keeps the room name, people, media and cursor
+   appearance.
 3. **One entry point.** The toolbar opens the panel as an anchored popup, and the Ctrl+Alt+B
    command asks for that same popup. Both need a click, so nothing else offers to show one.
    The panel keeps the same page as a tab, which the check lane opens to read it headlessly.
@@ -63,8 +64,8 @@ way. One click reaches the room, and no code opens a window outside the browser.
 its 360 pixel width and its 560 pixel height cap from the panel stylesheet, and the browser draws
 the frame. Closing the panel from its menu closes the popup, and a tab that hosts the panel
 closes itself. The check lane opens that page in a tab, because a message cannot press the
-toolbar. That run on 14 November 2026 read the panel live with a 14.13 contrast, the invite link
-and the grant history. A host alone read `0` in the header and `Brosr room · 0` in the title.
+toolbar. That run on 14 November 2026 read the panel live with a 14.13 contrast, the room name,
+the people, the film card and the cursor settings. A host alone read its room in the header.
 
 **Theme.** The panel asks the theme API for the toolbar and text colours. It resolves both to
 plain rgb triples and mixes its own surface from them, so every computed colour is readable.
@@ -74,7 +75,7 @@ whichever the surface can carry. A theme without colours falls back to the syste
 **Spacing.** Gaps and pads use 6, 8 or 10 pixels only. The docked panel fills the expanded
 sidebar, which starts at 320 pixels and follows the splitter between 240 and 640. The panel keeps a 240
 pixel floor, so the menu and a peer row keep their place. The footer sits at the bottom edge,
-and a peer row keeps its control on one line.
+and a peer row keeps its badge on one line.
 
 **Menu.** The header holds one control, a room menu. It opens on click, closes on Escape or an
 outside click, and returns focus to the button. Refresh, copy join link and hide live there, so

@@ -28,13 +28,14 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   run: Run | null;
   browserId?: string;
+  name?: string;
 };
 
 function message(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
+export function FriendsDialog({ open, onOpenChange, run, browserId, name }: Props) {
   const [state, setState] = useState<FriendsState | null>(null);
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState('');
@@ -161,7 +162,7 @@ export function FriendsDialog({ open, onOpenChange, run, browserId }: Props) {
     setError('');
     setNotice('');
     try {
-      const next = await answerInvite(invite.id, accept, browserId);
+      const next = await answerInvite(invite.id, accept, browserId, name);
       setState(next);
       if (!accept) {
         setNotice('Invite declined.');

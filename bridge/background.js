@@ -248,7 +248,7 @@ async function rememberMediaTab(id, key) {
   mediaTabs.set(id, next);
   if (!prev || prev.key !== next.key) await save({ mediaTabKeys: mediaBook() });
 }
-state()
+const mediaRestored = state()
   .then((saved) => {
     const book = saved && saved.mediaTabKeys;
     if (!book || typeof book !== 'object') return;
@@ -604,6 +604,30 @@ async function handle(message, sender) {
     }
     return { ok: true, shared: Boolean(message.shared) };
   }
+  // A peer that joins after a tab was shared never saw that frame, because the
+  // relay keeps no history. The room tab asks once per new peer, and this sends
+  // the same tabs again so the newcomer opens the copy it missed. The announced
+  // map is the record of what already went out, so a tab nobody shared stays
+  // private.
+  if (message.type === 'brosr:tabs-replay') {
+    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    const all = await api.tabs.query({}).catch(() => []);
+    const shown = new Map(
+      all.filter((tab) => validId(tab.id)).map((tab) => [tab.id, tab])
+    );
+    let sent = 0;
+    for (const [raw, url] of announced) {
+      const id = Number(raw);
+      const tab = shown.get(id);
+      // A tab that navigated or closed keeps no replay. The tab events keep the
+      // record current, so a mismatch here means the record is stale.
+      if (!tab || tab.url !== url || !shareable(tab.url)) continue;
+      const arrived = remoteOrigins.get(id);
+      const key = arrived === undefined || arrived === null ? id : arrived;
+      if (await announce(tab.url, key)) sent += 1;
+    }
+    return { ok: true, sent };
+  }
   // A frame arrived from the room. The tab opens in the background, and it is
   // marked so this browser never announces it back.
   if (message.type === 'brosr:tab-open-local') {
@@ -719,6 +743,43 @@ async function handle(message, sender) {
   }
   // The panel opens the room's film here. A tab that already shows it comes to
   // the front, and only a missing film opens a new tab.
+  // The panel asks for the counters of the tab that holds the room's film.
+  // Those live on that page, so the background page asks each known film tab
+  // and returns the first answer. A tab that closed drops out of the map here.
+  if (message.type === 'brosr:film-reading') {
+    const filmKey = String(message.key || '');
+    if (!filmKey) return { ok: false, reason: 'key' };
+    // A restarted worker fills this map from its book after a message can
+    // already arrive, so the read waits for that fill instead of answering
+    // no-tab for a film tab this browser shows.
+    await mediaRestored;
+    const failed = [];
+    let dropped = false;
+    for (const [id, entry] of [...mediaTabs]) {
+      if (!entry || entry.key !== filmKey) continue;
+      try {
+        const reply = await api.tabs.sendMessage(id, { type: 'brosr:relay-reading' });
+        if (reply && reply.ok) return { ok: true, tabId: id, ...reply };
+        failed.push({ id, answer: reply ? 'empty' : 'none' });
+        mediaTabs.delete(id);
+        dropped = true;
+      } catch (error) {
+        failed.push({ id, error: text(error) });
+        mediaTabs.delete(id);
+        dropped = true;
+      }
+    }
+    if (dropped) save({ mediaTabKeys: mediaBook() });
+    // A failed read names the tabs it did hold, so a key that never arrived
+    // and a tab that went away do not look the same.
+    return {
+      ok: false,
+      reason: 'no-tab',
+      want: filmKey,
+      failed,
+      tabs: [...mediaTabs.entries()].map(([id, entry]) => ({ id, key: entry && entry.key })),
+    };
+  }
   if (message.type === 'brosr:open-film') {
     const key = String(message.key || '');
     const url = String(message.url || '');

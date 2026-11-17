@@ -1,7 +1,9 @@
 // Compares the Watch directory in landing/index.html with the starred sites in
-// FMHY's Stream Aggregators, P-Stream Forks and Anime Streaming sections. The
-// landing page carries every named site from a starred bullet, including the
-// alternatives joined by "or"; numeric mirror links are not separate entries.
+// FMHY's Stream Aggregators, P-Stream Forks and Anime Streaming sections. P-Stream
+// forks are compared as part of Stream Aggregators because the landing page keeps
+// one directory for both. The page carries every named site from a starred bullet,
+// including the alternatives joined by "or"; numeric mirror links are not separate
+// entries.
 //
 //   node scripts/check-fmhy-links.mjs
 //   node scripts/check-fmhy-links.mjs --source=.runtime/fmhy-video.md
@@ -10,7 +12,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const GROUPS = ['Stream Aggregators', 'P-Stream Forks', 'Anime Streaming'];
+export const GROUPS = ['Stream Aggregators', 'Anime Streaming'];
+const SOURCE_GROUPS = ['Stream Aggregators', 'P-Stream Forks', 'Anime Streaming'];
 const SOURCE =
   'https://raw.githubusercontent.com/fmhy/edit/main/docs/video.md';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -49,8 +52,9 @@ function section(markdown, title) {
 // second name. The "P-Stream Forks" entry points at the section itself.
 export function parseFmhy(markdown) {
   const rows = [];
-  for (const group of GROUPS) {
-    for (const line of section(markdown, group).split(/\r?\n/)) {
+  for (const title of SOURCE_GROUPS) {
+    const group = title === 'P-Stream Forks' ? 'Stream Aggregators' : title;
+    for (const line of section(markdown, title).split(/\r?\n/)) {
       if (!/^\*\s+[🌟⭐]/u.test(line)) continue;
       const sitePart = line.split(' - ')[0];
       for (const hit of sitePart.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
