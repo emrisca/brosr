@@ -1,22 +1,22 @@
 # Brosr
 
-Brosr is a room of people in one Firefox page. Each person's cursor, scroll, navigation and
+Brosr is a room of people in one browser page. Each person's cursor, scroll, navigation and
 media controls show up in every other window. Brosr sends no video. A room costs about
 10 KB/s per peer. A screen share needs 2 Mbps on a bad link.
 
-The browser must keep its extensions, including full uBlock Origin. Full uBlock Origin is a
-Manifest V2 add-on and only Firefox builds still run it, so a room starts in one of those. A
-Chromium build can host a room through the Manifest V3 copy of the bridge. Google Chrome refuses
-the flag that loads a local add-on from version 137, so Chrome appears in the list with that reason.
-Brosr starts the browser with its own profile and adds a bridge extension, a room window and a relay.
+A room starts in a browser Brosr picks and runs with its own profile, plus a bridge extension, a
+room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. Brave
+runs the Chromium lane with uBlock Origin Lite and P-Stream, loaded as unpacked packs. Google
+Chrome refuses the flag that loads a local add-on from version 137, so Chrome appears in the
+list with that reason.
 
-Status: the M0 spike passed and the M1 core runs. Nothing ships yet.
+Status: `v0.3.18` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
 
 ## What the repository holds
 
 | Path | Contents |
 | --- | --- |
-| `docs/plan.md` | The design. What syncs, what cannot, the protocol, safety and the milestones. |
+| `docs/` | The design, split by subject. [docs/README.md](docs/README.md) is the index. |
 | `core/` | The shared room code: protocol, clock, drift policy, media adapter, cursor overlay, input guards and the client. It holds no socket and no browser API. |
 | `bridge/` | The room extension: background script, content script and room panel. `zen/package.mjs` builds the Firefox XPI and the Chromium folder. |
 | `host/` | The room lifecycle: detect a browser, build a profile, run the relay, open the browser, and answer one JSON line per command. |
@@ -71,7 +71,7 @@ npm install
 npm run tauri dev
 ```
 
-The app finds the Firefox builds on the machine. Pick one. The app builds a separate room
+The app finds the Firefox and Chromium builds on the machine. Pick one. The app builds a separate room
 profile, installs the blockers and the bridge, then starts the relay and opens the browser
 on the room. The panel is the extension's own popup, so it draws inside the browser window
 and never in one of its own. The toolbar icon and the room shortcut open it.
@@ -126,13 +126,20 @@ skips the add-on pass on a throwaway profile. `zen/README.md` has the detail.
 The app updates from GitHub releases. A tag starts the workflow, and the workflow
 builds the macOS app with the signed updater files.
 
-1. Set the same version in `app/package.json`, `app/src-tauri/tauri.conf.json` and
-   `app/src-tauri/Cargo.toml`.
-2. Commit, then tag and push:
+1. Bump the version in every manifest and commit it:
 
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   node app/scripts/release.mjs <version>
+   ```
+
+   The script writes `app/package.json`, `app/package-lock.json`,
+   `app/src-tauri/tauri.conf.json`, `Cargo.toml` and `Cargo.lock`, then prints the tag
+   commands.
+2. Tag and push the version it printed:
+
+   ```bash
+   git tag v<version>
+   git push origin v<version>
    ```
 
 3. Wait for the `release` workflow. It creates the release and attaches the app, the
@@ -175,7 +182,10 @@ The `.runtime` directory stays out of git, because a run rebuilds it.
 
 ## Where to read the detail
 
-- [docs/plan.md](docs/plan.md) states the design and the limits, with the number each claim must meet.
+- [docs/README.md](docs/README.md) indexes the design, one file per subject.
+- [docs/design.md](docs/design.md) states what works per use case and what a room cannot do.
+- [docs/sync.md](docs/sync.md) covers the layers, the protocol and the media policy.
+- [docs/milestones.md](docs/milestones.md) tracks M0 to M8 with the as-built notes.
 - [core/README.md](core/README.md) explains the modules and the five rules the code depends on.
 - [spike/README.md](spike/README.md) records the last run and the findings that changed the code.
 - [docs/m0-results.md](docs/m0-results.md) summarises the M0 measurements.

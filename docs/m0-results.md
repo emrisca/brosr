@@ -1,6 +1,6 @@
 # M0 results
 
-Section 12 of [plan.md](plan.md) asks four questions before design work starts. The spike
+The [M0 milestone](milestones.md) asks four questions before design work starts. The spike
 answers them on a real Firefox. It also exercises the M1, M3 and M4 work, because those layers
 share the harness. [spike/README.md](../spike/README.md) holds the full table and the findings
 that changed the code.
@@ -29,7 +29,7 @@ results. [spike/README.md](../spike/README.md) records that run.
 | Reconnect soak, 60 s | Four peers held 600 samples at 2 ms p95 while the relay restarted. Every peer came back at the host's 0.6 scroll ratio. |
 
 The drift and latency figures come from the last run, recorded in
-[`spike/results.json`](../spike/results.json).
+`spike/results.json`. Git ignores that file, so the table above is the committed record.
 
 ## What it does not prove
 

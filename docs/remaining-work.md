@@ -1,6 +1,6 @@
 # What is left, 16 November 2026
 
-This is the working list beside [plan.md](plan.md). The plan holds the design and the
+This is the working list beside [the design](design.md). The plan holds the design and the
 per-milestone done-when. This file holds what is still open, what was measured today, and what
 to do next. It is not a replacement for the plan and it is not a status claim about shipping.
 
