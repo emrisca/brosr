@@ -816,6 +816,7 @@ function renderWatch(reply) {
     state.textContent = 'No media';
     delete state.dataset.state;
     copy.textContent = 'No film yet.';
+    renderAlign(null);
     button.textContent = 'Open the film';
     button.disabled = true;
     button.title = 'No film yet';
@@ -835,6 +836,7 @@ function renderWatch(reply) {
     : `${filmLabel(media.key)} at ${place}. No tab on it here.`;
   copy.title = String(media.key || '');
   renderReading(media);
+  renderAlign(data.align);
   button.textContent = media.open ? 'Show the film' : 'Open the film';
   button.disabled = !media.url;
   button.title = media.open
@@ -866,6 +868,25 @@ function renderWatch(reply) {
     row.append(name, badge);
     list.append(row);
   }
+}
+
+// One quiet line when this peer holds a different copy of the same film. It
+// stays hidden at zero and when nothing was measured, so an ordinary room
+// shows nothing new. The offset is how far this copy sits from the room.
+function renderAlign(align) {
+  const node = $('watch-offset');
+  if (!node) return;
+  const offset = align && Number(align.offsetMs);
+  if (!Number.isFinite(offset) || offset === 0) {
+    node.hidden = true;
+    node.textContent = '';
+    return;
+  }
+  const sign = offset > 0 ? '+' : '-';
+  const abs = Math.abs(offset);
+  const value = abs < 1000 ? `${Math.round(abs)} ms` : `${(abs / 1000).toFixed(1)} s`;
+  node.textContent = `Matched copy, ${sign}${value} offset.`;
+  node.hidden = false;
 }
 
 // One line states the reading a person can send when syncing looks wrong: the

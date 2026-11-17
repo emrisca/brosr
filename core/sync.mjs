@@ -26,6 +26,7 @@ import {
   originAllowed,
   replayInput,
 } from './input.mjs';
+import { APP_NAME, acceptOffset, localPosition } from './align.mjs';
 
 export const HOST_TICK_MS = 250;
 // A local act by the host wins briefly. A granted peer's own pause or play can
@@ -80,6 +81,10 @@ export function createRoomClient({
   showNames = true,
   // The host can make the room wait for a starved host or granted peer.
   sameFate = false,
+  // A copy offset measured offline. A number is treated as a confident
+  // measurement. An object is accepted only when it passes the same rules as
+  // a wire payload. Zero is the default and changes nothing.
+  alignOffset: initialAlignOffset = 0,
   // Sites the host took off the list stay off, so a visit does not bring the
   // row back.
   cursorForgot = null,
@@ -126,6 +131,19 @@ export function createRoomClient({
   const initialRoomName = cleanRoomName(roomName);
   const state = new Room({ role, peerId, roomName: initialRoomName, now });
   let currentSameFate = Boolean(sameFate);
+  // The measured gap between this peer's own copy and the room's, in ms. Zero
+  // until this peer learns one, so a room that never measured a copy runs
+  // exactly as it did before this lane existed.
+  const bootAccepted =
+    initialAlignOffset && typeof initialAlignOffset === 'object'
+      ? acceptOffset(initialAlignOffset)
+      : acceptOffset({ offsetMs: Number(initialAlignOffset), confidence: 1 });
+  const bootAlign = bootAccepted && bootAccepted.offsetMs !== 0 ? bootAccepted : null;
+  let alignOffset = bootAlign ? bootAlign.offsetMs : 0;
+  let alignState = bootAlign;
+  // Claims from other peers are kept for the room record, never applied to
+  // this peer. A copy offset belongs to the person holding that copy.
+  const alignPeers = new Map();
   state.sameFate = currentSameFate;
   // A room can hold for more than one starved source. One active hold is enough
   // to pause every player; the last one to clear releases the room.
@@ -519,7 +537,9 @@ export function createRoomClient({
       peerId,
       key: state.key,
       action: 'tick',
-      position: Number(state.position || 0),
+      // This peer's copy may sit seconds from the room's, and its tab reports
+      // a position in that file, so the frame carries room time.
+      position: localPosition(Number(state.position || 0), -alignOffset),
       playing: Boolean(state.playing),
       rate: Number(state.rate || 1),
       volume: Number(state.volume ?? 1),
@@ -1038,7 +1058,8 @@ export function createRoomClient({
       stats.playing = read.playing;
     }
     const expected =
-      message.position + (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+      localPosition(message.position, alignOffset) +
+      (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
     // The notice names a person, not a socket id. The room knows the name the
     // peer chose when it joined.
     const actor =
@@ -1193,6 +1214,21 @@ export function createRoomClient({
 
   // A page that hands its player in after the core starts swaps the adapter
   // here. A missing value goes back to the element adapter.
+  // A page that measured this copy offline can set the offset without a wire
+  // round trip. A number is a confident local measurement. The same rules
+  // apply to an object, and null clears it. This is the local-file path: a
+  // caller reads the JSON from disk and hands the object here.
+  function setAlignOffset(value) {
+    const payload =
+      value && typeof value === 'object'
+        ? value
+        : { offsetMs: Number(value), confidence: 1 };
+    const accepted = value === null || value === undefined ? null : acceptOffset(payload);
+    alignOffset = accepted ? accepted.offsetMs : 0;
+    alignState = accepted;
+    return accepted;
+  }
+
   function setMediaAdapter(next) {
     media = next || new MediaAdapter({ root: mediaRoot });
     return media;
@@ -1385,6 +1421,20 @@ export function createRoomClient({
         // The relay fans out to every socket including our own; a page handler
         // should not see its own message come back.
         if (message.peerId === peerId) return { ok: true, ignored: 'self' };
+        // An alignment measurement is the one app message the room reads
+        // itself. A peer may not push one faster than once a second, and a
+        // payload with a bad field is dropped rather than repaired. This is
+        // a claim about the sender's copy, so it is recorded but never applied
+        // to the receiver's player. One peer's offset must not move another's.
+        if (message.name === APP_NAME) {
+          if (!state.allowAlign(message.peerId)) return { ok: true, ignored: 'align-rate' };
+          const accepted = acceptOffset(message.data);
+          if (!accepted) return { ok: true, ignored: 'align-payload' };
+          alignPeers.set(message.peerId, { ...accepted, at: Math.round(local) });
+          stats.appReceived += 1;
+          stats.lastApp = { peerId: message.peerId, name: message.name, data: message.data };
+          return { ok: true, align: true, peerId: message.peerId };
+        }
         stats.appReceived += 1;
         stats.lastApp = { peerId: message.peerId, name: message.name, data: message.data };
         if (!onApp) return { ok: true };
@@ -1631,6 +1681,7 @@ export function createRoomClient({
       samples: samples.slice(-sampleLimit),
       clockOffset: Math.round(clock.offset()),
       driftRate: drift.rate,
+      align: alignState,
       peers: state.peers.size,
       // The panel needs names and who holds control. The count stays a number so
       // the harness assertions do not change.
@@ -1732,6 +1783,7 @@ export function createRoomClient({
       return media;
     },
     setMediaAdapter,
+    setAlignOffset,
     cursor,
     stats,
   };

@@ -1457,3 +1457,63 @@ test('a peer custom cursor and the name switch reach the drawn position', () => 
   assert.equal(shared.at(-1).showName, false);
   assert.equal(client.publish().cursors, 1);
 });
+
+test('a local copy offset changes the drift by exactly that offset', () => {
+  function clientAt(offsetMs) {
+    let local = 5000;
+    const video = fakeVideo();
+    video.currentTime = 14.1;
+    const client = createRoomClient({
+      role: 'peer',
+      peerId: 'peer',
+      hostId: 'host',
+      now: () => local,
+      mediaRoot: { querySelectorAll: () => [video] },
+      alignOffset: offsetMs,
+      send: () => {},
+    });
+    return { client, video, at: (ms) => (local = ms) };
+  }
+
+  const plain = clientAt(0);
+  const shifted = clientAt(-4100);
+  const frame = (position, roomTime) =>
+    encode({ type: 'media', key: KEY, action: 'tick', position, roomTime, playing: false });
+
+  plain.at(5000);
+  shifted.at(5000);
+  const before = plain.client.receive(frame(10, 5000), 5000);
+  const after = shifted.client.receive(frame(10, 5000), 5000);
+
+  // The copy with the trimmed head expects room time 10 at its own 5.9, so
+  // the same real position produces 4.1 s more drift.
+  assert.equal(before.driftMs, 4100);
+  assert.equal(after.driftMs, 8200);
+  assert.equal(after.driftMs - before.driftMs, 4100);
+});
+
+test('a remote alignment claim is rate limited and never moves this peer', () => {
+  let local = 1000;
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+  });
+  const claim = (offsetMs) =>
+    encode({
+      type: 'app',
+      peerId: 'p2',
+      name: 'align.offset',
+      data: { offsetMs, confidence: 0.9 },
+    });
+
+  assert.equal(client.receive(claim(4100), 1000).align, true);
+  assert.equal(client.receive(claim(4100), 1500).ignored, 'align-rate');
+  local = 2100;
+  assert.equal(client.receive(claim(9999), 2100).align, true);
+  assert.equal(client.publish().align, null, 'the claim belongs to its sender');
+  assert.equal(client.stats.appReceived, 2);
+});

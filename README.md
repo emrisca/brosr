@@ -15,7 +15,7 @@ packs. Google Chrome 137 and later ignore the flag that loads an unpacked add-on
 room installs the three add-ons over the devtools pipe instead, with a helper process holding it
 open.
 
-Status: `v0.3.18` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
+Status: `v0.3.20` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
 
 ## Quick start for non-developers
 
@@ -24,9 +24,9 @@ You do not need Node, Rust or a checkout to try Brosr. Take the build for your m
 
 | Machine | File |
 | --- | --- |
-| macOS on Apple silicon | [`Brosr_0.3.18_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_aarch64.dmg) |
-| macOS on Intel | [`Brosr_0.3.18_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64.dmg) |
-| Windows, 64-bit | [`Brosr_0.3.18_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64-setup.exe) or [`Brosr_0.3.18_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.18/Brosr_0.3.18_x64_en-US.msi) |
+| macOS on Apple silicon | [`Brosr_0.3.20_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.20/Brosr_0.3.20_aarch64.dmg) |
+| macOS on Intel | [`Brosr_0.3.20_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.20/Brosr_0.3.20_x64.dmg) |
+| Windows, 64-bit | [`Brosr_0.3.20_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.20/Brosr_0.3.20_x64-setup.exe) or [`Brosr_0.3.20_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.20/Brosr_0.3.20_x64_en-US.msi) |
 
 The macOS build carries an ad hoc signature and no notarisation, so the first launch needs one
 extra step. Move Brosr to Applications, try to open it, then allow it in System Settings,
@@ -98,6 +98,7 @@ the invite fragment, so the relay forwards bytes it cannot read.
 | `spike/` | The M0 harness and the M1, M3 and M4 checks. It downloads its own Firefox. |
 | `zen/` | The older Zen lane: profile setup, the live window and the legacy docked panel. |
 | `relay/` | The axum relay. It forwards frames per room and serves the fixtures. |
+| `labs/align/` | The offline copy alignment lane: measure the offset between two copies of a film and write it for the room. |
 | `docs/m0-results.md` | What the M0 spike measured. |
 | `assets/` | The Brosr app icon. `brosr-icon.svg` is the source, and `node assets/render-icon.mjs` draws the 1024 pixel `brosr-icon.png` from it. The 16 to 256 pixel copies feed the extension manifest and the app surfaces only. `node assets/icons.mjs` rebuilds the copies and `brosr.ico`. `assets/windows-shortcut.ps1` writes a Windows shortcut and tile from that ICO. |
 

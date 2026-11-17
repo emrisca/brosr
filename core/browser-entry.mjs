@@ -473,6 +473,15 @@ export async function start() {
   const hostId = config.hostId || 'host';
   const name = config.name || peerId;
   const roomName = cleanRoomName(config.roomName || 'Room');
+  // A measurement written for this room is local to this browser. A null or
+  // malformed value means no offset, which is the same room as before.
+  const savedAlign = (() => {
+    try {
+      return JSON.parse(readSetting(`brosr-align:${room}`) || 'null');
+    } catch {
+      return null;
+    }
+  })();
   const savedColour = readSetting('brosr-colour');
   const colour = isColour(savedColour) ? savedColour : randomColour();
   const savedCursor = cleanCursor((() => {
@@ -650,6 +659,7 @@ export async function start() {
     name,
     colour,
     roomName,
+    alignOffset: savedAlign || 0,
     customCursor: savedCursor,
     sharePointer,
     sameFate,
@@ -1435,6 +1445,19 @@ export async function start() {
         const next = client.setRoomName(message.roomName);
         publish();
         return reply({ ok: true, roomName: next });
+      }
+      if (message.type === 'brosr:align-offset') {
+        // A local tool can read the measurement from disk and send this to the
+        // room tab. The value is never taken from the relay.
+        const accepted = client.setAlignOffset({
+          offsetMs: message.offsetMs,
+          confidence: message.confidence === undefined ? 1 : message.confidence,
+          fingerprint: message.fingerprint,
+        });
+        if (!accepted) return reply({ ok: false, reason: 'bad-offset' });
+        writeSetting(`brosr-align:${room}`, JSON.stringify(accepted));
+        publish();
+        return reply({ ok: true, align: accepted });
       }
       if (message.type === 'brosr:colour') {
         if (!client.setColour(message.colour)) {

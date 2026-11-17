@@ -1,5 +1,6 @@
-// Room state: who is here, what sequence the room is at, and the two rate
-// limits from Section 10 of ../docs/plan.md. It holds no transport and no DOM.
+// Room state: who is here, what sequence the room is at, and the rate limits
+// from Section 10 of ../docs/plan.md. It holds no transport and no DOM.
+import { ALIGN_GAP_MS } from './align.mjs';
 
 export const MAX_INPUT_PER_SECOND = 120;
 export const MAX_NAV_PER_SECOND = 1;
@@ -30,6 +31,10 @@ export class Room {
     this.sequence = 0;
     this.inputSeq = new Map();
     this.inputWindow = new Map();
+    // An alignment claim is a fact about two files, not a stream. One per
+    // peer per second is enough, and the same map that follows presence also
+    // drops it on leave.
+    this.alignWindow = new Map();
     this.navWindow = null;
     this.url = null;
     this.scroll = 0;
@@ -48,6 +53,7 @@ export class Room {
   leave(id) {
     this.inputSeq.delete(id);
     this.inputWindow.delete(id);
+    this.alignWindow.delete(id);
     this.seen.delete(id);
     return this.peers.delete(id);
   }
@@ -101,6 +107,14 @@ export class Room {
     const now = this.now();
     if (this.navWindow !== null && now - this.navWindow < 1000 / MAX_NAV_PER_SECOND) return false;
     this.navWindow = now;
+    return true;
+  }
+
+  allowAlign(peerId = this.peerId) {
+    const now = this.now();
+    const last = this.alignWindow.get(peerId);
+    if (last !== undefined && now - last < ALIGN_GAP_MS) return false;
+    this.alignWindow.set(peerId, now);
     return true;
   }
 

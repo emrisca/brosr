@@ -8,6 +8,7 @@ script and a Node test drive the same modules.
 | `protocol.mjs` | Message types including page app messages, validation, the 16 KB frame ceiling, input splitting |
 | `clock.mjs` | Four-timestamp offset, smallest round trip wins, a re-measure every 30 s |
 | `drift.mjs` | Seek over 300 ms, rate nudge over 40 ms, pause for buffering and ads |
+| `align.mjs` | Copy offset: accept and clamp a measured gap, turn room time into this peer's position |
 | `media.mjs` | `HTMLMediaElement` adapter keyed by a source URL |
 | `youtube.mjs` | YouTube IFrame player adapter, with an element view for the room |
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
@@ -56,7 +57,7 @@ Each one cost a spike run to learn.
 5. An input frame names its sender. The receiver looks up the grant by peer, and it refuses a
    frame without `peerId`.
 
-`npm test` runs 167 tests with the Node test runner and no dependencies. The wire test also runs
+`npm test` runs 252 tests with the Node test runner and no dependencies. The wire test also runs
 against the axum relay when `RELAY_BIN` names its binary.
 
 A room whose invite carries a key seals every frame it sends, and it drops an unsealed frame

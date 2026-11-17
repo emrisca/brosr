@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ALIGN_GAP_MS } from '../align.mjs';
 import { Room, MAX_INPUT_PER_SECOND, PEER_TTL_MS } from '../room.mjs';
 
 function fixedClock(value = 0) {
@@ -141,4 +142,16 @@ test('a snapshot carries the page, and a joiner adopts it', () => {
   joiner.applySnapshot(host.snapshot());
   assert.equal(joiner.url, 'https://example.test/page');
   assert.equal(joiner.scroll, 0.42);
+});
+
+test('an alignment claim is limited to one per peer per second', () => {
+  const now = fixedClock(0);
+  const room = new Room({ role: 'peer', peerId: 'me', now });
+  assert.equal(room.allowAlign('bob'), true);
+  assert.equal(room.allowAlign('bob'), false);
+  assert.equal(room.allowAlign('alice'), true, 'one peer does not silence another');
+  now.advance(ALIGN_GAP_MS - 1);
+  assert.equal(room.allowAlign('bob'), false);
+  now.advance(1);
+  assert.equal(room.allowAlign('bob'), true);
 });
