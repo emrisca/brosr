@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoomClient } from '../sync.mjs';
+import { createRoomClient, STUTTER_MAX_MS } from '../sync.mjs';
 import { encode } from '../protocol.mjs';
 import { RemoteMediaSync } from '../media-relay.mjs';
 
@@ -181,6 +181,35 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(applied.ok, true);
   assert.equal(video.paused, false);
+});
+
+test('a hold with no recovery report releases itself', () => {
+  let local = 1000;
+  const holds = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    send: () => {},
+    onMedia: () => true,
+    onHold: (hold) => holds.push(hold),
+  });
+
+  const starved = { key: KEY, position: 12, playing: true, buffering: true };
+  host.noteMedia(starved, 1000);
+  host.noteMedia(starved, 1600);
+  assert.equal(host.publish().stutter.active, true);
+  assert.equal(holds.at(-1).active, true);
+
+  // A player paused under the hold sends no further sample, so silence has to
+  // release the room instead of freezing every player for the session.
+  local = 1600 + STUTTER_MAX_MS + 1;
+  // publish() is what the page loop runs, so the expiry must happen there.
+  assert.equal(host.publish().stutter.active, false);
+  assert.equal(holds.at(-1).active, false);
 });
 
 test('a held film stays paused until the release carries the resume point', () => {

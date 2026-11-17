@@ -35,6 +35,9 @@ export const HOST_MEDIA_PRIORITY_MS = 1500;
 // A starved player reports every tick. One low sample is not worth holding the
 // whole room, so a stutter has to survive this long before it travels.
 export const STUTTER_GRACE_MS = 500;
+// A player paused under a hold may stop reporting, so a hold that nobody
+// clears must release on its own instead of freezing the room forever.
+export const STUTTER_MAX_MS = 10000;
 // The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
 // fresh target, and the overlay eases between them.
 export const PRESENCE_TICK_MS = 33;
@@ -625,6 +628,24 @@ export function createRoomClient({
     stutters.clear();
     stats.holds = 0;
     notifyHold();
+  }
+
+  // Silence is not a release. A film paused under a hold stops sending the
+  // buffering flag that would clear it, so the host drops an old hold and tells
+  // the room, because the starved tab may never send its recovery frame.
+  function expireHolds(local) {
+    if (!stutters.size) return false;
+    let expired = false;
+    for (const [peer, hold] of [...stutters]) {
+      if (local - Number(hold.at || local) < STUTTER_MAX_MS) continue;
+      stutters.delete(peer);
+      expired = true;
+      if (isHost()) broadcastStutter(peer, false, hold, local);
+    }
+    if (!expired) return false;
+    stats.holds = stutters.size;
+    notifyHold();
+    return true;
   }
 
   function sendFate() {
@@ -1507,6 +1528,7 @@ export function createRoomClient({
   }
 
   function tick(local = now()) {
+    expireHolds(local);
     // A dropped socket leaves its entry behind. The count only means live peers
     // once the map forgets a peer that stopped sending presence.
     const held = new Set(grants.active().map((grant) => grant.peerId));
@@ -1581,6 +1603,10 @@ export function createRoomClient({
   }
 
   function publish() {
+    // The page loop publishes on a timer and never calls tick(), so a hold that
+    // stopped hearing recovery reports has to expire here or it freezes the
+    // room for the rest of the session.
+    expireHolds(now());
     const grantedPeers = new Set(grants.active().map((grant) => grant.peerId));
     return {
       role: currentRole,
