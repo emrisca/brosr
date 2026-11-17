@@ -9,10 +9,11 @@ media controls show up in every other window. Brosr sends no video. A room costs
 10 KB/s per peer. A screen share needs 2 Mbps on a bad link.
 
 A room starts in a browser Brosr picks and runs with its own profile, plus a bridge extension, a
-room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. Brave
-runs the Chromium lane with uBlock Origin Lite and P-Stream, loaded as unpacked packs. Google
-Chrome refuses the flag that loads a local add-on from version 137, so Chrome appears in the
-list with that reason.
+room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. A
+Chromium build runs the same lane with uBlock Origin Lite and P-Stream, loaded as unpacked
+packs. Google Chrome 137 and later ignore the flag that loads an unpacked add-on, so a Chrome
+room installs the three add-ons over the devtools pipe instead, with a helper process holding it
+open.
 
 Status: `v0.3.18` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
 
@@ -34,6 +35,38 @@ click More info, then Run anyway.
 
 There is no Linux build yet, and no `.AppImage` to download. The release workflow builds macOS
 and Windows only.
+
+## Browser support
+
+A room runs in its own profile of a browser Brosr starts, so a build works once the bridge
+installs into it. The app lists every build it found on the machine and greys out one it cannot
+use.
+
+| Browser | Engine | Status | What works | What to know |
+| --- | --- | --- | --- | --- |
+| Firefox 140 or newer | Gecko | Supported | Full uBlock Origin, the bridge and a room | Release and Beta need a signed bridge. Developer Edition and Nightly load an unsigned one |
+| Firefox Developer Edition | Gecko | Supported | The same, with an unsigned bridge | The lane to use for a build from a working tree |
+| Zen | Gecko | Supported | The same as Firefox | The lane this repository is developed in |
+| Brave | Chromium | Supported | uBlock Origin Lite, P-Stream and the bridge, as unpacked packs | No full uBlock Origin, because Chromium retired Manifest V2 |
+| Microsoft Edge | Chromium | Supported | The same as Brave | The same install path, and no measured run in this repository |
+| Chrome for Testing, Chromium | Chromium | Supported | The same as Brave | The CI browser lane runs Chrome for Testing |
+| Google Chrome 137 or newer | Chromium | Partial | The same three add-ons, installed over the devtools pipe | `--load-extension` is ignored, so a helper process holds the pipe open. If it cannot hold it, the launch stops with the reason |
+| LibreWolf, Floorp, Waterfox | Gecko | Partial | The bridge should load as it does in Firefox | Offered when installed, never measured here |
+| Safari and other WebKit browsers | WebKit | Blocked | Nothing | The bridge is a Gecko or Chromium add-on. WebKit runs Safari extensions only |
+| Vivaldi, Opera, Arc and other Chromium forks | Chromium | Not detected | Nothing offered | Not in the browser catalogue, and nothing was measured |
+| Any browser on a phone or tablet | None | Blocked | Nothing | No mobile lane. A room needs a desktop browser, a profile and an unpacked add-on |
+
+A Firefox build older than 140 stays in the list with `Needs Gecko 140` and cannot be picked.
+The bridge is a Manifest V2 add-on with a background page, and 140 is the first build it
+targets.
+
+Partial means one of two things here. Chrome works and the add-on path differs. The three Gecko
+forks are found and offered, and no run in this repository covers them, so treat that group as
+untested rather than supported.
+
+The blocker, the install path and the remote protocol differ by engine. The protocol, the
+relay, the clock, the cursor overlay and the media policy do not. [docs/engines.md](docs/engines.md)
+compares the two lanes side by side.
 
 ## How a room fits together
 
@@ -231,6 +264,7 @@ and reviews.
 
 - [docs/README.md](docs/README.md) indexes the design, one file per subject.
 - [docs/design.md](docs/design.md) states what works per use case and what a room cannot do.
+- [docs/engines.md](docs/engines.md) compares the Gecko and Chromium lanes side by side.
 - [docs/sync.md](docs/sync.md) covers the layers, the protocol and the media policy.
 - [docs/milestones.md](docs/milestones.md) tracks M0 to M8 with the as-built notes.
 - [core/README.md](core/README.md) explains the modules and the five rules the code depends on.
