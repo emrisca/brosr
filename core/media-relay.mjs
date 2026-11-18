@@ -182,6 +182,13 @@ export function projectPosition(state, now = Date.now()) {
 // its own. A stale copy reads as no copy.
 export const RELAY_STALE_MS = 8000;
 
+// A hold is carried by a single frame, and that frame can be lost. The source
+// that stuttered normally sends the release, but a peer that just lost control
+// cannot send anything, and a room tab that restarted forgot the hold it was
+// carrying. A tab that waits forever for a release freezes the film for the
+// rest of the session, so a hold also expires on its own.
+export const RELAY_HOLD_MAX_MS = 15000;
+
 export function freshState(state, now = Date.now(), staleMs = RELAY_STALE_MS) {
   if (!state || typeof state !== 'object') return null;
   const at = Number(state.at);
@@ -391,7 +398,8 @@ export class RemoteMediaSync {
     // Without this flag a routine host tick would start it again underneath
     // the hold.
     this.held = false;
-    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, holds: 0, last: null };
+    this.heldAt = 0;
+    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, holds: 0, expiredHolds: 0, last: null };
   }
 
   video() {
@@ -426,15 +434,22 @@ export class RemoteMediaSync {
     if (frame.hold === true) {
       if (!video.paused) video.pause();
       this.held = true;
+      this.heldAt = now;
       this.stats.holds += 1;
       this.stats.last = 'hold';
       return { ok: true, action: 'hold' };
     }
     if (this.held && frame.hold !== false) {
-      if (!video.paused) video.pause();
-      this.stats.skips += 1;
-      this.stats.last = 'held';
-      return { ok: true, skipped: 'held' };
+      if (now - this.heldAt < RELAY_HOLD_MAX_MS) {
+        if (!video.paused) video.pause();
+        this.stats.skips += 1;
+        this.stats.last = 'held';
+        return { ok: true, skipped: 'held' };
+      }
+      // The release never came. Honour the hold for its lifetime and then
+      // follow the room again rather than stay paused until a page reload.
+      this.held = false;
+      this.stats.expiredHolds += 1;
     }
     if (frame.hold === false) this.held = false;
     // The host sits in an ad, so its frame names the ad clock and not the film.

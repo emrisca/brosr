@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomClient, STUTTER_MAX_MS } from '../sync.mjs';
 import { encode } from '../protocol.mjs';
-import { RemoteMediaSync } from '../media-relay.mjs';
+import { RELAY_HOLD_MAX_MS, RemoteMediaSync } from '../media-relay.mjs';
 
 const KEY = 'http://127.0.0.1:8787/media/clip.webm';
 
@@ -231,4 +231,74 @@ test('a held film stays paused until the release carries the resume point', () =
   sync.handle({ key: KEY, position: 10, playing: true, hold: false, at: now });
   assert.equal(sync.held, false);
   assert.equal(video.paused, false);
+});
+
+test('a hold whose release was lost cannot freeze the film for the session', () => {
+  let now = 10000;
+  const video = fakeVideo();
+  video.paused = false;
+  const sync = new RemoteMediaSync({
+    document: { querySelector: () => video },
+    href: KEY,
+    hostname: '127.0.0.1',
+    now: () => now,
+  });
+
+  assert.equal(
+    sync.handle({ key: KEY, position: 10, playing: true, hold: true, at: now }).action,
+    'hold'
+  );
+  assert.equal(sync.held, true);
+  assert.equal(video.paused, true);
+
+  // The release frame never arrived. It is one frame and it can be lost: the
+  // room tab restarts and forgets the hold it carried, or the frame lands
+  // while the film tab is unreachable. Without a deadline the tab honours the
+  // hold for the rest of the session and only a reload brings the film back.
+  now += RELAY_HOLD_MAX_MS + 1;
+  const resumed = sync.handle({ key: KEY, position: 10, playing: true, at: now });
+  assert.equal(sync.held, false);
+  assert.notEqual(resumed.skipped, 'held');
+  assert.equal(video.paused, false);
+});
+
+test('revoking control drops the hold that peer left on the host', () => {
+  let local = 2000;
+  const holds = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    send: () => {},
+    onMedia: () => true,
+    onHold: (hold) => holds.push(hold),
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'brave',
+      key: KEY,
+      position: 12,
+      playing: true,
+      active: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(host.publish().stutter.active, true);
+  assert.equal(holds.at(-1).active, true);
+
+  // A peer that loses control can no longer send the recovery frame for its
+  // stutter, so the hold would sit on the film until the ten second expiry.
+  // It has to go at the moment control does.
+  local += 1000;
+  host.setGrant('brave', false);
+  assert.equal(host.publish().stutter.active, false);
+  assert.equal(holds.at(-1).active, false);
 });

@@ -538,7 +538,17 @@ export function createRoomClient({
     const tabId = '*';
     const origin = '';
     if (allowed) grants.grant(peer, { tabId, origin });
-    else grants.revoke(peer, tabId);
+    else {
+      grants.revoke(peer, tabId);
+      // A peer that loses control can no longer send its recovery frame, and
+      // the host ignores a stutter from an ungranted peer. Its hold would sit
+      // on the film until the expiry with nobody able to release it, so the
+      // hold goes at the moment control does.
+      if (stutters.delete(peer)) {
+        stats.holds = stutters.size;
+        notifyHold();
+      }
+    }
     sendMessage({ type: 'control', peerId: peer, allowed, tabId, origin, roomTime: roomTimeOf() });
     stats.controlSent += 1;
     stats.sentControls.push({
