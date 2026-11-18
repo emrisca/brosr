@@ -252,6 +252,10 @@ body::before {
   position: relative;
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
+  /* Both axes are declared so every rank claims one eighth of the board. Left
+     implicit, an auto row sizes to the pieces in it, so the ranks holding
+     pieces grow taller than the empty ones and the tiles stop matching. */
+  grid-template-rows: repeat(8, minmax(0, 1fr));
   width: 100%;
   height: 100%;
   overflow: hidden;

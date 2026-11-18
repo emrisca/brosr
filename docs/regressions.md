@@ -30,6 +30,7 @@ crosses that boundary does not count.
 | Notes stays dark in a light room | The page carried one colour scheme and no light rules, so the sheet sat on a black stage | `scripts/check-room-apps-layout.mjs` |
 | A notes toolbar letter is too small to hit | The letter buttons shrank to their glyph and the row gave one of them 23 px of width | `scripts/check-room-apps-layout.mjs` |
 | Chess seats and move counts sit at 10 px | The seat label, the session state and the move count used a size meant for the board coordinates | `scripts/check-room-apps-layout.mjs` |
+| Chess squares change size between ranks | The board declared eight columns and no rows, so each implicit auto row sized to the pieces inside it and the ranks holding pieces grew taller than the empty ones | `scripts/check-room-apps-layout.mjs` |
 
 ## The rules
 

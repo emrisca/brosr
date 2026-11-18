@@ -162,6 +162,7 @@ const snapshot = (app) => `(() => {
     if (childBox.right > parentRight + 0.5) spill.push({ name: name(node), over: round(childBox.right - parentRight) });
   }
   const title = titleNode;
+  const squares = [...document.querySelectorAll('.square')].map(box);
   const parts = {};
   for (const selector of ['.board', '.board-shell', '.editor', '.editor-wrap', '.toolbar', '.files', '.panel', '.workspace', '.status']) {
     const node = document.querySelector(selector);
@@ -178,6 +179,7 @@ const snapshot = (app) => `(() => {
     buttons,
     small,
     spill,
+    squares,
     parts,
     pageBg: getComputedStyle(document.body).backgroundColor,
     muted: muted ? getComputedStyle(muted).color : getComputedStyle(document.body).color,
@@ -346,9 +348,24 @@ try {
           `${app} at ${width} px draws a ${round(page.parts['.board'].width)}x${round(page.parts['.board'].height)} board`
         );
       }
+
+      // 6. Every square on the board is the same size. Rows that grow with
+      // their contents make the ranks with pieces taller than the empty ones.
+      if (page.squares.length === 64) {
+        const spread = (values) => round(Math.max(...values) - Math.min(...values));
+        const widths = page.squares.map((square) => square.width);
+        const heights = page.squares.map((square) => square.height);
+        if (spread(widths) > 0.5 || spread(heights) > 0.5) {
+          fail(
+            `${app} at ${width} px draws squares ${round(Math.min(...widths))} to ${round(Math.max(...widths))} px wide and ${round(Math.min(...heights))} to ${round(Math.max(...heights))} px tall`
+          );
+        } else {
+          pass(`${app} at ${width} px keeps all 64 squares the same size`);
+        }
+      }
     }
 
-    // 6. The app answers both colour schemes. A page that keeps one set of
+    // 7. The app answers both colour schemes. A page that keeps one set of
     // colours in light and dark fails here, and so does a muted label under
     // 4.5:1 on its own panel.
     const themes = {};
