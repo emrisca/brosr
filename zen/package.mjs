@@ -20,6 +20,7 @@ const CORE = [
   'cursor.mjs',
   'clock.mjs',
   'drift.mjs',
+  'align.mjs',
   'media.mjs',
   'room.mjs',
   'overlay.mjs',

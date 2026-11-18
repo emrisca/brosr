@@ -24,6 +24,7 @@ const CORE = [
   'protocol.mjs',
   'clock.mjs',
   'drift.mjs',
+  'align.mjs',
   'media.mjs',
   'room.mjs',
   'overlay.mjs',
