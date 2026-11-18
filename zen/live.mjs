@@ -3,7 +3,8 @@
 // shortcut chord, so the sidebar opens expanded. If no sidebar report arrives,
 // it falls back to a panel tab. Nothing is killed on the way out, so the window
 // stays usable by hand. Pass --bridge=built to run the unsigned build in
-// zen/.runtime/bridge.xpi instead of the signed copy.
+// zen/.runtime/bridge.xpi instead of the signed copy, and --dock to dock the
+// panel, which costs the window its Google sign in.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -39,6 +40,12 @@ const NAME = arg('name', 'Host');
 // ciphertext and the relay captures bytes it cannot read.
 const ROOM_KEY = arg('key', '') || newRoomKey();
 const MARIONETTE = Number(arg('marionette', 2828));
+// The panel docks through chrome scope, which only Marionette reaches. Gecko
+// also sets navigator.webdriver while Marionette listens, and Google reads that
+// flag and refuses a sign in with "this browser is not secure". Turning the pref
+// off after the dock does not stop the listener, so the dock is the only reason
+// to carry Marionette and it is opt in.
+const DOCK = process.argv.includes('--dock');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(...args);
 
@@ -101,6 +108,24 @@ function portFree(port) {
     socket.once('error', () => done(true));
     socket.setTimeout(600, () => done(true));
   });
+}
+
+// The launch command is exported, so a test can hold the Marionette boundary
+// without starting a browser. Gecko sets navigator.webdriver whenever Marionette
+// listens, and Google reads that flag and refuses a sign in, so it rides in only
+// for a docked panel.
+export function roomArgs({ profile, port, dock, width = 1440, height = 900 } = {}) {
+  const args = [
+    '--profile',
+    profile,
+    '--no-remote',
+    '--new-instance',
+    '--remote-debugging-port',
+    String(port),
+  ];
+  if (dock) args.push('--marionette');
+  args.push('--width', String(width), '--height', String(height), 'about:blank');
+  return args;
 }
 
 function keypostPath() {
@@ -185,17 +210,12 @@ async function main() {
     await waitHealth();
   }
 
-  const marionetteFree = await portFree(MARIONETTE);
-  const browserArgs = [
-    '--profile',
-    PROFILE,
-    '--no-remote',
-    '--new-instance',
-    '--remote-debugging-port',
-    String(PORT),
-  ];
-  if (marionetteFree) browserArgs.push('--marionette');
-  browserArgs.push('--width', '1440', '--height', '900', 'about:blank');
+  const marionetteFree = DOCK ? await portFree(MARIONETTE) : false;
+  const browserArgs = roomArgs({
+    profile: PROFILE,
+    port: PORT,
+    dock: DOCK && marionetteFree,
+  });
 
   const browser = spawn(
     zen,
@@ -231,15 +251,20 @@ async function main() {
     // script polls, so it docks the panel as soon as the sidebar opens.
     // The dock is a nicety. A window without Marionette still gets the room and
     // the panel, so a refused dock records the error instead of ending the run.
-    const dock = marionetteFree
-      ? await dockPanel({ port: MARIONETTE, open: true }).catch((error) => ({
-          injected: false,
-          geometry: null,
-          error: error.message,
-        }))
-      : { injected: false, geometry: null, error: `marionette port ${MARIONETTE} is busy` };
+    const dock = !DOCK
+      ? { injected: false, geometry: null, skipped: 'no --dock' }
+      : marionetteFree
+        ? await dockPanel({ port: MARIONETTE, open: true }).catch((error) => ({
+            injected: false,
+            geometry: null,
+            error: error.message,
+          }))
+        : { injected: false, geometry: null, error: `marionette port ${MARIONETTE} is busy` };
     result.dock = dock;
     log('[live] dock', JSON.stringify(dock));
+    if (!DOCK) {
+      log('[live] no --dock: the window starts without Marionette, so Google sign-in works');
+    }
 
     const bidi = await connect();
     // The window reads the add-on from the profile at startup, so this reads what
@@ -409,7 +434,7 @@ async function main() {
     );
     log('[live] relay', result.relay.reused ? 'reused' : `pid ${result.relay.pid}`);
     log('[live] uBlock Origin', prepared.blocker ? 'installed' : 'missing');
-  log('[live] zen pid', browser.pid, 'port', PORT);
+    log('[live] zen pid', browser.pid, 'port', PORT);
     log('[live] room', base);
     log('[live] sealed invite', invite);
     if (result.panel && result.panel.mode === 'window') {
@@ -439,7 +464,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('[live]', error.message);
-  process.exit(1);
-});
+// The argument builder is exported, so an import must not start a browser.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('[live]', error.message);
+    process.exit(1);
+  });
+}

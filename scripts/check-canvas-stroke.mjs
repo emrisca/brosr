@@ -169,13 +169,18 @@ try {
   tabs.push(tab);
   await tab.send('Page.enable');
   await tab.send('Runtime.enable');
-  const page = `${base}/canvas/?room=${encodeURIComponent(ROOM)}`;
+  const page = `${base}/canvas/?room=${encodeURIComponent(ROOM)}&name=Ana`;
   await tab.send('Page.navigate', { url: page });
   await waitFor(
     () => tab.eval('document.readyState === "complete" && !!document.getElementById("sheet")'),
     page
   );
   await sleep(1200);
+
+  // The room already knows this person's name, so the page reads it from the
+  // room URL instead of asking for it again.
+  const label = await tab.eval('document.getElementById("name").value');
+  if (label !== 'Ana') throw new Error(`the page opened with "${label}" instead of the room name`);
 
   const start = await tab.eval(COUNT);
   if (!start) throw new Error('the page has no sheet canvas');
@@ -186,10 +191,24 @@ try {
   console.log(`  peer page opened ${start.width}x${start.height} with ${start.n} pixels of ${COLOUR}`);
 
   const socket = new WebSocket(`${base.replace(/^http/, 'ws')}/room?room=${encodeURIComponent(ROOM)}`);
+  // The page announces its name every few seconds, so a probe that joins later
+  // still reads the label the room gave it.
+  const here = [];
+  socket.addEventListener('message', (event) => {
+    try {
+      const frame = JSON.parse(event.data);
+      if (frame && frame.type === 'app' && frame.data && frame.data.op === 'here') {
+        here.push(frame.data.name);
+      }
+    } catch {
+      // The relay sends frames of its own, and they are not this check's.
+    }
+  });
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
     socket.addEventListener('error', () => reject(new Error('room socket')), { once: true });
   });
+  await waitFor(() => here.includes('Ana'), 'the page to announce the room name', 8000);
   socket.send(
     JSON.stringify({
       v: 1,

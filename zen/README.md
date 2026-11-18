@@ -218,11 +218,15 @@ the browser for the popup, so it never opens a window of its own.
 ## Run it
 
 One command starts a room from the `brosr` directory. It builds the profile, starts the relay,
-installs the bridge, opens the host room and docks the panel.
+installs the bridge, opens the host room and opens the room panel.
 
 ```sh
 node zen/live.mjs --room=demo
 ```
+
+The window starts without Marionette, so `navigator.webdriver` stays false and a Google sign in
+works in the room. Pass `--dock` to dock the panel into the sidebar, which starts Zen with
+`--marionette` and turns sign in off for that window.
 
 It leaves the browser and the relay running, so the window stays usable by hand, and it writes
 `zen/.runtime/live.json`. `--bridge=built` uses the unsigned build in
@@ -253,10 +257,11 @@ browser consumes the chord. A spawned Mac window still does not take activation,
 no proof from a frontmost window.
 
 `live.mjs` does that hand setup in one step. It starts the relay and a headful Zen window on a
-persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. It then docks
-the panel through Marionette, which is why Zen starts with `--marionette`. The panel reports its
-own width, so the run records `mode` as `popup` or `tab`. It falls back to a panel tab
-when no report arrives. It leaves both processes running and writes `zen/.runtime/live.json`.
+persistent profile, installs the bridge, opens a host room and sends Ctrl+Alt+B. With `--dock` it
+then docks the panel through Marionette, which starts Zen with `--marionette`, and a window
+without that flag keeps Google sign in. The panel reports its own width, so the run records
+`mode` as `popup` or `tab`. It falls back to a panel tab when no report arrives. It leaves both
+processes running and writes `zen/.runtime/live.json`.
 
 `node assets/icons.mjs` rebuilds the 16 to 256 pixel copies and `brosr.ico` from
 `assets/brosr-icon.png`. Those files are the app icon. `assets/windows-shortcut.ps1` writes a
@@ -293,8 +298,11 @@ missing, unsigned, or behind the source manifest. A release can refuse the gap t
 - The panel's Ctrl+Alt+B command registers, and `browser.commands.getAll()` returns it. The
   Windows console proved the chord from a foreground window. The Mac run posted it to the Zen
   process and opened the panel. A Mac window that takes activation is still untested.
-- A room does not create a space. That needs the session store format, and the plan does not
-  guess at it.
+- A window starts without Marionette, so `navigator.webdriver` stays false and Google sign in
+  works. The dock needs Marionette, and Gecko sets that flag while the listener runs, so a docked
+  panel turns sign in off. `dom.webdriver.enabled` was removed in Gecko 88, and clearing
+  `marionette.enabled` after the dock leaves the port listening, so one window cannot have both.
+- A room does not create a space. That needs the session store format, and the plan does not guess at it.
 - A tile dropped on the room panel lands in `brosr.sites.panel`. The panel page runs in the
   extension and cannot read that pref. The dock hands the list to the panel as a URL parameter
   and reloads only the extension sidebar. A reload can lag by up to 4s.

@@ -396,9 +396,32 @@ try {
           pass(`${app} at ${width} px keeps every piece inside its square`);
         }
       }
+
+      // 8. An empty note keeps its sheet at the width of the pane. A sheet
+      // that shrinks to its text turns a blank note into a narrow strip.
+      if (page.parts['.editor'] && page.parts['.editor-wrap']) {
+        const sheet = page.parts['.editor'];
+        const pane = page.parts['.editor-wrap'];
+        if (sheet.width < Math.min(760, pane.width) - 120) {
+          fail(
+            `${app} at ${width} px draws a ${round(sheet.width)} px sheet in a ${round(pane.width)} px pane`
+          );
+        } else {
+          pass(
+            `${app} at ${width} px keeps the sheet ${round(sheet.width)} px wide in a ${round(pane.width)} px pane`
+          );
+        }
+        const leftGap = sheet.left - pane.left;
+        const rightGap = pane.right - sheet.right;
+        if (Math.abs(leftGap - rightGap) > 2) {
+          fail(
+            `${app} at ${width} px puts the sheet ${round(leftGap)} px from the left and ${round(rightGap)} px from the right`
+          );
+        }
+      }
     }
 
-    // 8. The app answers both colour schemes. A page that keeps one set of
+    // 9. The app answers both colour schemes. A page that keeps one set of
     // colours in light and dark fails here, and so does a muted label under
     // 4.5:1 on its own panel.
     const themes = {};

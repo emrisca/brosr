@@ -67,6 +67,10 @@ const MAX_POINTS = 20000;
 const HERE_MS = 3000;
 const HERE_TTL = 9000;
 const NAME_KEY = 'brosr.canvas.name';
+// The room URL already carries the name the person joined with. Canvas reads it
+// first, so the page carries the same name as the room line and the other apps
+// in the room instead of asking for it a second time.
+const ROOM_NAME = cleanName(new URLSearchParams(location.search).get('name'));
 // A live frame goes out at most every 60 ms, and a stroke nobody finished is
 // dropped from the sheet after 15 s.
 const LIVE_MS = 60;
@@ -3232,9 +3236,12 @@ window.addEventListener('resize', resize);
 // Start
 
 try {
-  nameInput.value = localStorage.getItem(NAME_KEY) || '';
+  const saved = localStorage.getItem(NAME_KEY) || '';
+  nameInput.value = ROOM_NAME || saved;
+  // A name from this room is the newer one, so it replaces the saved label.
+  if (ROOM_NAME && ROOM_NAME !== saved) localStorage.setItem(NAME_KEY, ROOM_NAME);
 } catch {
-  nameInput.value = '';
+  nameInput.value = ROOM_NAME;
 }
 nameInput.addEventListener('input', () => {
   try {

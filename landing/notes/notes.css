@@ -438,9 +438,11 @@ button:disabled {
   border-radius: 2px;
 }
 
+/* The sheet takes the width of its pane, not the width of its text. Auto
+   width with auto margins lets a grid cell shrink the page to a blank strip. */
 .editor {
-  width: auto;
-  max-width: 760px;
+  width: min(760px, calc(100% - 48px));
+  min-height: 0;
   margin: 24px auto;
   padding: 48px 56px;
   overflow-y: auto;
@@ -569,7 +571,8 @@ body.is-guest .doc-name {
   }
 
   .editor {
-    margin: 16px;
+    width: min(760px, calc(100% - 32px));
+    margin: 16px auto;
     padding: 28px 24px;
   }
 
