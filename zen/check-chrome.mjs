@@ -182,6 +182,9 @@ async function main() {
   fs.rmSync(profile, { recursive: true, force: true });
   fs.mkdirSync(profile, { recursive: true });
   const extension = buildChrome(path.join(runtime, 'bridge-chrome')).dir;
+  const bridgeVersion = JSON.parse(
+    fs.readFileSync(path.join(here, '..', 'bridge', 'manifest.json'), 'utf8')
+  ).version;
 
   const relayPort = await freePort(8787);
   const debugPort = await freePort(9400);
@@ -237,6 +240,11 @@ async function main() {
       if (data.source !== 'content-script') throw new Error(`source was ${data.source}`);
       if (data.socket !== 1) throw new Error(`socket was ${data.socket}`);
       if (!data.panelUrl) throw new Error('the content script did not publish a panel URL');
+      if (!data.build || data.build.version !== bridgeVersion) {
+        throw new Error(
+          `the content script reported bridge ${data.build && data.build.version}, expected ${bridgeVersion}`
+        );
+      }
 
       const status = await get(relayPort, `/status?room=${encodeURIComponent(room)}`);
       let peers = 0;

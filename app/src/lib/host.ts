@@ -81,14 +81,16 @@ export type Status = Run & {
   peers: number;
 };
 
-type Failure = { ok?: false; error?: string };
+type Failure = { ok?: false; error?: string; reason?: string };
 
 // One call, one JSON answer. A command that fails rejects with the text the
 // host wrote to stderr, so the screen can show it without a second lookup.
 async function host<T>(args: string[]): Promise<T> {
   const answer = await invoke<T & Failure>('host', { args });
   if (!answer || answer.ok === false) {
-    throw new Error(answer?.error || 'The host did not answer.');
+    const error = new Error(answer?.error || 'The host did not answer.');
+    if (answer?.reason) (error as Error & { reason?: string }).reason = answer.reason;
+    throw error;
   }
   return answer as T;
 }
@@ -109,12 +111,18 @@ export const start = (browser: string, name: string, roomName = 'Room', trusted 
 
 // The host app's room controls. Each call is one loopback round trip to the
 // host tab, so the browser remains the owner of the room state.
+export type BridgeBuild = {
+  version: string | null;
+  protocol: number | null;
+} | null;
+
 export type PanelPeer = {
   id: string;
   name: string;
   self?: boolean;
   granted?: boolean;
   colour?: string | null;
+  build?: BridgeBuild;
 };
 
 export type PanelTab = {
@@ -147,12 +155,32 @@ export type PanelState = {
   cursorForgot: string[];
   trust: boolean;
   trustTarget: string | null;
+  build?: BridgeBuild;
 };
 
-export const roomPanel = (
-  action: string,
-  values: Record<string, string | number | boolean> = {}
-) => {
+export type PanelAction =
+  | 'status'
+  | 'grant'
+  | 'cursor-site'
+  | 'cursor-forget'
+  | 'room-name'
+  | 'set'
+  | 'tab'
+  | 'trust';
+
+export type PanelValues = Partial<{
+  peerId: string;
+  allowed: boolean;
+  site: string;
+  on: boolean;
+  value: string;
+  key: string;
+  tabId: number;
+  shared: boolean;
+  url: string;
+}>;
+
+export const roomPanel = (action: PanelAction, values: PanelValues = {}) => {
   const args = ['panel', `--action=${action}`];
   for (const [key, value] of Object.entries(values)) args.push(`--${key}=${String(value)}`);
   return host<PanelState>(args);

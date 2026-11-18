@@ -12,6 +12,7 @@ import {
   cleanCursor,
   cleanCursorSites,
   cleanRoomName,
+  cursorDecision,
   cursorSiteOf,
   isColour,
   nextColour,
@@ -64,6 +65,21 @@ export const VIEW_TICK_MS = 50;
 export const SCROLL_EPSILON = 0.002;
 export const LATENCY_LIMIT = 5000;
 
+// A bridge build is the manifest version plus the protocol it speaks. A guest
+// that runs an older bridge can now be named instead of looking like a sync bug.
+export function cleanBuild(value) {
+  if (!value || typeof value !== 'object') return null;
+  const version = typeof value.version === 'string' && value.version.trim()
+    ? value.version.trim().slice(0, 40)
+    : null;
+  const rawProtocol = value.protocol;
+  const protocol =
+    rawProtocol === null || rawProtocol === undefined || !Number.isFinite(Number(rawProtocol))
+      ? null
+      : Number(rawProtocol);
+  return version || protocol !== null ? { version, protocol } : null;
+}
+
 export function createRoomClient({
   role = 'peer',
   room = 'room',
@@ -72,6 +88,9 @@ export function createRoomClient({
   name = 'peer',
   colour = '#e2603f',
   roomName = 'Room',
+  // The bridge manifest version and protocol this tab runs. It travels in the
+  // hello once, not in every pointer frame.
+  build = null,
   customCursor = null,
   sharePointer = true,
   // The host names the sites that show pointers. Null keeps the old same-site
@@ -123,6 +142,7 @@ export function createRoomClient({
   sampleLimit = 200,
   latencyLimit = 200,
 } = {}) {
+  const clientBuild = cleanBuild(build);
   const clock = new ClockEstimator({ now });
   // The controller holds a seek on the same clock and window as the settle
   // check below, so the two never disagree about when a seek may land.
@@ -243,6 +263,11 @@ export function createRoomClient({
   let lastPointerUrl = null;
   // The last frame that reached this tab, so a change can be named once.
   let lastMediaFrame = null;
+  // Why a remote pointer did not land. A silent filter looks like a broken
+  // cursor, so the panel reads the last reason and the counts.
+  const cursorDropCounts = {};
+  let lastCursorDrop = null;
+  let hostBuild = null;
 
   // The host can change. A room elects a successor when the host leaves, so
   // both the role and the host id stay mutable inside the client.
@@ -430,6 +455,7 @@ export function createRoomClient({
       colour: currentColour,
       roomName: currentRoomName,
       cursor: currentCursor,
+      ...(clientBuild ? { build: clientBuild } : {}),
       roomTime: roomTimeOf(),
     });
   }
@@ -454,7 +480,7 @@ export function createRoomClient({
     // A cursor image is close to the frame ceiling on its own. Sending every
     // peer's image inside one snapshot would overflow the frame, so the roster
     // travels first and each image follows in its own frame.
-    const snapshot = state.snapshot();
+    const snapshot = state.snapshot(clientBuild ? { build: clientBuild } : {});
     snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
     sendMessage(snapshot);
     if (!isHost()) return;
@@ -976,7 +1002,13 @@ export function createRoomClient({
         presenceByPeer.set(message.peerId, bucket);
       }
     }
-    state.join({ id: message.peerId, name: message.name, colour: message.colour });
+    const peerBuild = cleanBuild(message.build);
+    state.join({
+      id: message.peerId,
+      name: message.name,
+      colour: message.colour,
+      ...(peerBuild ? { build: peerBuild } : {}),
+    });
     const point = sharePoint(message.point);
     const position = {
       id: message.peerId,
@@ -1008,12 +1040,22 @@ export function createRoomClient({
     noteSite(message.url);
     // The host names the sites that show pointers. A peer on any other site
     // is not a cursor here, even when the two pages share an origin.
-    if (
-      !cursorSiteOf(message.url) ||
-      cursorSiteOf(message.url) !== cursorSiteOf(here) ||
-      !sitesAllowed(message.url)
-    ) {
-      // The peer moved to another site, so the cursor leaves this page.
+    const decision = cursorDecision({
+      peerUrl: message.url,
+      here,
+      sites: allowedSites,
+      sharePointer: message.sharePointer !== false,
+    });
+    if (!decision.allow) {
+      // The peer moved to another site, turned its pointer off, or the host
+      // switched that site off. Keep the reason for the panel.
+      cursorDropCounts[decision.reason] = (cursorDropCounts[decision.reason] || 0) + 1;
+      lastCursorDrop = {
+        peerId: message.peerId,
+        reason: decision.reason,
+        site: decision.site || null,
+        at: local,
+      };
       peerPoints.delete(message.peerId);
       peerSeen.delete(message.peerId);
       cursor.removePeer(message.peerId);
@@ -1267,6 +1309,8 @@ export function createRoomClient({
       case 'hello': {
         const joined = { id: message.peerId, name: message.name, colour: message.colour };
         if (message.cursor !== undefined) joined.cursor = cleanCursor(message.cursor);
+        const peerBuild = cleanBuild(message.build);
+        if (peerBuild) joined.build = peerBuild;
         state.join(joined);
         if (!isHost() && message.roomName) {
           currentRoomName = cleanRoomName(message.roomName);
@@ -1314,6 +1358,7 @@ export function createRoomClient({
       case 'input':
         return handleInput(message);
       case 'snapshot':
+        if (message.build) hostBuild = cleanBuild(message.build);
         state.applySnapshot(message);
         if (!isHost() && message.roomName) {
           currentRoomName = cleanRoomName(message.roomName);
@@ -1481,6 +1526,8 @@ export function createRoomClient({
     // pointer can land on any site this browser has open.
     const here = peer.url || lastPointerUrl || (pageUrl ? pageUrl() : null);
     if (here) message.url = here;
+    message.sharePointer = sharingPointer;
+    if (clientBuild) message.build = clientBuild;
     noteSite(here);
     sendMessage(message);
   }
@@ -1690,6 +1737,7 @@ export function createRoomClient({
         name: peer.name || peer.id,
         colour: peer.colour || null,
         cursor: peer.cursor || null,
+        build: peer.build || null,
         self: peer.id === peerId,
         granted: peer.id === peerId ? remoteGrant : grantedPeers.has(peer.id),
       })),
@@ -1707,6 +1755,10 @@ export function createRoomClient({
       cursorSeen: [...seenSites],
       cursorForgot: [...forgottenSites],
       cursorNames: showingNames,
+      cursorDrops: { ...cursorDropCounts },
+      lastCursorDrop,
+      build: clientBuild,
+      hostBuild,
       colours: ROOM_COLOURS,
       url: state.url,
       scroll: Math.round(state.scroll * 1000) / 1000,

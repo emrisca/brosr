@@ -1,4 +1,4 @@
-name: Core tests
+name: Core and host tests
 
 on:
   push:
@@ -11,13 +11,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: core
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24.x
-      - name: Run the core test suite
-        run: npm test
+      - name: Run the core and host suites
+        run: node --test core/test/*.test.mjs host/test/*.test.mjs

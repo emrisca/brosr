@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { detect } from './browsers.mjs';
 import { freePort, joinRoom, prepare, readRun, reopen as reopenRoom, start, status, stop } from './room.mjs';
 import { panelCommand } from './panel.mjs';
+import { parsePanelArgs } from '../core/panel.mjs';
 import { shareSession } from './session.mjs';
 import {
   addFriend,
@@ -136,19 +137,10 @@ const COMMANDS = {
   // The host app reads and changes the room settings through the host tab.
   // One short panel socket keeps the app independent from the browser chrome.
   async panel() {
-    const action = arg('action') || 'status';
-    const payload = { action };
-    const has = (name) => process.argv.some((value) => value.startsWith(`--${name}=`));
-    if (has('peer')) payload.peerId = arg('peer');
-    if (has('site')) payload.site = arg('site');
-    if (has('value')) payload.value = arg('value');
-    if (has('key')) payload.key = arg('key');
-    if (has('url')) payload.url = arg('url');
-    if (has('allow')) payload.allowed = arg('allow') !== 'false';
-    if (has('on')) payload.on = arg('on') !== 'false';
-    if (has('shared')) payload.shared = arg('shared') !== 'false';
-    if (has('tab')) payload.tabId = Number(arg('tab'));
-    return { ok: true, ...(await panelCommand(payload, { guest: flag('guest') })) };
+    // One schema owns the action names, the field names and their types. A
+    // misspelled field is a command error, not a no-op that looks successful.
+    const { action, values, guest } = parsePanelArgs(process.argv.slice(3));
+    return { ok: true, ...(await panelCommand({ action, ...values }, { guest })) };
   },
 
   async stop() {
@@ -276,7 +268,11 @@ async function main() {
   } catch (error) {
     process.stderr.write(`brosr host: ${error.message}\n`);
     process.stdout.write(
-      JSON.stringify({ ok: false, error: String((error && error.message) || error) }) + '\n'
+      JSON.stringify({
+        ok: false,
+        error: String((error && error.message) || error),
+        ...(error && error.reason ? { reason: String(error.reason) } : {}),
+      }) + '\n'
     );
     process.exit(1);
   }

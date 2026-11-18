@@ -13,7 +13,13 @@ import {
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { roomPanel, type PanelState, type PanelTab } from '@/lib/host';
+import {
+  roomPanel,
+  type PanelAction,
+  type PanelState,
+  type PanelTab,
+  type PanelValues,
+} from '@/lib/host';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -129,7 +135,7 @@ export function RoomControls({ open, onOpenChange }: Props) {
     setTrustUrl(state.trustTarget || '');
   }, [state?.trustTarget, trustDirty]);
 
-  async function act(action: string, values: Record<string, string | number | boolean> = {}) {
+  async function act(action: PanelAction, values: PanelValues = {}) {
     setBusy(action);
     setError('');
     try {

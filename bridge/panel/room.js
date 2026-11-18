@@ -101,6 +101,15 @@ function setCursorStatus(message, bad) {
   else delete node.dataset.bad;
 }
 
+// Every remote read gets a deadline. A tab that is navigating or asleep
+// must not leave an action pending forever.
+function withDeadline(promise, ms, fallback = null) {
+  return Promise.race([
+    Promise.resolve().then(() => promise),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 async function roomMessage(payload) {
   const tab = await targetTab();
   if (!tab) {
@@ -108,7 +117,7 @@ async function roomMessage(payload) {
     return null;
   }
   try {
-    return await api.tabs.sendMessage(tab.id, payload);
+    return await withDeadline(api.tabs.sendMessage(tab.id, payload), 2500);
   } catch {
     notice('The room tab did not answer.', true);
     return null;
@@ -755,6 +764,7 @@ function renderSeal(seal) {
 let tabState = null;
 // The film tab keeps its own counters, and the panel reads them from there.
 let filmReading = null;
+let filmRequestId = '';
 // The last reply from the background page, so a failed read names its reason
 // instead of looking the same as a room with no film tab.
 let filmReadingReply = null;
@@ -918,6 +928,50 @@ function renderReading(media) {
 
 // The Control section names the tab a grant types into. A room with no trusted
 // channel has no switch to move, so the row states why it stays off.
+// A stale bridge is not a sync bug. Name the version beside the guest and
+// state the mismatch in one line, instead of making the next run guess.
+function renderBuildWarning(data) {
+  const node = $('build-warning');
+  if (!node) return;
+  const own = data && data.build && data.build.version;
+  const peers = Array.isArray(data && data.peerList) ? data.peerList : [];
+  const stale = peers.filter(
+    (peer) =>
+      peer &&
+      peer.build &&
+      peer.build.version &&
+      own &&
+      peer.build.version !== own
+  );
+  node.hidden = !stale.length;
+  if (stale.length) {
+    const names = stale.map((peer) => `${peer.name || peer.id} runs ${peer.build.version}`);
+    node.textContent = `${names.join(', ')}; this room runs ${own}. Update the older bridge.`;
+  }
+}
+
+// A silent cursor filter is indistinguishable from a broken cursor. Show the
+// last decision, including the site and the reason.
+function renderCursorDrops(data) {
+  const node = $('cursor-drop');
+  if (!node) return;
+  const drop = data && data.lastCursorDrop;
+  if (!drop || Number(data && data.cursors) > 0) {
+    node.hidden = true;
+    node.textContent = '';
+    return;
+  }
+  const reasons = {
+    'other-site': 'the pointer is on another site',
+    'site-off': 'the host switched that site off',
+    'pointer-off': 'that person turned pointer sharing off',
+    'unknown-site': 'the pointer has no readable site',
+  };
+  const who = drop.peerId || 'A peer';
+  node.textContent = `${who}: ${reasons[drop.reason] || drop.reason}.`;
+  node.hidden = false;
+}
+
 function renderTrust(data) {
   const box = $('trust-target');
   const note = $('trust-note');
@@ -958,6 +1012,8 @@ function render(reply) {
   if ($('invite-box')) $('invite-box').hidden = !invite;
   if (invite && $('invite')) $('invite').value = invite;
 
+  renderBuildWarning(data);
+  renderCursorDrops(data);
   const peers = Array.isArray(data.peerList)
     ? data.peerList
     : Array.isArray(data.peers)
@@ -999,6 +1055,13 @@ function render(reply) {
     name.title = name.textContent;
     if (peer.self) name.textContent += ' (you)';
     row.append(swatch, name);
+    if (peer.build && peer.build.version) {
+      const build = document.createElement('span');
+      build.className = 'latency';
+      build.textContent = peer.build.version;
+      build.title = `Bridge ${peer.build.version}`;
+      row.append(build);
+    }
     const presence = data.presenceByPeer ? data.presenceByPeer[peer.id] : null;
     if (presence && Number.isFinite(presence.p95)) {
       const time = document.createElement('span');
@@ -1164,11 +1227,19 @@ async function readFilm(reply) {
     return;
   }
   try {
-    const reading = await api.runtime.sendMessage({
-      type: 'brosr:film-reading',
-      key: media.key,
-    });
-    filmReadingReply = reading || null;
+    // A film tab can be asleep, navigating or otherwise unable to answer. The
+    // room status is already enough to draw the panel, so a missing reading
+    // waits a short moment and then leaves the line hidden.
+    filmRequestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const reading = await withDeadline(
+      api.runtime.sendMessage({
+        type: 'brosr:film-reading',
+        key: media.key,
+        requestId: filmRequestId,
+      }),
+      1500
+    );
+    filmReadingReply = reading || { ok: false, reason: 'timeout' };
     filmReading = reading && reading.ok ? reading : null;
   } catch {
     filmReading = null;
@@ -1179,20 +1250,24 @@ async function refresh() {
   try {
     const tab = await targetTab();
     if (tab) {
-      const reply = await askStatus(tab);
+      const reply = await withDeadline(askStatus(tab), 1200);
       if (reply) {
-        await readFilm(reply);
+        // Draw the room first. Reading the film tab is useful detail, but it
+        // must never hold the whole panel blank while a player is busy.
         lastLiveAt = Date.now();
+        render(reply);
+        await readFilm(reply);
         return render(reply);
       }
     } else {
       askRoute = null;
       askError = `no tab (background ${JSON.stringify(tabHint)})`;
     }
-    const cached = await cachedStatus();
+    const cached = await withDeadline(cachedStatus(), 1200);
     if (cached) {
-      await readFilm(cached);
       lastLiveAt = Date.now();
+      render(cached);
+      await readFilm(cached);
       return render(cached);
     }
     return offline(tab ? 'This tab is not in a room.' : 'Open a room tab first.');

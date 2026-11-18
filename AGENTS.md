@@ -1,5 +1,24 @@
 # Agent notes
 
+## Room guardrails
+
+These six rules are not style preferences. Each one has a test, and a fix that
+crosses one of these seams needs a test at that seam too. `docs/regressions.md`
+records the bug that taught each rule.
+
+1. **One schema at every boundary.** The app and `host/cli.mjs` use the panel
+   schema in `core/panel.mjs`. An unknown field is an error, not a silent no-op.
+2. **Draw local truth before optional I/O.** A visible surface renders the room
+   first. Every remote read gets a deadline.
+3. **One request, one owner, one answer.** A film read names one tab before it
+   asks, and a listener that does not own the player stays silent.
+4. **Build identity travels with the room.** The bridge manifest version and
+   protocol travel in the hello and the panel, so a stale guest is named.
+5. **Every policy returns allow plus a reason.** Cursor sites, grants and tab
+   sharing say why a thing was refused. A boolean is not a diagnosis.
+6. **Every fix gets a failing test at the boundary that failed.** Add the case to
+   `docs/regressions.md` when the fix lands.
+
 ## The handoff bus
 
 The two machines talk through `handoff.mjs`. `docs/HANDOFF.md` is a record and not a channel.

@@ -4,6 +4,7 @@
 // numbers whether the core runs in the content script or in the page.
 
 import { createRoomClient, PEER_IDLE_MS, PRESENCE_TICK_MS } from './sync.mjs';
+import { PROTOCOL_VERSION } from './protocol.mjs';
 import { TAB_APP, tabClose, tabOpen } from './tabs.mjs';
 import { PANEL_APP } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
@@ -32,6 +33,16 @@ import { createTrustClient, prepareRecords } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
+// The manifest is the one build number both engines expose to a content
+// script. The protocol travels beside it, so a stale bridge has a name.
+const bridgeBuild = (() => {
+  try {
+    const manifest = api && api.runtime && api.runtime.getManifest ? api.runtime.getManifest() : null;
+    return manifest ? { version: manifest.version || null, protocol: PROTOCOL_VERSION } : null;
+  } catch {
+    return null;
+  }
+})();
 
 // A setting survives a navigation and a browser restart. The page path reads
 // these keys before the room path starts, so they belong to the module.
@@ -301,14 +312,19 @@ async function startPageMedia() {
     // page, so the panel reads them here through the background page.
     if (message.type === 'brosr:relay-reading') {
       const video = remote.video();
+      // Every frame has a listener. An ad or player frame with no video must
+      // stay silent, or Chrome returns that empty answer before the top frame
+      // can report the film it holds.
+      if (!video) return undefined;
       // A bare object is not an answer in Gecko, so this page returns a
       // promise like the room tab does through sendResponse.
       return Promise.resolve({
         ok: true,
+        requestId: message.requestId || null,
         relay: { ...relay },
-        position: video ? Number(video.currentTime || 0) : null,
-        duration: video ? Number(video.duration || 0) : null,
-        paused: video ? Boolean(video.paused) : null,
+        position: Number(video.currentTime || 0),
+        duration: Number(video.duration || 0),
+        paused: Boolean(video.paused),
       });
     }
     if (message.type !== 'brosr:media-apply') return undefined;
@@ -659,6 +675,7 @@ export async function start() {
     name,
     colour,
     roomName,
+    build: bridgeBuild,
     alignOffset: savedAlign || 0,
     customCursor: savedCursor,
     sharePointer,
@@ -887,6 +904,7 @@ export async function start() {
       self: true,
       granted: true,
       colour: live.colour || null,
+      build: live.build || bridgeBuild,
     };
     const peers = [
       self,
@@ -897,6 +915,8 @@ export async function start() {
     return {
       roomName: live.roomName || roomName,
       hostId: live.hostId || hostId,
+      build: live.build || bridgeBuild,
+      hostBuild: live.hostBuild || null,
       peers,
       media: live.media || null,
       sameFate: Boolean(live.sameFate),
@@ -916,8 +936,18 @@ export async function start() {
     const requestId = String(data.requestId || '');
     const answer = (state, extra = {}) =>
       client.sendApp(PANEL_APP, { requestId, ok: true, ...extra, state });
-    const refuse = (error) =>
-      client.sendApp(PANEL_APP, { requestId, ok: false, error: String(error && error.message || error) });
+    const refuse = (error, reason = 'command') =>
+      client.sendApp(PANEL_APP, {
+        requestId,
+        ok: false,
+        reason,
+        error: String((error && error.message) || error),
+      });
+    const refusal = (message, reason) => {
+      const error = new Error(message);
+      error.reason = reason;
+      return error;
+    };
     const runtime = (message) => {
       if (!api || !api.runtime || !api.runtime.sendMessage) {
         throw new Error('This browser has no room bridge.');
@@ -927,14 +957,14 @@ export async function start() {
 
     try {
       if (data.action === 'grant') {
-        if (role !== 'host') throw new Error('Only the host can change control.');
+        if (role !== 'host') throw refusal('Only the host can change control.', 'not-host');
         if (!client.setGrant(String(data.peerId || ''), Boolean(data.allowed))) {
-          throw new Error('That person is no longer in the room.');
+          throw refusal('That person is no longer in the room.', 'not-in-room');
         }
       } else if (data.action === 'cursor-site' || data.action === 'cursor-forget') {
-        if (role !== 'host') throw new Error('Only the host can change cursor sites.');
+        if (role !== 'host') throw refusal('Only the host can change cursor sites.', 'not-host');
         const site = cursorSiteOf(String(data.site || ''));
-        if (!site) throw new Error('That site is not valid.');
+        if (!site) throw refusal('That site is not valid.', 'bad-site');
         if (data.action === 'cursor-forget') {
           cursorForgot = client.forgetSite(site, data.on !== false) || cursorForgot;
           writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
@@ -954,7 +984,7 @@ export async function start() {
           }
         }
       } else if (data.action === 'room-name') {
-        if (role !== 'host') throw new Error('Only the host can rename the room.');
+        if (role !== 'host') throw refusal('Only the host can rename the room.', 'not-host');
         client.setRoomName(String(data.value || ''));
       } else if (data.action === 'set') {
         const key = String(data.key || '');
@@ -964,31 +994,39 @@ export async function start() {
         else if (key === 'auto') await runtime({ type: 'brosr:tabs-auto', on });
         else if (key === 'fate') {
           if (!client.setSameFate(on)) {
-            throw new Error('Only the host can change this setting.');
+            throw refusal('Only the host can change this setting.', 'not-host');
           }
           writeSetting('brosr-same-fate', on ? '1' : '0');
         }
-        else throw new Error('Unknown room setting.');
+        else throw refusal('Unknown room setting.', 'bad-setting');
       } else if (data.action === 'tab') {
         const tabId = Number(data.tabId);
-        if (!Number.isInteger(tabId) || tabId < 0) throw new Error('Choose a tab first.');
+        if (!Number.isInteger(tabId) || tabId < 0) {
+          throw refusal('Choose a tab first.', 'bad-tab');
+        }
         const reply = await runtime({
           type: 'brosr:tab-share',
           tabId,
           shared: Boolean(data.shared),
         });
-        if (!reply || !reply.ok) throw new Error(reply && reply.error ? reply.error : 'That tab is not available.');
+        if (!reply || !reply.ok) {
+          const error = refusal(
+            reply && reply.error ? reply.error : 'That tab is not available.',
+            (reply && reply.reason) || 'tab-unavailable'
+          );
+          throw error;
+        }
       } else if (data.action === 'trust') {
-        if (!trust) throw new Error('This room has no trusted input channel.');
+        if (!trust) throw refusal('This room has no trusted input channel.', 'no-trust');
         const url = String(data.url || '').trim();
         trustTarget = /^https?:\/\//i.test(url) ? url : null;
       } else if (data.action !== 'status') {
-        throw new Error('Unknown room command.');
+        throw refusal('Unknown room command.', 'unknown-command');
       }
       publish();
       answer(await panelSnapshot());
     } catch (error) {
-      refuse(error);
+      refuse(error, error.reason || 'command');
     }
   }
 
@@ -1143,6 +1181,7 @@ export async function start() {
     return {
       ...live,
       source,
+      build: bridgeBuild,
       showOwnCursor,
       panelUrl,
       panelState,
@@ -1322,6 +1361,7 @@ export async function start() {
         .sendMessage({
           type: 'brosr:room-hello',
           role,
+          build: bridgeBuild,
           cursor: showOwnCursor ? ownCursor : null,
         })
         .catch(() => {});

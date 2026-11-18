@@ -85,7 +85,11 @@ export async function panelCommand({ action = 'status', ...params } = {}, { gues
       if (message.type !== 'app' || message.name !== PANEL_APP) return;
       const data = message.data && typeof message.data === 'object' ? message.data : {};
       if (data.requestId !== requestId) return;
-      if (data.ok === false) return finish(new Error(String(data.error || 'The room refused that change.')));
+      if (data.ok === false) {
+        const error = new Error(String(data.error || 'The room refused that change.'));
+        if (data.reason) error.reason = String(data.reason);
+        return finish(error);
+      }
       if (!data.state || typeof data.state !== 'object') return finish(new Error('The room sent no control state.'));
       finish(null, data.state);
     });

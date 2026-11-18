@@ -280,6 +280,20 @@ const opening = new Set();
 // The film this browser plays last. A paused background tab does not replace
 // the film someone is watching, so only a playing tab takes the focus.
 let mediaFocus = '';
+let mediaFocusTab = null;
+
+// One owner for a film read. A browser can hold several copies of the same
+// film, and asking every tab makes a slow tab look like a broken panel. The
+// focused or most recently active copy answers.
+function filmOwner(key) {
+  const candidates = [...mediaTabs].filter(([, entry]) => entry && entry.key === key);
+  if (!candidates.length) return null;
+  const focused = candidates.find(
+    ([id]) => mediaFocusTab !== null && String(id) === String(mediaFocusTab)
+  );
+  if (focused) return focused;
+  return candidates.sort((a, b) => (Number(b[1].at) || 0) - (Number(a[1].at) || 0))[0];
+}
 async function announce(url, key) {
   if (!shareable(url)) return false;
   const id = await roomTab();
@@ -766,6 +780,7 @@ async function handle(message, sender) {
       return { ok: false, reason: 'room-tab' };
     }
     await rememberMediaTab(from, message.key);
+    if (sender.tab.active) mediaFocusTab = from;
     return { ok: true, tabs: mediaTabs.size };
   }
   if (message.type === 'brosr:media-out') {
@@ -781,7 +796,10 @@ async function handle(message, sender) {
     if (!media.playing && mediaFocus && mediaFocus !== String(media.key)) {
       return { ok: true, skipped: 'background' };
     }
-    if (media.playing) mediaFocus = String(media.key);
+    if (media.playing) {
+      mediaFocus = String(media.key);
+      mediaFocusTab = from;
+    }
     const id = await roomTab();
     if (!validId(id) || id === from) return { ok: false, reason: 'no-room' };
     api.tabs.sendMessage(id, { type: 'brosr:media-state', state: media }).catch(() => {});
@@ -799,32 +817,39 @@ async function handle(message, sender) {
     // already arrive, so the read waits for that fill instead of answering
     // no-tab for a film tab this browser shows.
     await mediaRestored;
-    const failed = [];
-    let dropped = false;
-    for (const [id, entry] of [...mediaTabs]) {
-      if (!entry || entry.key !== filmKey) continue;
-      try {
-        const reply = await api.tabs.sendMessage(id, { type: 'brosr:relay-reading' });
-        if (reply && reply.ok) return { ok: true, tabId: id, ...reply };
-        failed.push({ id, answer: reply ? 'empty' : 'none' });
-        mediaTabs.delete(id);
-        dropped = true;
-      } catch (error) {
-        failed.push({ id, error: text(error) });
-        mediaTabs.delete(id);
-        dropped = true;
-      }
+    const owner = filmOwner(filmKey);
+    if (!owner) {
+      return {
+        ok: false,
+        reason: 'no-tab',
+        want: filmKey,
+        tabs: [...mediaTabs.entries()].map(([id, entry]) => ({ id, key: entry && entry.key })),
+      };
     }
-    if (dropped) save({ mediaTabKeys: mediaBook() });
-    // A failed read names the tabs it did hold, so a key that never arrived
-    // and a tab that went away do not look the same.
-    return {
-      ok: false,
-      reason: 'no-tab',
-      want: filmKey,
-      failed,
-      tabs: [...mediaTabs.entries()].map(([id, entry]) => ({ id, key: entry && entry.key })),
-    };
+    const [id] = owner;
+    const requestId = String(message.requestId || '');
+    try {
+      // One owner, one answer. A tab mid-load can leave the message
+      // unanswered, so the panel gets a short deadline instead of holding
+      // the whole panel open forever.
+      const reply = await Promise.race([
+        api.tabs.sendMessage(id, { type: 'brosr:relay-reading', requestId }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+      if (reply && reply.ok && (!requestId || !reply.requestId || reply.requestId === requestId)) {
+        return { ok: true, tabId: id, ...reply };
+      }
+      if (!reply) {
+        return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, answer: 'timeout' }] };
+      }
+      mediaTabs.delete(id);
+      save({ mediaTabKeys: mediaBook() });
+      return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, answer: 'empty' }] };
+    } catch (error) {
+      mediaTabs.delete(id);
+      save({ mediaTabKeys: mediaBook() });
+      return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, error: text(error) }] };
+    }
   }
   if (message.type === 'brosr:open-film') {
     const key = String(message.key || '');

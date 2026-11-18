@@ -110,6 +110,7 @@
       <div class="panel-pane" id="pane-room" role="tabpanel" aria-labelledby="tab-room">
         <section class="card peers-section" aria-labelledby="peers-label">
           <p class="section-title" id="peers-label">People</p>
+          <p class="note" id="build-warning" role="status" hidden></p>
           <ul id="peers"></ul>
         </section>
 
@@ -157,6 +158,7 @@
             <button class="invite-copy" id="cursor-load" type="button">Load</button>
           </div>
           <p class="note" id="cursor-status" role="status" aria-live="polite"></p>
+          <p class="note" id="cursor-drop" role="status" aria-live="polite" hidden></p>
           <ul class="cursor-results" id="cursor-results"></ul>
           <button class="peer-control" id="cursor-clear" type="button" hidden>
             Use colour instead

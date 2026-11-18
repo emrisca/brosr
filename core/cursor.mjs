@@ -74,6 +74,20 @@ export function defaultCursorSites(href) {
   return APPS.map((name) => `${base}${name}`);
 }
 
+// A cursor decision is a rule with a name. The panel reads the reason, so a
+// hidden pointer says whether the site differs or the host turned it off.
+export function cursorDecision({ peerUrl, here, sites = null, sharePointer = true } = {}) {
+  if (sharePointer === false) return { allow: false, reason: 'pointer-off', site: null };
+  const peerSite = cursorSiteOf(peerUrl);
+  const hereSite = cursorSiteOf(here);
+  if (!peerSite || !hereSite) return { allow: false, reason: 'unknown-site', site: null };
+  if (peerSite !== hereSite) return { allow: false, reason: 'other-site', site: peerSite };
+  if (sites !== null && !sites.includes(peerSite)) {
+    return { allow: false, reason: 'site-off', site: peerSite };
+  }
+  return { allow: true, reason: 'ok', site: peerSite };
+}
+
 // The host sends the site list, so it is cleaned and bounded here. An empty
 // list is a real choice: no site shows a pointer.
 export function cleanCursorSites(value) {

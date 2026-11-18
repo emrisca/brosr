@@ -49,6 +49,19 @@ export function isCinecatHost(value = '') {
   return /(^|\.)cinecat\.eu$/i.test(hostOf(value));
 }
 
+// The panel reads one film tab. A browser can hold several copies, so pick one
+// owner before asking: the focused film first, then the most recently active
+// one. One request and one answer, not a race between every tab.
+export function chooseFilmOwner(entries = [], key = '', focusTabId = null) {
+  const candidates = [...entries].filter(([, entry]) => entry && entry.key === key);
+  if (!candidates.length) return null;
+  const focused = candidates.find(
+    ([id]) => focusTabId !== null && String(id) === String(focusTabId)
+  );
+  if (focused) return focused;
+  return candidates.sort((a, b) => (Number(b[1].at) || 0) - (Number(a[1].at) || 0))[0];
+}
+
 export function isCinecatWatchPage(value = '') {
   try {
     const url = new URL(String(value || ''));

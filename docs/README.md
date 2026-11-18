@@ -17,6 +17,7 @@ The design is split by subject so a reader can open one file. The old single fil
 | [progress-log.md](progress-log.md) | What changed, newest first. |
 | [m0-results.md](m0-results.md) | What the M0 spike measured. |
 | [remaining-work.md](remaining-work.md) | The working list of open items, dated 16 November 2026. |
+| [regressions.md](regressions.md) | The guardrails and the test that holds each one. |
 
 The code has its own READMEs: [../core/README.md](../core/README.md),
 [../spike/README.md](../spike/README.md) and [../zen/README.md](../zen/README.md).
