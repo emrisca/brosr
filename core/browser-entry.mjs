@@ -1633,7 +1633,14 @@ export async function start() {
         // the local position either way. Only the host room makes it the
         // room's media, because a peer room forwards frames instead.
         const state = message.state;
-        if (state && typeof state === 'object' && state.key) localMedia = state;
+        if (state && typeof state === 'object' && state.key) {
+          localMedia = state;
+          // The room tab is usually hidden behind the film tab, and a hidden
+          // tab throttles its presence timer. The active film tab still reports
+          // here, so that report also refreshes this peer's presence. Without
+          // this a live host or guest is pruned and the room elects a new host.
+          client.presence();
+        }
         if (client.stats.role === 'host') {
           const stored = relayedMedia.set(state);
           lastFilmReportAt = Date.now();

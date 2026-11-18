@@ -111,3 +111,15 @@ test('a click flushes at once, so a link cannot unload the page first', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
   assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
 });
+
+test('a film report refreshes presence while its room tab is hidden', () => {
+  // The room tab sits behind the film tab, so the browser throttles its
+  // presence timer. The guest pruned a live host after fifteen seconds and
+  // elected itself. A valid film report has to keep this peer alive too.
+  const media = source.slice(source.indexOf("if (message.type === 'brosr:media-state')"));
+  const body = media.slice(0, media.indexOf("if (client.stats.role === 'host')"));
+  assert.match(
+    body,
+    /state && typeof state === 'object' && state\.key\)[\s\S]*?client\.presence\(\)/
+  );
+});
