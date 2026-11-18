@@ -21,9 +21,13 @@
 // Syncthing churns on the profile while a check runs, so no machine syncs it.
 /zen/.runtime
 
-// Per-machine browser profiles and run scratch at the root. A run rebuilds them, and a
-// shared copy produced conflict files inside a Chrome profile on 15 November 2026.
+// The retest supervisor writes a guest Zen profile here, with its cache, its storage and its
+// probe output. A live profile changes every second, so it belongs to the machine that runs
+// it. It was 1.8 GB across 7,699 files, and it kept the share rescanning every ten seconds.
 /.runtime
+
+// A run also writes browser profiles and scratch at the root. A shared copy produced conflict
+// files inside a Chrome profile on 15 November 2026, so those stay per machine too.
 /host/.run
 
 // Conflict copies stay on the machine that made them.

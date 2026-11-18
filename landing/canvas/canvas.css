@@ -2,6 +2,7 @@
    drawing. Tokens stay close to the landing page so the two read as one app. */
 
 :root {
+  color-scheme: dark;
   --bg: oklch(0.13 0 0);
   --panel: oklch(0.17 0 0);
   --panel-soft: oklch(0.22 0 0);
@@ -12,7 +13,31 @@
   --brand: oklch(0.90 0 0);
   --brand-ink: oklch(0.14 0 0);
   --ring: oklch(0.78 0 0);
+  --stage-1: oklch(0.20 0 0);
+  --stage-2: oklch(0.12 0 0);
+  --brush-on: oklch(0.26 0 0);
+  --shade: oklch(0 0 0 / 0.6);
   --paper: #f7f7f8;
+}
+
+/* The same roles in daylight. The sheet keeps its own paper colour, so a
+   theme switch never changes what a stroke looks like on the page. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: oklch(0.95 0 0);
+  --panel: oklch(1 0 0);
+  --panel-soft: oklch(0.965 0 0);
+  --fg: oklch(0.17 0 0);
+  --muted: oklch(0.42 0 0);
+  --line: oklch(0 0 0 / 0.10);
+  --line-strong: oklch(0 0 0 / 0.22);
+  --brand: oklch(0.22 0 0);
+  --brand-ink: oklch(0.98 0 0);
+  --ring: oklch(0.32 0 0);
+  --stage-1: oklch(0.93 0 0);
+  --stage-2: oklch(0.86 0 0);
+  --brush-on: oklch(0.94 0 0);
+  --shade: oklch(0 0 0 / 0.35);
 }
 
 * {
@@ -37,8 +62,8 @@ body {
 .top {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -83,7 +108,7 @@ button {
   border: 1px solid var(--line-strong);
   background: transparent;
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   font-size: 12.5px;
   cursor: pointer;
 }
@@ -123,11 +148,18 @@ button:disabled {
 .panel {
   border-right: 1px solid var(--line);
   background: var(--panel);
-  padding: 16px;
+  padding: 10px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 10px;
+}
+
+/* A section keeps a hairline instead of a wide gap, so the rail reads as one
+   column of controls and every section starts at the same edge. */
+.panel > .group + .group {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .group h2 {
@@ -178,14 +210,14 @@ button:disabled {
 
 .brush[aria-pressed="true"] {
   border-color: var(--line-strong);
-  background: oklch(0.26 0 0);
+  background: var(--brush-on);
   color: var(--fg);
 }
 
 input[type="range"] {
   width: 100%;
   accent-color: var(--brand);
-  margin: 0 0 16px;
+  margin: 0 0 10px;
 }
 
 input[type="range"]:last-child {
@@ -203,37 +235,93 @@ select {
   font-size: 12.5px;
 }
 
+/* A swatch is a button, not a panel tile, so the grid stops at a swatch size
+   and leaves the rest of the rail alone. */
 .swatches {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 6px;
-  margin-bottom: 12px;
+  max-width: 232px;
+  margin-bottom: 8px;
 }
 
 .swatch {
   padding: 0;
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--c);
 }
 
+/* The ring sits inside the swatch, so selecting one never pushes its outline
+   over the neighbour and every swatch keeps one footprint. */
 .swatch[aria-pressed="true"] {
-  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--brand);
+  box-shadow: inset 0 0 0 2px var(--panel), inset 0 0 0 3px var(--brand);
+}
+
+/* Three controls on one line. The label keeps its own width, the hex field
+   takes what is left and the pick button ends at the rail edge. */
+.colour-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.colour-row .custom-colour {
+  flex: 0 0 auto;
+}
+
+.hex-input {
+  flex: 1;
+  width: auto;
+  min-width: 60px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-transform: lowercase;
+}
+
+.hex-input:focus-visible {
+  outline-offset: 1px;
+}
+
+.recents {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+  max-width: 232px;
+  margin-top: 8px;
+}
+
+.recents:empty {
+  display: none;
+}
+
+.recent-swatch {
+  padding: 0;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--c);
 }
 
 .custom-colour {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   font-size: 12.5px;
   color: var(--muted);
 }
 
 .custom-colour input {
-  width: 44px;
+  width: 28px;
   height: 28px;
   padding: 0;
   border: 1px solid var(--line-strong);
@@ -265,31 +353,134 @@ select {
 .layer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-color: var(--line);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: var(--panel-soft);
   font-size: 12.5px;
 }
 
-.layer[aria-pressed="true"] {
+.layer.is-active {
   border-color: var(--brand);
 }
 
+.layer-pick {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.layer-pick:hover {
+  background: transparent;
+}
+
 .layer-name {
+  overflow: hidden;
   letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-meta {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .layer-toggle {
-  font-size: 11px;
+  border: 0;
   color: var(--muted);
-  padding: 2px 6px;
-  border-radius: 5px;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
 }
 
-.layer-toggle[data-on="off"] {
-  text-decoration: line-through;
-  opacity: 0.6;
+.layer-rename {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.layer-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* The opacity heading follows a row of buttons, which has no bottom margin of
+   its own, so it needs the group gap above it. */
+.layer-actions + h2 {
+  margin-top: 10px;
+}
+
+.layer-actions button {
+  padding: 5px 4px;
+  font-size: 11.5px;
+}
+
+.image-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.image-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.image-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel);
+}
+
+.image-size {
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.image-empty {
+  padding: 6px 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.wide {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .doc-actions {
@@ -421,8 +612,7 @@ body.is-guest #doc-name {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background:
-    radial-gradient(60% 60% at 50% 40%, oklch(0.20 0 0), oklch(0.12 0 0) 78%);
+  background: radial-gradient(60% 60% at 50% 40%, var(--stage-1), var(--stage-2) 78%);
 }
 
 .viewport {
@@ -437,6 +627,10 @@ body.is-guest #doc-name {
   cursor: grab;
 }
 
+.viewport.picking {
+  cursor: copy;
+}
+
 .viewport.panning:active {
   cursor: grabbing;
 }
@@ -449,12 +643,12 @@ body.is-guest #doc-name {
 
 .zoom {
   position: absolute;
-  right: 16px;
-  bottom: 16px;
+  right: 10px;
+  bottom: 10px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
+  gap: 6px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: color-mix(in oklch, var(--panel) 88%, transparent);
@@ -462,9 +656,17 @@ body.is-guest #doc-name {
 }
 
 .zoom button {
+  display: grid;
+  place-items: center;
   border-color: transparent;
-  padding: 4px 8px;
-  min-width: 30px;
+  padding: 4px 6px;
+  min-width: 28px;
+}
+
+.zoom button svg {
+  width: 16px;
+  height: 16px;
+  stroke-linecap: round;
 }
 
 .zoom output {
@@ -478,8 +680,8 @@ body.is-guest #doc-name {
 .status {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 6px 16px;
+  gap: 10px;
+  padding: 6px 10px;
   border-top: 1px solid var(--line);
   background: var(--panel);
   color: var(--muted);
@@ -495,6 +697,15 @@ body.is-guest #doc-name {
   font-variant-numeric: tabular-nums;
 }
 
+/* Each part after the tool starts with a hairline, so two labels never read
+   as one sentence. */
+.status #coords,
+.status #room-state,
+.status .note:not(:empty) {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
 .status #room-state {
   color: var(--fg);
 }
@@ -507,8 +718,176 @@ body.is-guest #doc-name {
   margin-left: auto;
 }
 
+.status .note {
+  color: var(--fg);
+}
+
+.status .note:empty {
+  display: none;
+}
+
+/* The GIF picker. A modal above everything, because a search and a drawing
+   surface should never fight for the same click. */
+.dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: var(--shade);
+  backdrop-filter: blur(3px);
+}
+
+.dialog[hidden] {
+  display: none;
+}
+
+.dialog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(720px, 100%);
+  max-height: min(760px, 100%);
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px oklch(0 0 0 / 0.5);
+}
+
+.dialog-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dialog-top h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.gif-search {
+  display: flex;
+  gap: 8px;
+}
+
+.gif-search input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.gif-status {
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* The tiles say a search is running, so the words are for a screen reader
+   only and the grid keeps the space. */
+.gif-status[data-busy="true"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.gif-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+
+.gif-skeleton {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.gif-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.gif-item {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-soft);
+}
+
+.gif-item img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+}
+
+.gif-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.gif-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.gif-url-row input,
+.gif-foot #gif-key {
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.gif-key {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 760px) {
+  /* The rail goes full width above the sheet, so the page has to grow with
+     it. A fixed 100% height would leave the last sections under the status
+     line with nothing to scroll. */
+  html,
   body {
+    height: auto;
+    min-height: 100%;
+  }
+
+  body {
+    grid-template-rows: auto auto auto;
     overflow: auto;
   }
 
@@ -521,6 +900,12 @@ body.is-guest #doc-name {
     border-right: 0;
     border-bottom: 1px solid var(--line);
     overflow: visible;
+  }
+
+  /* A control row reads at a hand width, so a group stops short of the page
+     edge instead of stretching a label to 700 px. */
+  .panel > .group {
+    max-width: 560px;
   }
 
   .brushes {

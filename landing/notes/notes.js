@@ -165,7 +165,7 @@ function showDocuments() {
     preview.textContent = item.preview || 'Empty note';
     const meta = document.createElement('span');
     meta.className = 'doc-meta';
-    meta.textContent = shortDate(item.at) + (item.hidden ? ' · hidden' : '');
+    meta.textContent = shortDate(item.at) + (item.hidden ? ', hidden' : '');
     open.append(title, preview, meta);
     open.addEventListener('click', () => openDocument(item.id));
     row.append(open);

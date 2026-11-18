@@ -15,6 +15,29 @@
   --ink: #1b1b1f;
   --mark: #fde68a;
   color-scheme: dark;
+  --stage-1: oklch(0.20 0 0);
+  --stage-2: oklch(0.12 0 0);
+  --sheet-shadow: 0 18px 40px oklch(0 0 0 / 0.35);
+}
+
+/* The same roles in daylight. The paper and the ink keep their own colours, so
+   a note reads the same whichever scheme the room is in. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: oklch(0.95 0 0);
+    --panel: oklch(1 0 0);
+    --panel-soft: oklch(0.965 0 0);
+    --fg: oklch(0.17 0 0);
+    --muted: oklch(0.42 0 0);
+    --line: oklch(0 0 0 / 0.10);
+    --line-strong: oklch(0 0 0 / 0.22);
+    --brand: oklch(0.22 0 0);
+    --ring: oklch(0.32 0 0);
+    --stage-1: oklch(0.93 0 0);
+    --stage-2: oklch(0.87 0 0);
+    --sheet-shadow: 0 18px 40px oklch(0 0 0 / 0.18);
+    color-scheme: light;
+  }
 }
 
 * {
@@ -291,7 +314,7 @@ button:disabled {
   width: 100%;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -305,10 +328,10 @@ button:disabled {
 }
 
 .doc-tool {
-  padding: 2px 6px;
+  padding: 4px 8px;
   border: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .doc-tool:hover {
@@ -335,7 +358,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   background:
-    radial-gradient(60% 60% at 50% 20%, oklch(0.20 0 0), oklch(0.12 0 0) 78%);
+    radial-gradient(60% 60% at 50% 20%, var(--stage-1), var(--stage-2) 78%);
 }
 
 .toolbar {
@@ -349,6 +372,7 @@ button:disabled {
 }
 
 .toolbar button {
+  min-width: 26px;
   padding: 4px 9px;
   border-color: transparent;
   font-size: 12px;
@@ -379,14 +403,15 @@ button:disabled {
 }
 
 .editor {
-  width: min(100%, 760px);
+  width: auto;
+  max-width: 760px;
   margin: 24px auto;
   padding: 48px 56px;
   overflow-y: auto;
   border-radius: 10px;
   background: var(--paper);
   color: var(--ink);
-  box-shadow: 0 18px 40px oklch(0 0 0 / 0.35);
+  box-shadow: var(--sheet-shadow);
   font-size: 16px;
   line-height: 1.7;
 }
@@ -461,6 +486,34 @@ body.is-guest .files-foot {
 
 body.is-guest .doc-name {
   pointer-events: none;
+}
+
+/* The bar is one row on a desk. A narrow window moves the note name and the
+   saved state under it, so the actions never push the page sideways. */
+@media (max-width: 620px) {
+  .top {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 8px 12px;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-left: auto;
+    gap: 8px;
+  }
+
+  .doc-name,
+  .doc-state {
+    order: 2;
+  }
+
+  .doc-name {
+    flex: 1 1 140px;
+    min-width: 0;
+    max-width: none;
+  }
 }
 
 @media (max-width: 900px) {

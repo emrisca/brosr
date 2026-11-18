@@ -19,6 +19,29 @@ records the bug that taught each rule.
 6. **Every fix gets a failing test at the boundary that failed.** Add the case to
    `docs/regressions.md` when the fix lands.
 
+## Bend
+
+Bend 2.0.40 is installed at `~/.bend`. The installer deliberately leaves shell
+rc files alone, so a new shell does not have it on `PATH`:
+
+```
+export PATH="$HOME/.bend/bin:$PATH"
+```
+
+Read `bend guide` before writing Bend code, and `bend guide shaders` before a
+parallel program. `bend <file.bend>` checks the file and runs `main`. Independent
+work goes in a parallel call (`a b = f(x) g(y)`), and only a native build uses
+CPUs or the M5 GPU; the JavaScript target runs sequentially.
+
+The canvas keeps its laws in `landing/canvas/LAWS.bend` and its proofs in
+`landing/canvas/PROOF.bend`. `bend landing/canvas/PROOF.bend` is the gate: it
+prints ALL PROOFS CHECK only when every law holds, and `--verdict` rechecks with
+the proven kernel. Lean 4.34.0 is installed with elan at `~/.elan`, so the
+verdict pass needs only `export PATH="$HOME/.elan/bin:$PATH"` beside the Bend
+path. A law is the human claim, so do not weaken one to make a
+proof pass. Add a law when a rule becomes load-bearing, and prove it before the
+change lands.
+
 ## The handoff bus
 
 The two machines talk through `handoff.mjs`. `docs/HANDOFF.md` is a record and not a channel.

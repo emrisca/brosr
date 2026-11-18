@@ -15,12 +15,36 @@ const signed = path.join(root, 'zen', '.runtime', 'bridge-signed.xpi');
 const logs = path.join(root, 'zen', '.runtime');
 const steps = [];
 
-function run(name, args, timeout) {
+// The layout lanes read a browser's pixels. A hosted runner installs Chrome
+// for Testing under zen/.runtime/cft, and puppeteer nests it under a build
+// folder, so the search walks the tree instead of guessing one path.
+function findChromeForTesting(dir, depth = 0) {
+  if (depth > 6) return null;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findChromeForTesting(file, depth + 1);
+      if (found) return found;
+    } else if (entry.name === 'Google Chrome for Testing') {
+      return file;
+    }
+  }
+  return null;
+}
+
+function run(name, args, timeout, extraEnv) {
   const started = Date.now();
   const result = spawnSync(process.execPath, args, {
     cwd: root,
     encoding: 'utf8',
     timeout: timeout || 180000,
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
   });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
   // A failing lane names its state in the last lines, and a hosted job keeps
@@ -55,6 +79,13 @@ if (fs.existsSync(signed)) {
 
 run('zen lane', ['scripts/check-two-instance.mjs'], 240000);
 run('chromium lane', ['scripts/check-two-instance.mjs', '--chrome'], 240000);
+
+const browser = process.env.BROSR_CHECK_BROWSER || findChromeForTesting(path.join(root, 'zen', '.runtime', 'cft'));
+const layout = browser ? { BROSR_CHECK_BROWSER: browser } : {};
+if (browser) process.stdout.write(`[check-all] layout lanes use ${browser}\n`);
+run('canvas layout', ['scripts/check-canvas-layout.mjs'], 240000, layout);
+run('landing layout', ['scripts/check-landing-layout.mjs'], 240000, layout);
+run('room apps layout', ['scripts/check-room-apps-layout.mjs'], 240000, layout);
 
 const tests = ['core/test', 'host/test'].flatMap((dir) =>
   fs

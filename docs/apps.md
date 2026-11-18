@@ -48,35 +48,46 @@ the app behind it is real.
 Canvas is the first tile with a working page. It is a custom drawing surface written for
 Brosr, with no embed and no dependency.
 
-- Surface. The canvas has no edge and no sheet. The warm surface fills the window and the drawing
-  runs as far as a person pans, so nobody starts against a border.
-- Grid. A world grid follows the view, with the step doubled as the zoom drops, so the lines never
-  crowd. The origin carries a slightly stronger line, so one fixed point stays readable on an
-  endless page.
-- Brushes. Pencil, ink, marker, airbrush and eraser. Ink tapers at both ends, the marker
-  lays down translucent colour, and the airbrush builds a soft edge from dabs.
+- Surface. The sheet is a square of 2400 by 2400 with a paper edge, so a drawing has a frame
+  and nothing paints on the desk around it. A pointer that leaves the paper stops at its edge.
+- Brushes. Pencil, ink, marker, airbrush, eraser, line, box and oval. Ink tapers at both ends,
+  the marker lays down translucent colour, and the airbrush builds a soft edge from dabs. Each
+  tool remembers the width and opacity it was last given, and a brush reaches 400 px, so an
+  eraser clears a sixth of the sheet in one pass.
+- Erasing. An eraser cuts the selected layer only, not the paper and not the layers below.
+  Every layer owns a bitmap built from its own strokes, so a rebuild after an undo brings back
+  exactly the ink the erase removed.
 - Stabilizer. A slider smooths incoming points, so a trackpad line still reads as a line.
-- Symmetry. Off, mirror left and right, mirror top and bottom, or all four. One stroke draws
-  every copy, so one undo removes them together. The axis is the first point of the stroke,
-  because an endless surface has no centre to mirror about.
 - Shapes. Line, box and oval, drawn with the current width and colour.
-- Layers. Sketch and Ink, each with a visibility toggle. A new stroke lands on the selected
-  layer.
-- Colour. Seven swatches and a custom picker.
-- History. Undo and redo for a stroke and for a clear. The buttons disable when a stack is
-  empty.
-- Export. PNG of the visible view at twice the screen density. The grid stays out of the file,
-  so the drawing is clean.
-- Navigation. Space drags the canvas without a limit, the wheel zooms at the pointer between 5%
-  and 1600%, and Fit frames the ink. An empty canvas puts the origin in the middle at 100%.
-- Room. Strokes reach every page over one WebSocket. A stroke also travels while it is drawn,
-  so a peer sees the line grow before the pointer lifts. A live frame carries only the points
-  added since the last one, at most every 60 ms, and a stroke nobody finishes leaves the sheet
-  after 15 seconds. Undo, redo and clear travel as stroke ids, so every copy ends in the same
-  state. A page that joins late asks for the sheet and receives the strokes it missed.
+- Layers. Up to six, each with a name, a visibility toggle and an opacity. A stroke lands on
+  the selected layer, a double click renames one, and Add, Up, Down, Delete and Clear act on the
+  selection. A sheet keeps at least one layer.
+- Colour. Fourteen swatches, a custom picker, a hex field, and an eyedropper that reads the
+  sheet where the browser has one. The eight most recent colours sit under the field.
+- Images. An import places a picture on the selected layer, above that layer's strokes and
+  below the next layer, at no more than 60% of the paper. A large photo is scaled down before it
+  is stored. An animated GIF keeps animating, because the sheet draws its frames. A picture keeps
+  the page that placed it, so another page's undo leaves it and a late joiner learns the author.
+- GIF search. A dialog searches Tenor and places a result, or takes a pasted GIF address. A GIF
+  is copied into the sheet before it lands, so an export and a room frame never carry a
+  reference to another host. The Tenor key is optional and falls back to the published demo key.
+- History. Undo and redo for a stroke, an image, and a clear. Only the work this page drew
+  enters the stack, so undo takes back my stroke and leaves a peer's, and Clear leaves their
+  ink on the layer. The buttons disable when a stack is empty.
+- Export. PNG of the finished sheet at paper size, with every visible layer, its opacity and its
+  images.
+- Navigation. Space drags the sheet. A mouse wheel zooms at the pointer between 15% and 800%.
+  Two fingers on a trackpad pan, a pinch zooms, and Fit frames the sheet. A resize refits a sheet
+  nobody moved and leaves a chosen zoom alone.
+- Room. Strokes, layers and images reach every page over one WebSocket. A stroke also travels
+  while it is drawn, so a peer sees the line grow before the pointer lifts. A live frame carries
+  only the points added since the last one, at most every 60 ms, and a stroke nobody finishes
+  leaves the sheet after 15 seconds. Undo, redo and clear travel as stroke ids, and a layer
+  change travels as an index op, so every copy ends in the same state. A page that joins late
+  asks for the sheet and receives the strokes, layers and images it missed.
 
-Keys: B, I, M, A, E, L, R and O pick a tool. Bracket keys change the width. Cmd Z undoes and
-Cmd Shift Z redoes.
+Keys: B, I, M, A, E, L, R and O pick a tool. Bracket keys change the width up to 400. Space pans.
+Escape leaves a colour pick or the GIF dialog. Cmd Z undoes and Cmd Shift Z redoes.
 
 The app is one HTML file, one stylesheet and one script. The relay serves it as bytes, so a
 room opens it with no build step.
@@ -123,6 +134,11 @@ want the same level. The list below is what the room follows today.
 | p-stream and its forks | One page and one player, so one adapter covers each fork | Built, not yet run on a live film |
 | HLS and DASH pages | The page names the film, so a quality switch keeps the same key | Built, not yet run on a live film |
 | Twitch and YouTube Live | Play and pause only, because a live stream has no playhead to seek | Not built |
+
+The directory holds more sites than one screen shows, so the Watch tile carries a filter above
+it. The field reads the site name and its host, hides every row that does not match, hides a
+heading whose list is empty, and keeps the count beside the field in step. A name with no match
+says so instead of leaving two blank columns.
 
 Netflix, Disney+ and Prime Video stay out. The DRM layer owns the media pipeline, and a script
 write to the playhead fails there.

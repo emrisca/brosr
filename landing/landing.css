@@ -267,6 +267,7 @@ a {
   grid-column: span 2;
   grid-row: 3;
   justify-content: space-between;
+  min-height: 0;
   background:
     radial-gradient(80% 100% at 100% 0%, color-mix(in oklch, var(--brand) 4%, transparent), transparent 68%),
     var(--card);
@@ -275,7 +276,7 @@ a {
 .tile-canvas {
   grid-column: span 2;
   grid-row: 3;
-  justify-content: space-between;
+  min-height: 0;
   background:
     radial-gradient(80% 100% at 100% 100%, color-mix(in oklch, var(--brand) 4%, transparent), transparent 68%),
     var(--card);
@@ -284,6 +285,7 @@ a {
 .tile-notes {
   grid-column: span 2;
   grid-row: 3;
+  min-height: 0;
 }
 
 .tile-head {
@@ -368,6 +370,7 @@ a {
   align-items: center;
   gap: 6px;
   align-self: flex-start;
+  margin-top: auto;
   color: var(--fg);
   font-size: 12px;
   font-weight: 500;
@@ -441,7 +444,7 @@ a {
 .site-host {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -504,7 +507,7 @@ a {
 .site-group-title {
   margin: 0 0 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 650;
   letter-spacing: 0.075em;
   line-height: 1.5;
@@ -532,6 +535,67 @@ a {
 
 .site-group .site + .site {
   border-top: 1px solid var(--line);
+}
+
+/* The name filter sits above the directory. It stays one row at every width:
+   the label, the field and the count, with the empty state under them. */
+.site-filter {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.site-filter-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.site-filter-input {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-soft);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  appearance: none;
+}
+
+.site-filter-input::placeholder {
+  color: var(--muted);
+}
+
+.site-filter-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.site-filter-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.site-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* The filter hides rows and headings with the hidden attribute, and the site
+   rules above set a display of their own. */
+.site[hidden],
+.site-empty[hidden],
+.site-group-title[hidden] {
+  display: none;
 }
 
 /* The page draws the room's cursors here, above the tiles and below no click. */

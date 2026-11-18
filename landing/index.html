@@ -91,7 +91,13 @@
             </div>
           </div>
         </div>
-        <div class="site-groups">
+        <div class="site-filter">
+          <label class="site-filter-label" for="site-filter">Filter</label>
+          <input class="site-filter-input" id="site-filter" type="search" placeholder="Name or host" autocomplete="off" spellcheck="false" aria-controls="watch-sites">
+          <span class="site-filter-count" id="site-filter-count" aria-live="polite"></span>
+          <p class="site-empty" id="site-empty" hidden>No site matches that name.</p>
+        </div>
+        <div class="site-groups" id="watch-sites">
           <section class="site-group site-group-wide" aria-labelledby="watch-aggregators">
             <h3 class="site-group-title" id="watch-aggregators">Stream Aggregators</h3>
             <div class="site-list">
@@ -444,6 +450,50 @@
       for (var i = 0; i < links.length; i += 1) {
         links[i].href = links[i].getAttribute('href') + carry;
       }
+    })();
+    // The Watch directory holds more sites than one screen shows, and a name is
+    // faster than reading two columns. The filter reads the name and the host,
+    // keeps the count honest, and tells the reader when nothing matches.
+    (function () {
+      var input = document.getElementById('site-filter');
+      var count = document.getElementById('site-filter-count');
+      var empty = document.getElementById('site-empty');
+      if (!input || !count || !empty) return;
+      var rows = [].slice.call(document.querySelectorAll('.site'));
+      var groups = [].slice.call(document.querySelectorAll('.site-group'));
+      var total = rows.length;
+
+      function read(node, cls) {
+        var found = node.querySelector(cls);
+        return found ? found.textContent.trim().toLowerCase() : '';
+      }
+
+      function apply() {
+        var query = input.value.trim().toLowerCase();
+        var shown = 0;
+        rows.forEach(function (row) {
+          if (!row.getAttribute('data-site-name')) {
+            row.setAttribute('data-site-name', read(row, '.site-name'));
+            row.setAttribute('data-site-host', read(row, '.site-host'));
+          }
+          var hit =
+            !query ||
+            row.getAttribute('data-site-name').indexOf(query) !== -1 ||
+            row.getAttribute('data-site-host').indexOf(query) !== -1;
+          row.hidden = !hit;
+          if (hit) shown += 1;
+        });
+        groups.forEach(function (group) {
+          var title = group.querySelector('.site-group-title');
+          // A heading over an empty list is a heading for nothing.
+          if (title) title.hidden = !group.querySelector('.site:not([hidden])');
+        });
+        empty.hidden = shown !== 0;
+        count.textContent = query ? shown + ' of ' + total + ' sites' : total + ' sites';
+      }
+
+      input.addEventListener('input', apply);
+      apply();
     })();
     // The core writes the room state onto the document, and the YouTube Music
     // tile reads the music player out of it. A track title replaces the note. A

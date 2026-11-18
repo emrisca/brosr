@@ -66,7 +66,10 @@ done
 `node scripts/check-all.mjs` is the browser job from CI. It needs the relay binary, a working
 tree build of the bridge and a downloaded Chrome for Testing, so most contributors run it only
 before a change that touches the room, the panel or the lanes. It writes its logs to
-`zen/.runtime/`.
+`zen/.runtime/`. The job runs the signed guard, both browser lanes, the tests, and the canvas,
+landing and room app layout lanes. The layout lanes read a browser, and check-all points them at
+the Chrome for Testing under `zen/.runtime/cft`, so a hosted runner draws the same boxes as a
+desktop.
 
 ## Run the spike
 

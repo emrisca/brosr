@@ -7,18 +7,29 @@
 const PAPER = { width: 2400, height: 2400 };
 const PAPER_COLOUR = '#f7f7f8';
 
+// A brush wider than the old 80 goes a long way toward a usable eraser: at 400
+// one pass clears a sixth of the sheet.
+const MAX_BRUSH = 400;
+// Each layer is a paper-sized bitmap once it holds ink, about 23 MB. Six keeps
+// a full stack near 160 MB, which a small laptop still carries.
+const MAX_LAYERS = 6;
+
 const PRESETS = {
   pencil: { label: 'Pencil', size: 4, opacity: 1 },
   ink: { label: 'Ink', size: 7, opacity: 1 },
   marker: { label: 'Marker', size: 22, opacity: 0.5 },
   airbrush: { label: 'Airbrush', size: 30, opacity: 0.55 },
-  eraser: { label: 'Eraser', size: 26, opacity: 1 },
+  eraser: { label: 'Eraser', size: 60, opacity: 1 },
   line: { label: 'Line', size: 4, opacity: 1 },
   rect: { label: 'Box', size: 4, opacity: 1 },
   ellipse: { label: 'Oval', size: 4, opacity: 1 },
 };
 
 const SHAPES = new Set(['line', 'rect', 'ellipse']);
+
+function blankLayer(name) {
+  return { name, strokes: [], images: [], visible: true, opacity: 1 };
+}
 
 const state = {
   preset: 'pencil',
@@ -27,10 +38,11 @@ const state = {
   opacity: 1,
   stabilizer: 0.35,
   activeLayer: 1,
-  layers: [
-    { name: 'Sketch', strokes: [], visible: true },
-    { name: 'Ink', strokes: [], visible: true },
-  ],
+  // Every tool remembers the width and the opacity the hand last gave it, so
+  // an eraser comes back at its own size instead of the pencil's.
+  sizes: {},
+  opacities: {},
+  layers: [blankLayer('Sketch'), blankLayer('Ink')],
   history: [],
   redo: [],
 };
@@ -131,11 +143,17 @@ function hexAlpha(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// An eraser paints transparent black in destination-out, so it takes ink off
+// the layer it sits on and leaves the paper and every lower layer untouched.
+function inkColour(stroke) {
+  return stroke.tool === 'eraser' ? '#000000' : stroke.colour;
+}
+
 function paintShape(g, stroke) {
   const a = stroke.points[0];
   const b = stroke.points[stroke.points.length - 1];
   g.globalAlpha = stroke.opacity;
-  g.strokeStyle = stroke.tool === 'eraser' ? PAPER_COLOUR : stroke.colour;
+  g.strokeStyle = inkColour(stroke);
   g.lineWidth = Math.max(0.5, stroke.size);
   g.lineCap = 'round';
   g.lineJoin = 'round';
@@ -162,7 +180,7 @@ function paintShape(g, stroke) {
 function paintFreehand(g, stroke) {
   const points = stroke.points;
   const radius = Math.max(0.6, stroke.size / 2);
-  const colour = stroke.tool === 'eraser' ? PAPER_COLOUR : stroke.colour;
+  const colour = inkColour(stroke);
   const marker = stroke.tool === 'marker';
   const air = stroke.tool === 'airbrush';
   const step = Math.max(0.9, radius * (air ? 0.45 : 0.3));
@@ -212,12 +230,13 @@ function paintFreehand(g, stroke) {
 
 function paintStroke(g, stroke) {
   if (!stroke.points.length) return;
-  if (SHAPES.has(stroke.tool)) {
-    paintShape(g, stroke);
-    return;
-  }
-  paintFreehand(g, stroke);
+  const erase = stroke.tool === 'eraser';
+  const mode = g.globalCompositeOperation;
+  if (erase) g.globalCompositeOperation = 'destination-out';
+  if (SHAPES.has(stroke.tool)) paintShape(g, stroke);
+  else paintFreehand(g, stroke);
   g.globalAlpha = 1;
+  if (erase) g.globalCompositeOperation = mode;
 }
 
 // The sheet is the only place ink can land. A point past an edge is pulled back
@@ -237,11 +256,11 @@ function onPaperPoint(point) {
 // ---------------------------------------------------------------------------
 // Frames
 
-// The committed ink lives in one paper-sized bitmap, so a frame draws two
-// images, the line in progress and the pointers no matter how much is on the
-// sheet. The bitmap holds one pixel per sheet pixel, which is exact at a 100%
-// view and sharp below it. A zoomed-in view magnifies it, so the page keeps a
-// screen-sized crop for that case and rebuilds it once the view rests.
+// The sheet is flattened into one paper-sized bitmap, so a frame draws one
+// image, the line in progress and the pointers no matter how much is on the
+// sheet. Each layer also keeps its own bitmap underneath, because an eraser has
+// to cut one layer without reaching the paper or the layers below it. A layer
+// bitmap is only allocated once the layer holds something.
 const ink = document.createElement('canvas');
 ink.width = PAPER.width;
 ink.height = PAPER.height;
@@ -252,6 +271,45 @@ let inkDirty = true;
 let sharp = null;
 let sharpTimer = 0;
 
+// Replaying a layer builds it from its own record, which is what makes undo
+// bring erased ink back: the erase stroke leaves the record, and the layer is
+// painted again without it.
+function layerContext(layer) {
+  if (!layer.canvas) {
+    layer.canvas = document.createElement('canvas');
+    layer.canvas.width = PAPER.width;
+    layer.canvas.height = PAPER.height;
+    const target = layer.canvas.getContext('2d');
+    for (const stroke of layer.strokes) paintStroke(target, stroke);
+  }
+  return layer.canvas.getContext('2d');
+}
+
+function paintImage(g, item, alpha) {
+  const entry = imageFor(item.src);
+  if (!entry || !entry.ready) return;
+  const layerAlpha = alpha === undefined ? 1 : alpha;
+  const itemAlpha = item.opacity === undefined ? 1 : item.opacity;
+  g.globalAlpha = layerAlpha * itemAlpha;
+  g.drawImage(entry.img, item.x, item.y, item.width, item.height);
+  g.globalAlpha = 1;
+}
+
+// A stroke on the top visible layer with a fully opaque layer paints straight
+// into the flattened bitmap, so a commit costs no rebuild. Anything else marks
+// the bitmap, and the next frame re-composites the layer bitmaps.
+function canBake(stroke) {
+  const layer = state.layers[stroke.layer];
+  if (!layer || !layer.visible || stroke.tool === 'eraser') return false;
+  if ((layer.opacity === undefined ? 1 : layer.opacity) < 1) return false;
+  for (let i = stroke.layer + 1; i < state.layers.length; i += 1) {
+    if (state.layers[i].visible) return false;
+  }
+  return true;
+}
+
+// Every visible stroke in one pass, for a caller that wants the model painted
+// and not the cached sheet.
 function paintCommitted(g) {
   g.save();
   g.beginPath();
@@ -265,21 +323,63 @@ function paintCommitted(g) {
   g.globalAlpha = 1;
 }
 
+// The finished picture at paper size. An export and a test read this, so the
+// layer order, the layer opacity and the images all land the way the sheet
+// shows them.
+function paintComposite(g) {
+  g.fillStyle = PAPER_COLOUR;
+  g.fillRect(0, 0, PAPER.width, PAPER.height);
+  for (const layer of state.layers) {
+    if (!layer.visible) continue;
+    const alpha = layer.opacity === undefined ? 1 : layer.opacity;
+    if (layer.canvas || layer.strokes.length) {
+      layerContext(layer);
+      g.globalAlpha = alpha;
+      g.drawImage(layer.canvas, 0, 0);
+    }
+    for (const item of layer.images) paintImage(g, item, alpha);
+    g.globalAlpha = 1;
+  }
+}
+
 function paintInk() {
   inkCtx.setTransform(1, 0, 0, 1, 0, 0);
   inkCtx.globalAlpha = 1;
+  inkCtx.globalCompositeOperation = 'source-over';
   inkCtx.clearRect(0, 0, PAPER.width, PAPER.height);
   inkCtx.fillStyle = PAPER_COLOUR;
   inkCtx.fillRect(0, 0, PAPER.width, PAPER.height);
-  paintCommitted(inkCtx);
+  for (const layer of state.layers) {
+    if (!layer.visible) continue;
+    if (!layer.canvas && !layer.strokes.length) continue;
+    layerContext(layer);
+    const alpha = layer.opacity === undefined ? 1 : layer.opacity;
+    inkCtx.globalAlpha = alpha;
+    inkCtx.drawImage(layer.canvas, 0, 0);
+    for (const item of layer.images) {
+      if (item.animated) continue;
+      paintImage(inkCtx, item, alpha);
+    }
+    inkCtx.globalAlpha = 1;
+  }
   inkDirty = false;
 }
 
-// A finished stroke goes straight into the bitmap, so a commit never repaints
-// the sheet. Undo, a remote remove or a hidden layer still rebuilds it once.
-function addToInk(stroke) {
+// `applied` says the live eraser already cut this layer while the hand moved,
+// so the stroke only needs the flattened bitmap rebuilt.
+function addToInk(stroke, applied) {
   const layer = state.layers[stroke.layer];
-  if (inkDirty || !layer || !layer.visible) return;
+  if (!layer) return;
+  if (applied) {
+    markInk();
+    return;
+  }
+  const target = layerContext(layer);
+  paintStroke(target, stroke);
+  if (inkDirty || !canBake(stroke)) {
+    markInk();
+    return;
+  }
   inkCtx.save();
   inkCtx.beginPath();
   inkCtx.rect(0, 0, PAPER.width, PAPER.height);
@@ -291,6 +391,24 @@ function addToInk(stroke) {
 function markInk() {
   inkDirty = true;
   sharp = null;
+}
+
+// The eraser cuts the layer as the hand moves, so the erase is visible before
+// the pointer lifts. The record keeps the stroke, and a rebuild cuts the same
+// ink again.
+function eraseLive(stroke, from) {
+  const layer = state.layers[stroke.layer];
+  if (!layer) return;
+  const target = layerContext(layer);
+  const start = Math.max(0, (from || 1) - 1);
+  const slice = { ...stroke, points: stroke.points.slice(start) };
+  target.save();
+  target.beginPath();
+  target.rect(0, 0, PAPER.width, PAPER.height);
+  target.clip();
+  paintStroke(target, slice);
+  target.restore();
+  markInk();
 }
 
 function drawSheet(g) {
@@ -307,6 +425,16 @@ function drawSheet(g) {
   g.shadowBlur = 0;
   g.shadowOffsetY = 0;
   g.drawImage(ink, 0, 0, PAPER.width, PAPER.height);
+  // A GIF only animates while it is drawn from its own image element, so an
+  // animated item rides on top of the flattened sheet at every frame instead of
+  // being baked into it.
+  for (const layer of state.layers) {
+    if (!layer.visible) continue;
+    for (const item of layer.images) {
+      if (!item.animated) continue;
+      paintImage(g, item, layer.opacity === undefined ? 1 : layer.opacity);
+    }
+  }
   g.restore();
 }
 
@@ -384,6 +512,7 @@ function redraw() {
   ctx.clip();
   paintLive(ctx);
   paintPointers(ctx);
+  paintCursor(ctx);
   ctx.restore();
   scheduleSharp();
 }
@@ -441,6 +570,27 @@ function paintPointers(g) {
     }
     g.restore();
   }
+  g.restore();
+}
+
+// A ring the size of the brush follows the hand. It is the only way to judge a
+// 300-wide eraser before it lands, and it keeps the sheet readable because the
+// ring is drawn in paper units and stays one screen width at every zoom.
+function paintCursor(g) {
+  if (!pointer || drawing || panning || spaceDown) return;
+  if (!onPaperPoint(pointer)) return;
+  const radius = Math.max(2, state.size / 2);
+  g.save();
+  g.beginPath();
+  g.arc(pointer.x, pointer.y, radius, 0, Math.PI * 2);
+  g.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+  g.lineWidth = 2 / view.z;
+  g.stroke();
+  g.beginPath();
+  g.arc(pointer.x, pointer.y, Math.max(1, radius - 1.5 / view.z), 0, Math.PI * 2);
+  g.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+  g.lineWidth = 1.2 / view.z;
+  g.stroke();
   g.restore();
 }
 
@@ -576,10 +726,17 @@ function toWorld(event) {
 // ---------------------------------------------------------------------------
 // History
 
-function addStroke(stroke) {
-  state.layers[stroke.layer].strokes.push(stroke);
+function addStroke(stroke, applied) {
+  const before = state.layers.length;
+  const layer = ensureLayer(stroke.layer);
+  if (!layer) return;
+  // The layer bitmap is built from the strokes it already holds, so the new one
+  // is pushed after the build and never painted twice.
+  layerContext(layer);
+  layer.strokes.push(stroke);
   room.seen.add(stroke.id);
-  addToInk(stroke);
+  addToInk(stroke, applied);
+  if (state.layers.length !== before) renderLayers();
 }
 
 function removeById(id) {
@@ -588,6 +745,9 @@ function removeById(id) {
     const index = layer.strokes.findIndex((stroke) => stroke.id === id);
     if (index >= 0) {
       layer.strokes.splice(index, 1);
+      // The layer bitmap still holds the stroke that just left, so it is
+      // replayed from the record on the next paint.
+      layer.canvas = null;
       removed = true;
     }
   }
@@ -595,8 +755,8 @@ function removeById(id) {
   return removed;
 }
 
-function commit(stroke) {
-  addStroke(stroke);
+function commit(stroke, applied) {
+  addStroke(stroke, applied);
   state.history.push({ kind: 'add', stroke });
   state.redo.length = 0;
   sendStroke(stroke);
@@ -604,40 +764,71 @@ function commit(stroke) {
   touchDocument();
 }
 
+// Only this page's own work belongs in the undo stack. A remote frame lands
+// without a history entry, and this guard keeps a stray one from being undone
+// here: undo takes back my drawings, never another person's.
+function localOp(stack) {
+  while (stack.length) {
+    const op = stack[stack.length - 1];
+    const owner = op.kind === 'add' ? op.stroke.owner : op.kind === 'image' ? op.item.owner : PEER;
+    if (owner === PEER) return op;
+    stack.pop();
+  }
+  return null;
+}
+
 function undo() {
-  const op = state.history.pop();
+  const op = localOp(state.history);
   if (!op) return;
+  state.history.pop();
   if (op.kind === 'add') {
     removeById(op.stroke.id);
     sendRemove(op.stroke);
     state.redo.push(op);
+  } else if (op.kind === 'image') {
+    removeImageById(op.item.id);
+    state.redo.push(op);
   } else {
     for (const stroke of op.strokes) {
+      if (!state.layers[stroke.layer]) continue;
       addStroke(stroke);
       sendStroke(stroke);
     }
-    state.redo.push({ kind: 'clear', strokes: op.strokes.slice() });
+    for (const entry of op.images || []) {
+      if (!state.layers[entry.layer]) continue;
+      storeImageItem(entry.layer, entry.item);
+      sendImageItem(entry.layer, entry.item);
+    }
+    state.redo.push({ kind: 'clear', strokes: op.strokes.slice(), images: (op.images || []).slice() });
   }
   redraw();
+  renderImages();
   showHistory();
   touchDocument();
 }
 
 function redo() {
-  const op = state.redo.pop();
+  const op = localOp(state.redo);
   if (!op) return;
+  state.redo.pop();
   if (op.kind === 'add') {
     addStroke(op.stroke);
     sendStroke(op.stroke);
+    state.history.push(op);
+  } else if (op.kind === 'image') {
+    storeImageItem(op.layer, op.item);
+    sendImageItem(op.layer, op.item);
     state.history.push(op);
   } else {
     for (const stroke of op.strokes) {
       removeById(stroke.id);
       sendRemove(stroke);
     }
-    state.history.push({ kind: 'clear', strokes: op.strokes.slice() });
+    for (const entry of op.images || []) removeImageById(entry.item.id);
+    state.history.push(op);
   }
   redraw();
+  renderImages();
   showHistory();
   touchDocument();
 }
@@ -680,9 +871,29 @@ function docStrokes() {
   return state.layers.reduce((sum, layer) => sum + layer.strokes.length, 0);
 }
 
+function docImages() {
+  return state.layers.reduce((sum, layer) => sum + layer.images.length, 0);
+}
+
+// A row says what is on the sheet. An image counts beside the strokes, because
+// a canvas of two photos would otherwise read as empty.
+function docPreview() {
+  const strokes = docStrokes();
+  const images = docImages();
+  const parts = [strokes === 1 ? '1 stroke' : strokes + ' strokes'];
+  if (images) parts.push(images === 1 ? '1 image' : images + ' images');
+  return parts.join(', ');
+}
+
 function emptyBody() {
   return {
-    layers: state.layers.map((layer) => ({ name: layer.name, visible: true, strokes: [] })),
+    layers: state.layers.map((layer) => ({
+      name: layer.name,
+      visible: true,
+      opacity: 1,
+      strokes: [],
+      images: [],
+    })),
     activeLayer: 1,
   };
 }
@@ -692,7 +903,9 @@ function docBody() {
     layers: state.layers.map((layer) => ({
       name: layer.name,
       visible: layer.visible !== false,
+      opacity: layer.opacity === undefined ? 1 : layer.opacity,
       strokes: layer.strokes,
+      images: layer.images.map((item) => ({ ...item })),
     })),
     activeLayer: state.activeLayer,
   };
@@ -701,7 +914,11 @@ function docBody() {
 // A document swap clears the sheet and every record that would let an old
 // stroke answer for the new canvas.
 function resetDocument() {
-  for (const layer of state.layers) layer.strokes = [];
+  for (const layer of state.layers) {
+    layer.strokes = [];
+    layer.images = [];
+    layer.canvas = null;
+  }
   state.history.length = 0;
   state.redo.length = 0;
   room.seen.clear();
@@ -737,20 +954,43 @@ function applyDocument(doc) {
   docs.stored = doc.stored !== false;
   docs.hidden = doc.hidden === true;
   const layers = doc.body && Array.isArray(doc.body.layers) ? doc.body.layers : [];
-  state.layers.forEach((layer, index) => {
-    const source = layers[index];
-    layer.strokes = [];
-    if (!source) return;
-    if (typeof source.name === 'string' && source.name) layer.name = source.name.slice(0, 20);
+  // The stored stack decides the stack. A document from the old two-layer app
+  // still opens, and one with images and opacity keeps both.
+  const count = clamp(layers.length || 2, 2, MAX_LAYERS);
+  const next = [];
+  for (let index = 0; index < count; index += 1) {
+    const source = layers[index] || {};
+    const name =
+      typeof source.name === 'string' && source.name
+        ? source.name.slice(0, 20)
+        : 'Layer ' + (index + 1);
+    const layer = blankLayer(name);
     layer.visible = source.visible !== false;
-    if (!Array.isArray(source.strokes)) return;
-    for (const raw of source.strokes) {
-      const stroke = storedStroke(raw, index);
-      if (stroke) layer.strokes.push(stroke);
+    layer.opacity = clamp(Number(source.opacity) || 1, 0.05, 1);
+    if (Array.isArray(source.strokes)) {
+      for (const raw of source.strokes) {
+        const stroke = storedStroke(raw, index);
+        if (stroke) layer.strokes.push(stroke);
+      }
     }
-  });
+    if (Array.isArray(source.images)) {
+      for (const raw of source.images) {
+        const item = storedImage(raw);
+        if (item) layer.images.push(item);
+      }
+    }
+    next.push(layer);
+  }
+  state.layers = next;
+  state.activeLayer = clamp(
+    Number(doc.body && doc.body.activeLayer) || 0,
+    0,
+    state.layers.length - 1
+  );
   markInk();
   redraw();
+  renderLayers();
+  renderImages();
   showHistory();
   showDocuments();
 }
@@ -792,7 +1032,7 @@ function showDocuments() {
     const meta = document.createElement('span');
     meta.className = 'doc-meta';
     meta.textContent =
-      shortDate(item.at) + ' · ' + (item.preview || 'empty') + (item.hidden ? ' · hidden' : '');
+      shortDate(item.at) + ', ' + (item.preview || 'empty') + (item.hidden ? ', hidden' : '');
     open.append(title, meta);
     open.addEventListener('click', () => requestDocument(item.id));
     row.append(open);
@@ -842,9 +1082,12 @@ async function saveDocument() {
   try {
     await docs.api.put(doc);
   } catch {
+    // A canvas that outgrows the store still lives in the room, and the status
+    // line says why the list did not move.
+    note('This canvas is too big to store on the host. It stays in the room.');
     return;
   }
-  const preview = docStrokes() === 1 ? '1 stroke' : docStrokes() + ' strokes';
+  const preview = docPreview();
   const entry = { id: doc.id, name: doc.name, at: doc.at, hidden: doc.hidden, stored: true, preview };
   const index = docs.list.findIndex((item) => item.id === doc.id);
   if (index >= 0) docs.list[index] = entry;
@@ -1113,6 +1356,833 @@ if (docStoreInput) {
 }
 
 // ---------------------------------------------------------------------------
+// Layers, images and colour
+
+const layerListEl = document.getElementById('layers');
+const layerCountEl = document.getElementById('layer-count');
+const layerOpacityInput = document.getElementById('layer-opacity');
+const layerOpacityOut = document.getElementById('layer-opacity-out');
+let noteTimer = 0;
+let picking = false;
+
+// One line in the footer says why a thing did not happen, so a refusal never
+// looks like a broken button.
+function note(text) {
+  const node = document.getElementById('note');
+  if (!node) return;
+  node.textContent = text;
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => {
+    node.textContent = '';
+  }, 6000);
+}
+
+function layerLabel(index) {
+  return 'Layer ' + (index + 1);
+}
+
+function cleanLayerName(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 20);
+}
+
+function ensureLayer(index) {
+  while (state.layers.length <= index && state.layers.length < MAX_LAYERS) {
+    state.layers.push(blankLayer(layerLabel(state.layers.length)));
+  }
+  return state.layers[index] || null;
+}
+
+function sendLayers() {
+  send({
+    op: 'layers',
+    layers: state.layers.map((layer) => ({
+      name: layer.name,
+      visible: layer.visible !== false,
+      opacity: layer.opacity === undefined ? 1 : layer.opacity,
+    })),
+  });
+}
+
+function sendLayerOp(data) {
+  send({ op: 'layer', ...data });
+}
+
+function addLayer() {
+  if (state.layers.length >= MAX_LAYERS) {
+    note('Six layers is the limit on a sheet this size.');
+    return null;
+  }
+  const index = state.layers.length;
+  const layer = blankLayer(layerLabel(index));
+  state.layers.push(layer);
+  state.activeLayer = index;
+  markInk();
+  redraw();
+  renderLayers();
+  touchDocument();
+  sendLayerOp({ kind: 'add', index, name: layer.name });
+  return layer;
+}
+
+function removeLayer(index) {
+  if (state.layers.length <= 1) {
+    note('A sheet keeps at least one layer.');
+    return;
+  }
+  if (!state.layers[index]) return;
+  state.layers.splice(index, 1);
+  if (state.activeLayer > index) state.activeLayer -= 1;
+  if (state.activeLayer >= state.layers.length) state.activeLayer = state.layers.length - 1;
+  markInk();
+  redraw();
+  renderLayers();
+  touchDocument();
+  sendLayerOp({ kind: 'remove', index });
+}
+
+function moveLayer(from, to) {
+  if (from === to) return;
+  if (from < 0 || to < 0 || from >= state.layers.length || to >= state.layers.length) return;
+  const [layer] = state.layers.splice(from, 1);
+  state.layers.splice(to, 0, layer);
+  if (state.activeLayer === from) state.activeLayer = to;
+  else if (from < state.activeLayer && to >= state.activeLayer) state.activeLayer -= 1;
+  else if (from > state.activeLayer && to <= state.activeLayer) state.activeLayer += 1;
+  markInk();
+  redraw();
+  renderLayers();
+  touchDocument();
+  sendLayerOp({ kind: 'move', from, to });
+}
+
+function renameLayer(index, name) {
+  const layer = state.layers[index];
+  if (!layer) return;
+  layer.name = cleanLayerName(name) || layerLabel(index);
+  renderLayers();
+  touchDocument();
+  sendLayerOp({ kind: 'rename', index, name: layer.name });
+}
+
+function setLayerVisible(index, visible) {
+  const layer = state.layers[index];
+  if (!layer) return;
+  layer.visible = Boolean(visible);
+  markInk();
+  redraw();
+  renderLayers();
+  touchDocument();
+  sendLayerOp({ kind: 'visible', index, value: layer.visible });
+}
+
+function setLayerOpacity(index, value) {
+  const layer = state.layers[index];
+  if (!layer) return;
+  layer.opacity = clamp(Number(value) || 1, 0.05, 1);
+  markInk();
+  redraw();
+  if (layerOpacityOut) layerOpacityOut.textContent = Math.round(layer.opacity * 100) + '%';
+  const row = layerListEl
+    ? layerListEl.querySelector('.layer[data-layer="' + index + '"] .layer-meta')
+    : null;
+  if (row) row.textContent = Math.round(layer.opacity * 100) + '%';
+  touchDocument();
+  sendLayerOp({ kind: 'opacity', index, value: layer.opacity });
+}
+
+function clearLayer(index) {
+  const layer = state.layers[index];
+  if (!layer) return;
+  const strokes = layer.strokes.filter((stroke) => stroke.owner === PEER);
+  const images = layer.images.filter((item) => item.owner === PEER);
+  if (!strokes.length && !images.length) {
+    note('Only your own ink clears on a shared sheet.');
+    return;
+  }
+  layer.strokes = layer.strokes.filter((stroke) => stroke.owner !== PEER);
+  layer.images = layer.images.filter((item) => item.owner !== PEER);
+  layer.canvas = null;
+  for (const stroke of strokes) sendRemove(stroke);
+  for (const item of images) send({ op: 'image-remove', id: item.id });
+  state.history.push({
+    kind: 'clear',
+    strokes,
+    images: images.map((item) => ({ layer: index, item })),
+  });
+  state.redo.length = 0;
+  markInk();
+  redraw();
+  renderLayers();
+  showHistory();
+  touchDocument();
+  sendLayerOp({ kind: 'clear', index });
+}
+
+// A layer op from the wire makes the same change without sending it back, so
+// two pages never answer each other in a loop.
+function applyLayerOp(data, from) {
+  if (!data || typeof data !== 'object') return;
+  const index = Number(data.index);
+  if (data.kind === 'add') {
+    if (!Number.isInteger(index) || index < 0 || index > state.layers.length) return;
+    if (index >= MAX_LAYERS) return;
+    if (state.layers.length >= MAX_LAYERS && index >= state.layers.length) return;
+    const layer = index === state.layers.length ? ensureLayer(index) : state.layers[index];
+    if (!layer) return;
+    layer.name = cleanLayerName(data.name) || layerLabel(index);
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+  if (data.kind === 'remove') {
+    if (!Number.isInteger(index) || !state.layers[index] || state.layers.length <= 1) return;
+    state.layers.splice(index, 1);
+    if (state.activeLayer > index) state.activeLayer -= 1;
+    if (state.activeLayer >= state.layers.length) state.activeLayer = state.layers.length - 1;
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+  if (!Number.isInteger(index) || !state.layers[index]) return;
+  const layer = state.layers[index];
+  if (data.kind === 'rename') {
+    layer.name = cleanLayerName(data.name) || layerLabel(index);
+    renderLayers();
+    return;
+  }
+  if (data.kind === 'visible') {
+    layer.visible = data.value !== false;
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+  if (data.kind === 'opacity') {
+    layer.opacity = clamp(Number(data.value) || 1, 0.05, 1);
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+  if (data.kind === 'move') {
+    const to = Number(data.to);
+    if (!Number.isInteger(to) || to < 0 || to >= state.layers.length) return;
+    const [moved] = state.layers.splice(index, 1);
+    state.layers.splice(to, 0, moved);
+    if (state.activeLayer === index) state.activeLayer = to;
+    else if (index < state.activeLayer && to >= state.activeLayer) state.activeLayer -= 1;
+    else if (index > state.activeLayer && to <= state.activeLayer) state.activeLayer += 1;
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+  if (data.kind === 'clear') {
+    // A peer's clear takes that peer's work and leaves the rest of the sheet.
+    layer.strokes = layer.strokes.filter((stroke) => stroke.owner !== from);
+    layer.images = layer.images.filter((item) => item.owner !== from);
+    layer.canvas = null;
+    markInk();
+    redraw();
+    renderLayers();
+  }
+}
+
+function startRename(index, holder) {
+  const layer = state.layers[index];
+  if (!layer || !holder) return;
+  const input = document.createElement('input');
+  input.className = 'layer-rename';
+  input.type = 'text';
+  input.maxLength = 20;
+  input.value = layer.name;
+  holder.replaceChildren(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    if (commit) renameLayer(index, input.value);
+    else renderLayers();
+  };
+  input.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') finish(true);
+    if (event.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+function renderLayers() {
+  if (!layerListEl) return;
+  layerListEl.textContent = '';
+  // The top of the stack reads first, the way a layer list does elsewhere.
+  for (let index = state.layers.length - 1; index >= 0; index -= 1) {
+    const layer = state.layers[index];
+    const row = document.createElement('div');
+    row.className = 'layer';
+    row.dataset.layer = String(index);
+    if (index === state.activeLayer) row.classList.add('is-active');
+
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'layer-pick';
+    pick.dataset.layer = String(index);
+    pick.setAttribute('aria-pressed', String(index === state.activeLayer));
+    const name = document.createElement('span');
+    name.className = 'layer-name';
+    name.textContent = layer.name;
+    name.title = 'Double click to rename this layer';
+    const meta = document.createElement('span');
+    meta.className = 'layer-meta';
+    meta.textContent = Math.round((layer.opacity === undefined ? 1 : layer.opacity) * 100) + '%';
+    pick.append(name, meta);
+
+    const eye = document.createElement('button');
+    eye.type = 'button';
+    eye.className = 'layer-toggle';
+    eye.dataset.visible = String(index);
+    eye.textContent = layer.visible ? 'Show' : 'Hidden';
+    eye.title = layer.visible ? 'Hide this layer' : 'Show this layer';
+
+    row.append(pick, eye);
+    layerListEl.append(row);
+
+    pick.addEventListener('click', () => {
+      state.activeLayer = index;
+      renderLayers();
+    });
+    name.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      startRename(index, pick);
+    });
+    eye.addEventListener('click', () => setLayerVisible(index, !layer.visible));
+  }
+  if (layerCountEl) layerCountEl.textContent = state.layers.length + '/' + MAX_LAYERS;
+  syncLayerControls();
+}
+
+function syncLayerControls() {
+  const layer = state.layers[state.activeLayer];
+  if (!layer) return;
+  const opacity = layer.opacity === undefined ? 1 : layer.opacity;
+  if (layerOpacityInput) layerOpacityInput.value = String(Math.round(opacity * 100));
+  if (layerOpacityOut) layerOpacityOut.textContent = Math.round(opacity * 100) + '%';
+  renderImages();
+}
+
+// ---------------------------------------------------------------------------
+// Images
+
+const IMAGE_MAX_BYTES = 1.6 * 1024 * 1024;
+const IMAGE_MAX_SIDE = 1600;
+const imageCache = new Map();
+let imageCount = 0;
+
+function nextImageId() {
+  imageCount += 1;
+  return PEER + '-img' + imageCount;
+}
+
+function imageFor(src) {
+  let entry = imageCache.get(src);
+  if (entry) return entry;
+  entry = { img: new Image(), ready: false, failed: false };
+  entry.img.addEventListener('load', () => {
+    entry.ready = true;
+    markInk();
+    redraw();
+    renderImages();
+  });
+  entry.img.addEventListener('error', () => {
+    entry.failed = true;
+    renderImages();
+  });
+  entry.img.src = src;
+  imageCache.set(src, entry);
+  return entry;
+}
+
+function isAnimatedSrc(src) {
+  return /^data:image\/gif;/i.test(String(src || ''));
+}
+
+function cleanWireImage(data) {
+  const owner = cleanOwner(data && data.owner);
+  if (!data || typeof data.id !== 'string' || !data.id || data.id.length > 80) return null;
+  const src = typeof data.src === 'string' ? data.src : '';
+  if (!/^data:image\/(png|jpe?g|gif|webp);/i.test(src)) return null;
+  if (src.length > IMAGE_MAX_BYTES * 1.8) return null;
+  const numbers = [data.x, data.y, data.width, data.height].map(Number);
+  if (!numbers.every(Number.isFinite)) return null;
+  const [x, y, width, height] = numbers;
+  if (width <= 0 || height <= 0) return null;
+  if (room.seen.has(data.id)) return null;
+  const item = {
+    id: data.id,
+    src,
+    x: clamp(x, 0, PAPER.width),
+    y: clamp(y, 0, PAPER.height),
+    width: clamp(width, 1, PAPER.width),
+    height: clamp(height, 1, PAPER.height),
+    opacity: clamp(Number(data.opacity) || 1, 0.05, 1),
+    owner: owner,
+    animated: data.animated === true || isAnimatedSrc(src),
+  };
+  room.seen.add(item.id);
+  return item;
+}
+
+function storedImage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return cleanWireImage(raw);
+}
+
+function sendImageItem(layerIndex, item) {
+  send({
+    op: 'image',
+    layer: layerIndex,
+    id: item.id,
+    src: item.src,
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+    opacity: item.opacity,
+    owner: item.owner || PEER,
+    animated: item.animated === true,
+  });
+}
+
+function storeImageItem(layerIndex, item) {
+  if (!item) return null;
+  const layer = ensureLayer(layerIndex);
+  if (!layer) return null;
+  if (layer.images.some((held) => held.id === item.id)) return null;
+  layer.images.push(item);
+  imageFor(item.src);
+  markInk();
+  redraw();
+  renderImages();
+  return item;
+}
+
+function placeImageItem(layerIndex, item) {
+  if (!storeImageItem(layerIndex, item)) return null;
+  state.history.push({ kind: 'image', layer: layerIndex, item });
+  state.redo.length = 0;
+  showHistory();
+  sendImageItem(layerIndex, item);
+  touchDocument();
+  return item;
+}
+
+function removeImageById(id, fromRoom) {
+  let removed = false;
+  for (const layer of state.layers) {
+    const at = layer.images.findIndex((item) => item.id === id);
+    if (at < 0) continue;
+    layer.images.splice(at, 1);
+    removed = true;
+  }
+  if (!removed) return false;
+  markInk();
+  redraw();
+  renderImages();
+  touchDocument();
+  if (!fromRoom) send({ op: 'image-remove', id });
+  return true;
+}
+
+function renderImages() {
+  const list = document.getElementById('image-list');
+  if (!list) return;
+  list.textContent = '';
+  const layer = state.layers[state.activeLayer];
+  if (!layer || !layer.images.length) {
+    const empty = document.createElement('li');
+    empty.className = 'image-empty';
+    empty.textContent = 'No image on this layer.';
+    list.append(empty);
+    return;
+  }
+  for (const item of layer.images) {
+    const row = document.createElement('li');
+    row.className = 'image-row';
+    const thumb = document.createElement('img');
+    thumb.src = item.src;
+    thumb.alt = '';
+    thumb.className = 'image-thumb';
+    const size = document.createElement('span');
+    size.className = 'image-size';
+    size.textContent = Math.round(item.width) + ' x ' + Math.round(item.height);
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'doc-tool';
+    del.textContent = 'Remove';
+    del.addEventListener('click', () => removeImageById(item.id));
+    row.append(thumb, size);
+    // A peer's picture can be seen here, but only its author takes it away.
+    if (item.owner === PEER) row.append(del);
+    list.append(row);
+  }
+}
+
+// A new image lands in the middle of the view at no more than 60% of the
+// paper, so a phone photo arrives as something a person can see at once.
+function fitBox(width, height) {
+  const maxSide = Math.min(PAPER.width, PAPER.height) * 0.6;
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  const box = { width: Math.max(1, width * scale), height: Math.max(1, height * scale) };
+  const centre = viewCentre();
+  box.x = clamp(centre.x - box.width / 2, 0, PAPER.width - box.width);
+  box.y = clamp(centre.y - box.height / 2, 0, PAPER.height - box.height);
+  return box;
+}
+
+function viewCentre() {
+  const rect = viewport.getBoundingClientRect();
+  const point = toWorld({
+    clientX: rect.left + viewport.clientWidth / 2,
+    clientY: rect.top + viewport.clientHeight / 2,
+  });
+  return { x: clamp(point.x, 0, PAPER.width), y: clamp(point.y, 0, PAPER.height) };
+}
+
+// A large photo is scaled down before it becomes a data URL, so the sheet, the
+// room frame and the stored document all stay inside their budgets.
+function prepareImage(src, type) {
+  const entry = imageFor(src);
+  return new Promise((resolve) => {
+    const run = () => {
+      if (entry.failed) {
+        resolve('');
+        return;
+      }
+      if (!entry.ready) return;
+      if (isAnimatedSrc(src)) {
+        resolve(src.length > IMAGE_MAX_BYTES * 1.2 ? '' : src);
+        return;
+      }
+      const longest = Math.max(entry.img.naturalWidth, entry.img.naturalHeight);
+      if (!longest) {
+        resolve('');
+        return;
+      }
+      if (src.length <= IMAGE_MAX_BYTES && longest <= IMAGE_MAX_SIDE) {
+        resolve(src);
+        return;
+      }
+      const scale = Math.min(1, IMAGE_MAX_SIDE / longest);
+      const out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round(entry.img.naturalWidth * scale));
+      out.height = Math.max(1, Math.round(entry.img.naturalHeight * scale));
+      out.getContext('2d').drawImage(entry.img, 0, 0, out.width, out.height);
+      resolve(out.toDataURL(type === 'image/png' ? 'image/png' : 'image/jpeg', 0.86));
+    };
+    entry.img.addEventListener('load', run);
+    run();
+  });
+}
+
+function insertImageSource(src, label) {
+  if (!/^data:image\//i.test(String(src || ''))) {
+    note('Only an image can land on the sheet.');
+    return Promise.resolve(null);
+  }
+  if (src.length > IMAGE_MAX_BYTES * 1.5) {
+    note('That image is too large to store. Keep it under ' + Math.round(IMAGE_MAX_BYTES / 1048576) + ' MB.');
+    return Promise.resolve(null);
+  }
+  const entry = imageFor(src);
+  return new Promise((resolve) => {
+    const settle = () => {
+      if (entry.failed) {
+        note('That image did not decode.');
+        resolve(null);
+        return;
+      }
+      if (!entry.ready) return;
+      entry.img.removeEventListener('load', settle);
+      const natural = {
+        width: entry.img.naturalWidth || 1,
+        height: entry.img.naturalHeight || 1,
+      };
+      const box = fitBox(natural.width, natural.height);
+      const item = {
+        id: nextImageId(),
+        src,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        opacity: 1,
+        owner: PEER,
+        animated: isAnimatedSrc(src),
+      };
+      placeImageItem(state.activeLayer, item);
+      const where = state.layers[state.activeLayer];
+      note((label || 'Image') + ' landed on ' + ((where && where.name) || 'the layer') + '.');
+      resolve(item);
+    };
+    entry.img.addEventListener('load', settle);
+    settle();
+  });
+}
+
+function readImageFile(file) {
+  if (!file) return Promise.resolve(null);
+  if (!/^image\//.test(file.type || '')) {
+    note('That file is not an image.');
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  }).then((src) => {
+    if (!src) {
+      note('That file could not be read.');
+      return null;
+    }
+    return prepareImage(src, file.type).then((ready) => {
+      if (!ready) {
+        note('That image is too large to store. Keep it under ' + Math.round(IMAGE_MAX_BYTES / 1048576) + ' MB.');
+        return null;
+      }
+      return insertImageSource(ready, file.name);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// GIF search
+
+const GIF_KEY = 'brosr.canvas.tenor';
+// The key Tenor publishes for demos. It carries light use, and a person who
+// searches a lot can put a registered key in the field and it wins.
+const GIF_DEMO_KEY = 'LIVDSRZULELA';
+
+function gifKey() {
+  try {
+    return localStorage.getItem(GIF_KEY) || GIF_DEMO_KEY;
+  } catch {
+    return GIF_DEMO_KEY;
+  }
+}
+
+function setGifStatus(text, busy) {
+  const node = document.getElementById('gif-status');
+  if (!node) return;
+  node.textContent = text;
+  if (busy) node.dataset.busy = 'true';
+  else delete node.dataset.busy;
+}
+
+function openGif() {
+  const dialog = document.getElementById('gif-dialog');
+  if (!dialog) return;
+  dialog.hidden = false;
+  const key = document.getElementById('gif-key');
+  if (key) key.value = gifKey() === GIF_DEMO_KEY ? '' : gifKey();
+  const query = document.getElementById('gif-query');
+  if (query) query.focus();
+}
+
+function closeGif() {
+  const dialog = document.getElementById('gif-dialog');
+  if (dialog) dialog.hidden = true;
+}
+
+async function chooseGif(url) {
+  if (!/^https?:\/\//i.test(String(url || ''))) {
+    setGifStatus('That is not a GIF address.');
+    return;
+  }
+  setGifStatus('Fetching that GIF...');
+  try {
+    const response = await fetch(url, { cache: 'force-cache' });
+    if (!response.ok) throw new Error('status ' + response.status);
+    const blob = await response.blob();
+    if (blob.size > IMAGE_MAX_BYTES) {
+      setGifStatus(
+        'That GIF is ' + (blob.size / 1048576).toFixed(1) + ' MB and will not store. Pick a smaller one.'
+      );
+      return;
+    }
+    const src = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(blob);
+    });
+    if (!src) throw new Error('read');
+    const item = await insertImageSource(src, 'GIF');
+    if (item) {
+      closeGif();
+      setGifStatus('');
+    } else {
+      setGifStatus('That GIF could not be placed.');
+    }
+  } catch (error) {
+    setGifStatus(
+      'That host refused the copy (' +
+        (error && error.message ? error.message : 'network') +
+        '). Paste a direct GIF address below instead.'
+    );
+  }
+}
+
+async function searchGifs() {
+  const query = document.getElementById('gif-query');
+  const results = document.getElementById('gif-results');
+  if (!query || !results) return;
+  const text = query.value.trim();
+  if (!text) {
+    setGifStatus('Type what the GIF should show.');
+    return;
+  }
+  // A search is a grid of tiles that have not arrived yet, not a line of text
+  // where the pictures will be.
+  results.textContent = '';
+  results.setAttribute('aria-busy', 'true');
+  for (let i = 0; i < 12; i += 1) {
+    const tile = document.createElement('div');
+    tile.className = 'gif-skeleton';
+    tile.setAttribute('aria-hidden', 'true');
+    results.append(tile);
+  }
+  setGifStatus('Searching Tenor.', true);
+  const url =
+    'https://g.tenor.com/v1/search?q=' +
+    encodeURIComponent(text) +
+    '&key=' +
+    encodeURIComponent(gifKey()) +
+    '&limit=24&media_filter=minimal&contentfilter=high';
+  let data = null;
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new Error('status ' + response.status);
+    data = await response.json();
+  } catch (error) {
+    results.textContent = '';
+    results.removeAttribute('aria-busy');
+    setGifStatus(
+      'Tenor did not answer (' +
+        (error && error.message ? error.message : 'network') +
+        '). A registered key may fix it.'
+    );
+    return;
+  }
+  results.textContent = '';
+  results.removeAttribute('aria-busy');
+  const hits = Array.isArray(data && data.results) ? data.results : [];
+  if (!hits.length) {
+    setGifStatus('No GIF for "' + text + '".');
+    return;
+  }
+  let shown = 0;
+  for (const hit of hits) {
+    const media = hit && Array.isArray(hit.media) ? hit.media[0] : null;
+    const full = media && media.gif ? media.gif.url : '';
+    const thumb = media && media.tinygif ? media.tinygif.url : full;
+    if (!full) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'gif-item';
+    const img = document.createElement('img');
+    img.src = thumb;
+    img.alt = hit.content_description || 'GIF';
+    img.loading = 'lazy';
+    button.append(img);
+    button.addEventListener('click', () => chooseGif(full));
+    results.append(button);
+    shown += 1;
+  }
+  setGifStatus(shown ? shown + ' results. Click one to place it.' : 'No GIF for "' + text + '".');
+}
+
+// ---------------------------------------------------------------------------
+// Colour extras
+
+const RECENT_KEY = 'brosr.canvas.recent';
+const MAX_RECENT = 8;
+
+function readRecent() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((value) => /^#[0-9a-f]{6}$/i.test(value)).slice(0, MAX_RECENT);
+  } catch {
+    return [];
+  }
+}
+
+function renderRecent(list) {
+  const holder = document.getElementById('recents');
+  if (!holder) return;
+  holder.textContent = '';
+  for (const colour of list || readRecent()) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'recent-swatch';
+    button.style.setProperty('--c', colour);
+    button.title = colour;
+    button.setAttribute('aria-label', 'Recent colour ' + colour);
+    button.addEventListener('click', () => setColour(colour, true));
+    holder.append(button);
+  }
+}
+
+function rememberColour(colour) {
+  const list = [colour]
+    .concat(readRecent().filter((value) => value.toLowerCase() !== colour.toLowerCase()))
+    .slice(0, MAX_RECENT);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  } catch {
+    // A private window can refuse storage, and the swatch still works.
+  }
+  renderRecent(list);
+}
+
+// The browser eyedropper is exact and leaves the page alone. Without it, the
+// next press on the sheet reads the flattened paper pixel under the hand.
+function startPick() {
+  if (typeof window.EyeDropper === 'function') {
+    new window.EyeDropper()
+      .open()
+      .then((result) => setColour(result.sRGBHex, true))
+      .catch(() => {});
+    return;
+  }
+  picking = true;
+  viewport.classList.add('picking');
+  note('Click the sheet to take its colour.');
+}
+
+function sampleAt(point) {
+  if (inkDirty) paintInk();
+  const x = Math.round(clamp(point.x, 0, PAPER.width - 1));
+  const y = Math.round(clamp(point.y, 0, PAPER.height - 1));
+  const pixel = inkCtx.getImageData(x, y, 1, 1).data;
+  return (
+    '#' +
+    [pixel[0], pixel[1], pixel[2]]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('')
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Room
 
 function setRoomState(text, bad) {
@@ -1165,7 +2235,7 @@ function showRoomState() {
   const who = named.length
     ? 'you, ' + named.join(', ') + (rest > 0 ? ', +' + rest : '')
     : 'only you';
-  setRoomState(pages + ' · ' + strokeTotal() + ' strokes · ' + who);
+  setRoomState(pages + ', ' + strokeTotal() + ' strokes, ' + who);
 }
 
 function send(data) {
@@ -1238,6 +2308,7 @@ function sendStroke(stroke) {
       colour: stroke.colour,
       size: stroke.size,
       opacity: stroke.opacity,
+      owner: stroke.owner || PEER,
       part,
       parts,
       points: stroke.points.slice(part * PART_POINTS, (part + 1) * PART_POINTS).map(wirePoint),
@@ -1257,9 +2328,11 @@ function strokeTotal() {
 // that reconnects owns everything from before the drop. Handing the sheet over
 // on open is what makes both sides converge, and the ids stop the repeat.
 function announce() {
-  for (const layer of state.layers) {
+  state.layers.forEach((layer, index) => {
     for (const stroke of layer.strokes) sendStroke(stroke);
-  }
+    for (const item of layer.images) sendImageItem(index, item);
+  });
+  sendLayers();
 }
 
 // A joiner asks for the sheet. A peer that is still opening its own socket
@@ -1308,15 +2381,25 @@ function sendLiveEnd(stroke) {
 
 // A frame from the wire is untrusted. Anything that is not a stroke this app
 // can paint is dropped, not repaired.
+function cleanOwner(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(value) ? value : '';
+}
+
+// A stroke belongs to the page that drew it. Undo and clear ask this before
+// they touch anything, so a peer's ink is never in this page's history.
+function ownStroke(stroke) {
+  return Boolean(stroke && stroke.owner === PEER);
+}
+
 function cleanStroke(data) {
   if (!data || typeof data.id !== 'string' || !data.id || data.id.length > 80) return null;
   const layer = Number(data.layer);
-  if (!Number.isInteger(layer) || layer < 0 || layer >= state.layers.length) return null;
+  if (!Number.isInteger(layer) || layer < 0 || layer >= MAX_LAYERS) return null;
   if (!PRESETS[data.tool]) return null;
   if (typeof data.colour !== 'string' || !/^#[0-9a-f]{6}$/i.test(data.colour)) return null;
   const size = Number(data.size);
   const opacity = Number(data.opacity);
-  if (!Number.isFinite(size) || size <= 0 || size > 200) return null;
+  if (!Number.isFinite(size) || size <= 0 || size > MAX_BRUSH) return null;
   if (!Number.isFinite(opacity) || opacity <= 0 || opacity > 1) return null;
   return {
     id: data.id,
@@ -1325,6 +2408,7 @@ function cleanStroke(data) {
     colour: data.colour,
     size,
     opacity,
+    owner: cleanOwner(data.owner),
     points: [],
   };
 }
@@ -1368,6 +2452,48 @@ function handle(from, data) {
     entry.pointer = data.gone === true ? null : cleanPointer(data);
     glideTo(from);
     redraw();
+    return;
+  }
+
+  if (data.op === 'layers' && Array.isArray(data.layers)) {
+    // The stack is positional, so the sender's list is the truth. A page that
+    // just joined takes the room's count, names and opacity.
+    const wanted = clamp(data.layers.length, 1, MAX_LAYERS);
+    while (state.layers.length > wanted) state.layers.pop();
+    while (state.layers.length < wanted) {
+      state.layers.push(blankLayer(layerLabel(state.layers.length)));
+    }
+    state.layers.forEach((layer, index) => {
+      const source = data.layers[index];
+      if (!source || typeof source !== 'object') return;
+      layer.name = cleanLayerName(source.name) || layerLabel(index);
+      layer.visible = source.visible !== false;
+      layer.opacity = clamp(Number(source.opacity) || 1, 0.05, 1);
+    });
+    if (state.activeLayer >= state.layers.length) state.activeLayer = state.layers.length - 1;
+    markInk();
+    redraw();
+    renderLayers();
+    return;
+  }
+
+  if (data.op === 'layer') {
+    applyLayerOp(data, from);
+    return;
+  }
+
+  if (data.op === 'image') {
+    const index = Number(data.layer);
+    if (!Number.isInteger(index) || index < 0 || index >= MAX_LAYERS) return;
+    const item = cleanWireImage(data);
+    if (!item) return;
+    if (!item.owner) item.owner = cleanOwner(from);
+    storeImageItem(index, item);
+    return;
+  }
+
+  if (data.op === 'image-remove' && typeof data.id === 'string') {
+    removeImageById(data.id, true);
     return;
   }
 
@@ -1419,6 +2545,8 @@ function handle(from, data) {
   if (data.op === 'stroke') {
     const stroke = cleanStroke(data);
     if (!stroke) return;
+    // A frame that names no author belongs to the page that sent it.
+    if (!stroke.owner) stroke.owner = cleanOwner(from);
     if (room.seen.has(stroke.id)) return;
     if (!Number.isInteger(data.part) || !Number.isInteger(data.parts) || data.parts < 1) return;
     if (data.part < 0 || data.part >= data.parts) return;
@@ -1464,6 +2592,7 @@ function handle(from, data) {
   if (data.op === 'live') {
     const stroke = cleanStroke(data);
     if (!stroke || !Array.isArray(data.points)) return;
+    if (!stroke.owner) stroke.owner = cleanOwner(from);
     if (room.seen.has(stroke.id)) return;
     const points = [];
     for (const point of data.points) {
@@ -1505,6 +2634,12 @@ function handle(from, data) {
         answered += 1;
       }
     }
+    // Images and the layer stack travel the same way, so a joiner opens a
+    // sheet that matches the room and not an empty two-layer default.
+    state.layers.forEach((layer, index) => {
+      for (const item of layer.images) sendImageItem(index, item);
+    });
+    sendLayers();
     // The joiner learns every name at once instead of waiting for the next
     // heartbeat from each page.
     sendHere();
@@ -1598,6 +2733,7 @@ function startStroke(point) {
   drawing = {
     stroke: {
       id: nextStrokeId(),
+      owner: PEER,
       tool: state.preset,
       colour: state.colour,
       size: state.size,
@@ -1606,6 +2742,8 @@ function startStroke(point) {
       points: [point],
     },
     last: point,
+    // How many points the live eraser has already cut into the layer.
+    painted: 1,
   };
 }
 
@@ -1624,6 +2762,10 @@ function addPoint(point) {
   });
   stroke.points.push(next);
   drawing.last = next;
+  if (stroke.tool === 'eraser') {
+    eraseLive(stroke, drawing.painted);
+    drawing.painted = stroke.points.length;
+  }
   sendLive(stroke, false);
   redraw();
 }
@@ -1640,6 +2782,13 @@ viewport.addEventListener('pointerdown', (event) => {
   const point = toWorld(event);
   // A press on the desk is not a stroke. Ink only starts on the sheet.
   if (!onPaperPoint(point)) return;
+  if (picking) {
+    picking = false;
+    viewport.classList.remove('picking');
+    setColour(sampleAt(point), true);
+    note('Took ' + state.colour + ' from the sheet.');
+    return;
+  }
   event.preventDefault();
   viewport.setPointerCapture(event.pointerId);
   startStroke(clampPoint(point));
@@ -1700,7 +2849,9 @@ function endStroke(event) {
   if (event && viewport.hasPointerCapture(event.pointerId)) {
     viewport.releasePointerCapture(event.pointerId);
   }
-  if (stroke.points.length > 1) commit(stroke);
+  // An eraser already cut the layer while the hand moved, so the commit only
+  // records the stroke and lets the next frame rebuild the flattened sheet.
+  if (stroke.points.length > 1) commit(stroke, stroke.tool === 'eraser');
   sendLiveEnd(stroke);
   redraw();
 }
@@ -1716,10 +2867,33 @@ viewport.addEventListener('pointerleave', () => {
   sendPointer(true);
 });
 
+// A trackpad sends fractional deltas on two axes, so two fingers scroll. A
+// wheel sends whole notches on one axis, and a pinch arrives as ctrl plus a
+// wheel, so both of those still zoom. Chrome turns a small synthetic delta
+// into a -120 wheelDeltaY, so the delta itself has to be read first.
+function trackpadScroll(event) {
+  if (event.ctrlKey || event.deltaMode !== 0) return false;
+  if (event.deltaX % 1 !== 0 || event.deltaY % 1 !== 0) return true;
+  if (Math.abs(event.deltaX) > 0) return true;
+  if (typeof event.wheelDeltaY === 'number' && event.wheelDeltaY !== 0) {
+    return Math.abs(event.wheelDeltaY) % 120 !== 0;
+  }
+  return false;
+}
+
 viewport.addEventListener(
   'wheel',
   (event) => {
     event.preventDefault();
+    if (trackpadScroll(event)) {
+      // The sheet follows the fingers, so a scroll down moves the paper up.
+      view.x -= event.deltaX;
+      view.y -= event.deltaY;
+      fitted = false;
+      redraw();
+      refreshPointer(true);
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
@@ -1739,32 +2913,84 @@ viewport.addEventListener(
 // Controls
 
 function setPreset(name) {
-  state.preset = name;
-  const preset = PRESETS[name];
-  state.size = preset.size;
-  state.opacity = preset.opacity;
+  const preset = PRESETS[name] || PRESETS.pencil;
+  // Each tool remembers the width and the opacity the hand last gave it, so an
+  // eraser comes back at its own size instead of the pencil's.
+  if (PRESETS[state.preset]) {
+    state.sizes[state.preset] = state.size;
+    state.opacities[state.preset] = state.opacity;
+  }
+  state.preset = PRESETS[name] ? name : 'pencil';
+  state.size = state.sizes[name] === undefined ? preset.size : state.sizes[name];
+  state.opacity = state.opacities[name] === undefined ? preset.opacity : state.opacities[name];
   for (const button of document.querySelectorAll('.brush')) {
-    button.setAttribute('aria-pressed', String(button.dataset.preset === name));
+    button.setAttribute('aria-pressed', String(button.dataset.preset === state.preset));
   }
   document.getElementById('size').value = String(Math.round(state.size));
   document.getElementById('opacity').value = String(Math.round(state.opacity * 100));
   document.getElementById('size-out').textContent = String(Math.round(state.size));
   document.getElementById('opacity-out').textContent = Math.round(state.opacity * 100) + '%';
   document.getElementById('tool-state').textContent = preset.label;
+  if (picking) {
+    picking = false;
+    viewport.classList.remove('picking');
+  }
 }
 
-function setColour(colour) {
-  state.colour = colour;
-  document.getElementById('colour').value = colour;
+function cleanColour(value) {
+  const text = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : '';
+}
+
+function setColour(colour, remember) {
+  const clean = cleanColour(colour) || '#18181b';
+  state.colour = clean;
+  const picker = document.getElementById('colour');
+  if (picker && picker.value.toLowerCase() !== clean) picker.value = clean;
+  const hex = document.getElementById('hex');
+  if (hex && hex.value.toLowerCase() !== clean) hex.value = clean;
   for (const button of document.querySelectorAll('.swatch')) {
-    button.setAttribute('aria-pressed', String(button.dataset.color.toLowerCase() === colour.toLowerCase()));
+    button.setAttribute('aria-pressed', String(button.dataset.color.toLowerCase() === clean));
+  }
+  if (remember) rememberColour(clean);
+}
+
+// The rail and the stage switch between one dark set and one light set of the
+// same roles. The paper keeps its colour in both, so a switch never changes a
+// stroke. The choice is kept for the next launch.
+const THEME_KEY = 'brosr.canvas.theme';
+const themeButton = document.getElementById('theme');
+
+function readTheme() {
+  try {
+    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch (error) {
+    return 'dark';
   }
 }
 
-function showLayerState() {
-  for (const button of document.querySelectorAll('.layer')) {
-    button.setAttribute('aria-pressed', String(Number(button.dataset.layer) === state.activeLayer));
+function showTheme(theme) {
+  const light = theme === 'light';
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  if (!themeButton) return;
+  themeButton.textContent = light ? 'Dark' : 'Light';
+  themeButton.title = light ? 'Use the dark theme' : 'Use the light theme';
+}
+
+function setTheme(theme) {
+  showTheme(theme);
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch (error) {
+    // A private window refuses storage, and the page still switches.
   }
+}
+
+showTheme(readTheme());
+if (themeButton) {
+  themeButton.addEventListener('click', () => {
+    setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+  });
 }
 
 for (const button of document.querySelectorAll('.brush')) {
@@ -1772,13 +2998,19 @@ for (const button of document.querySelectorAll('.brush')) {
 }
 
 document.getElementById('size').addEventListener('input', (event) => {
-  state.size = Number(event.target.value);
+  state.size = clamp(Number(event.target.value) || 1, 1, MAX_BRUSH);
+  state.sizes[state.preset] = state.size;
   document.getElementById('size-out').textContent = String(Math.round(state.size));
 });
 
 document.getElementById('opacity').addEventListener('input', (event) => {
   state.opacity = Number(event.target.value) / 100;
+  state.opacities[state.preset] = state.opacity;
   document.getElementById('opacity-out').textContent = Math.round(state.opacity * 100) + '%';
+});
+
+document.getElementById('layer-opacity').addEventListener('input', (event) => {
+  setLayerOpacity(state.activeLayer, Number(event.target.value) / 100);
 });
 
 document.getElementById('stabilizer').addEventListener('input', (event) => {
@@ -1787,57 +3019,120 @@ document.getElementById('stabilizer').addEventListener('input', (event) => {
 });
 
 for (const button of document.querySelectorAll('.swatch')) {
-  button.addEventListener('click', () => setColour(button.dataset.color));
+  button.addEventListener('click', () => setColour(button.dataset.color, true));
 }
 
 document.getElementById('colour').addEventListener('input', (event) => setColour(event.target.value));
 
-for (const button of document.querySelectorAll('.layer')) {
-  button.addEventListener('click', (event) => {
-    if (event.target.dataset.visible !== undefined) {
-      const index = Number(event.target.dataset.visible);
-      const layer = state.layers[index];
-      layer.visible = !layer.visible;
-      event.target.textContent = layer.visible ? 'Show' : 'Hidden';
-      event.target.dataset.on = layer.visible ? 'on' : 'off';
-      markInk();
-      redraw();
-      touchDocument();
-      return;
-    }
-    state.activeLayer = Number(button.dataset.layer);
-    showLayerState();
-  });
-}
+const hexInput = document.getElementById('hex');
+hexInput.addEventListener('input', (event) => {
+  const clean = cleanColour(event.target.value);
+  if (clean) setColour(clean);
+});
+hexInput.addEventListener('change', (event) => {
+  const clean = cleanColour(event.target.value);
+  if (clean) setColour(clean, true);
+  else event.target.value = state.colour;
+});
+hexInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  const clean = cleanColour(event.target.value);
+  if (clean) setColour(clean, true);
+  else event.target.value = state.colour;
+});
+
+document.getElementById('pick').addEventListener('click', startPick);
+
+document.getElementById('layer-add').addEventListener('click', () => addLayer());
+document.getElementById('layer-up').addEventListener('click', () => {
+  moveLayer(state.activeLayer, state.activeLayer + 1);
+});
+document.getElementById('layer-down').addEventListener('click', () => {
+  moveLayer(state.activeLayer, state.activeLayer - 1);
+});
+document.getElementById('layer-del').addEventListener('click', () => removeLayer(state.activeLayer));
+document.getElementById('layer-clear').addEventListener('click', () => clearLayer(state.activeLayer));
+
+document.getElementById('image-import').addEventListener('click', () => {
+  document.getElementById('image-file').click();
+});
+
+document.getElementById('image-file').addEventListener('change', (event) => {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (file) readImageFile(file);
+});
+
+document.getElementById('gif-open').addEventListener('click', openGif);
+document.getElementById('gif-close').addEventListener('click', closeGif);
+document.getElementById('gif-go').addEventListener('click', () => searchGifs());
+
+const gifDialog = document.getElementById('gif-dialog');
+gifDialog.addEventListener('click', (event) => {
+  if (event.target === gifDialog) closeGif();
+});
+
+document.getElementById('gif-query').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  searchGifs();
+});
+
+document.getElementById('gif-url-add').addEventListener('click', () => {
+  const input = document.getElementById('gif-url');
+  const url = input ? input.value.trim() : '';
+  if (!url) {
+    setGifStatus('Paste a GIF address first.');
+    return;
+  }
+  chooseGif(url);
+});
+
+document.getElementById('gif-key').addEventListener('change', (event) => {
+  const value = String(event.target.value || '').trim();
+  try {
+    if (value) localStorage.setItem(GIF_KEY, value);
+    else localStorage.removeItem(GIF_KEY);
+  } catch {
+    // A private window can refuse storage, and the search still runs.
+  }
+});
 
 document.getElementById('undo').addEventListener('click', undo);
 document.getElementById('redo').addEventListener('click', redo);
 
 document.getElementById('clear').addEventListener('click', () => {
-  const strokes = state.layers.flatMap((layer) => layer.strokes.slice());
-  if (!strokes.length) return;
-  state.layers.forEach((layer) => {
-    layer.strokes = [];
-  });
-  markInk();
-  state.history.push({ kind: 'clear', strokes });
+  // Clear takes this page's ink and leaves every peer's strokes and images.
+  const strokes = [];
+  const images = [];
+  for (const [index, layer] of state.layers.entries()) {
+    const mineStrokes = layer.strokes.filter((stroke) => stroke.owner === PEER);
+    const mineImages = layer.images.filter((item) => item.owner === PEER);
+    if (!mineStrokes.length && !mineImages.length) continue;
+    for (const stroke of mineStrokes) strokes.push(stroke);
+    for (const item of mineImages) images.push({ layer: index, item });
+    layer.strokes = layer.strokes.filter((stroke) => stroke.owner !== PEER);
+    layer.images = layer.images.filter((item) => item.owner !== PEER);
+    layer.canvas = null;
+  }
+  if (!strokes.length && !images.length) return;
+  state.history.push({ kind: 'clear', strokes, images });
   state.redo.length = 0;
   for (const stroke of strokes) sendRemove(stroke);
+  for (const entry of images) send({ op: 'image-remove', id: entry.item.id });
+  markInk();
   redraw();
+  renderLayers();
   showHistory();
   touchDocument();
 });
 
 document.getElementById('export').addEventListener('click', () => {
   const out = document.createElement('canvas');
-  const scale = 2;
-  out.width = PAPER.width * scale;
-  out.height = PAPER.height * scale;
-  const target = out.getContext('2d');
-  target.scale(scale, scale);
-  target.fillStyle = PAPER_COLOUR;
-  target.fillRect(0, 0, PAPER.width, PAPER.height);
-  paintCommitted(target);
+  out.width = PAPER.width;
+  out.height = PAPER.height;
+  paintComposite(out.getContext('2d'));
   out.toBlob((blob) => {
     if (!blob) return;
     const link = document.createElement('a');
@@ -1889,6 +3184,17 @@ window.addEventListener('keydown', (event) => {
     else undo();
     return;
   }
+  // Escape backs out of a pick or a dialog even while a field has the focus.
+  if (event.key === 'Escape') {
+    if (picking) {
+      picking = false;
+      viewport.classList.remove('picking');
+      note('Colour pick cancelled.');
+    }
+    const dialog = document.getElementById('gif-dialog');
+    if (dialog && !dialog.hidden) closeGif();
+    return;
+  }
   if (typing || mod) return;
 
   const keys = {
@@ -1906,8 +3212,9 @@ window.addEventListener('keydown', (event) => {
     return;
   }
   if (event.key === '[' || event.key === ']') {
-    const next = clamp(state.size + (event.key === ']' ? 2 : -2), 1, 80);
+    const next = clamp(state.size + (event.key === ']' ? 2 : -2), 1, MAX_BRUSH);
     state.size = next;
+    state.sizes[state.preset] = next;
     document.getElementById('size').value = String(next);
     document.getElementById('size-out').textContent = String(next);
     return;
@@ -1942,7 +3249,9 @@ resize();
 fit();
 setPreset('pencil');
 setColour('#18181b');
-showLayerState();
+renderRecent();
+renderLayers();
+renderImages();
 showHistory();
 sendHere();
 setInterval(sendHere, HERE_MS);
