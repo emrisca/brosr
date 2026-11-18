@@ -407,6 +407,9 @@ function handleDocs(req, res, url) {
         hidden: body.hidden === true,
         stored: body.stored !== false,
         body: body.body === undefined ? null : body.body,
+        // A note keeps its character model, so a reader who joins later can
+        // place characters against text that was saved earlier.
+        crdt: body.crdt && typeof body.crdt === 'object' ? body.crdt : null,
       };
       try {
         docWrite(doc);

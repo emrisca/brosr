@@ -353,6 +353,7 @@ button:disabled {
 }
 
 .editor-wrap {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr auto;
   min-width: 0;
@@ -400,6 +401,41 @@ button:disabled {
   height: 20px;
   margin: 0 4px;
   background: var(--line);
+}
+
+/* A peer caret is drawn over the sheet, never inside it, so it cannot change
+   the text or take a click. */
+.carets {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.peer-caret {
+  position: absolute;
+  width: 2px;
+  border-radius: 1px;
+}
+
+.peer-name {
+  position: absolute;
+  top: -18px;
+  left: -1px;
+  padding: 2px 5px;
+  border-radius: 4px 4px 4px 0;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.peer-mark {
+  position: absolute;
+  opacity: 0.18;
+  border-radius: 2px;
 }
 
 .editor {

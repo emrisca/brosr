@@ -57,8 +57,8 @@
         <button type="button" data-block="h2" title="Heading 2">H2</button>
         <button type="button" data-block="p" title="Body text">Text</button>
         <span class="tool-sep" aria-hidden="true"></span>
-        <button type="button" data-cmd="insertUnorderedList" title="Bulleted list">List</button>
-        <button type="button" data-cmd="insertOrderedList" title="Numbered list">1. List</button>
+        <button type="button" data-block="list" title="Bulleted list">List</button>
+        <button type="button" data-block="list1" title="Numbered list">1. List</button>
         <button type="button" data-cmd="removeFormat" title="Clear formatting">Clear</button>
         <span class="tool-sep" aria-hidden="true"></span>
         <button type="button" data-cmd="undo" title="Undo (Cmd Z)">Undo</button>
@@ -66,16 +66,17 @@
       </div>
 
       <div id="editor" class="editor" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true" data-placeholder="Start typing. Cmd B, I and U format the selection."></div>
+      <div id="carets" class="carets" aria-hidden="true"></div>
 
       <footer class="status" aria-live="polite">
-        <span id="word-count">0 words</span>
+        <span id="word-count">0 characters</span>
         <span id="room-state">Solo</span>
-        <span class="hint">The host saves as you type.</span>
+        <span class="hint">Everyone here types in the same page. The host saves as you go.</span>
       </footer>
     </main>
   </div>
 
   <script src="/docs-client.js"></script>
-  <script src="./notes.js"></script>
+  <script type="module" src="./notes.js"></script>
 </body>
 </html>

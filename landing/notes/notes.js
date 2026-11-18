@@ -1,11 +1,45 @@
 'use strict';
 // Notes. One page at a time, formatted in place. The host saves each page to
-// its own disk and carries the library to the room. A guest edits the open page
-// and the host writes it, so nobody needs a path to the host folder.
+// its own disk and carries the library to the room. A page is shared as
+// characters, not as a snapshot of the whole body, so two people can type in
+// the same paragraph at once and neither one's words are thrown away.
+//
+//   ./text-crdt.mjs    the merged text model, no DOM
+//   ./notes-editor.mjs the page reader and painter, no transport
+
+import {
+  createDoc,
+  snapshot,
+  restore,
+  apply,
+  addBlock,
+  ensureBlock,
+  insertText,
+  deleteText,
+  setBlockType,
+  blockOrder,
+  charOrder,
+  charCount,
+} from './text-crdt.mjs';
+import {
+  renderDoc,
+  renderBlock,
+  htmlOf,
+  modelFromHtml,
+  syncFromDom,
+  capturePoint,
+  restorePoint,
+  placeCaret,
+  rectsForRange,
+} from './notes-editor.mjs';
 
 const params = new URLSearchParams(location.search);
 const ROLE = params.get('role') || 'guest';
 const ROOM = params.get('room') || 'default';
+const WHO = (params.get('name') || '').replace(/[^\w .-]/g, '').trim().slice(0, 24) || 'Guest';
+const PEER = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2))
+  .replace(/[^a-z0-9]/gi, '')
+  .slice(0, 8);
 const api = window.BrosrDocs || null;
 
 const docs = {
@@ -17,12 +51,12 @@ const docs = {
   stored: true,
   hidden: false,
   saveTimer: 0,
-  putTimer: 0,
-  sentAt: 0,
+  lentAt: 0,
   query: '',
+  model: null,
 };
 
-const room = { socket: null, retry: null };
+const room = { socket: null, retry: null, seq: 0, last: new Map(), carets: new Map(), snaps: new Map() };
 
 const editor = document.getElementById('editor');
 const nameInput = document.getElementById('doc-name');
@@ -36,6 +70,7 @@ const wordsEl = document.getElementById('word-count');
 const roomEl = document.getElementById('room-state');
 const fontSize = document.getElementById('font-size');
 const toolbar = document.querySelector('.toolbar');
+const caretLayer = document.getElementById('carets');
 
 // ---------------------------------------------------------------------------
 // Text
@@ -46,18 +81,6 @@ function label(value) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 60);
-}
-
-// A page body comes from the app or from a peer, so it never arrives with a
-// script, an inline handler or a javascript: link.
-function cleanHtml(html) {
-  return String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
-    .replace(/javascript:/gi, '');
 }
 
 function previewOf(html) {
@@ -80,9 +103,8 @@ function escapeHtml(text) {
 
 function updateWords() {
   if (!wordsEl) return;
-  const text = editor.innerText.replace(/\s+/g, ' ').trim();
-  const count = text ? text.split(' ').length : 0;
-  wordsEl.textContent = count + (count === 1 ? ' word' : ' words');
+  const count = docs.model ? charCount(docs.model) : 0;
+  wordsEl.textContent = count === 1 ? '1 character' : count + ' characters';
 }
 
 function setState(text) {
@@ -107,7 +129,8 @@ function noteFrame() {
     at: Date.now(),
     hidden: docs.hidden,
     stored: docs.stored,
-    body: cleanHtml(editor.innerHTML),
+    body: htmlOf(docs.model),
+    crdt: snapshot(docs.model),
   };
 }
 
@@ -207,6 +230,11 @@ function showDocuments() {
   }
 }
 
+function modelFor(doc) {
+  if (doc && doc.crdt && Array.isArray(doc.crdt.blocks)) return restore(doc.crdt, PEER);
+  return modelFromHtml((doc && doc.body) || '', PEER);
+}
+
 function applyDocument(doc, remote) {
   if (!doc || typeof doc.id !== 'string') return;
   docs.active = doc.id;
@@ -216,7 +244,9 @@ function applyDocument(doc, remote) {
     docs.stored = doc.stored !== false;
     docs.hidden = doc.hidden === true;
   }
-  editor.innerHTML = cleanHtml(doc.body || '');
+  docs.model = modelFor(doc);
+  ensureBlock(docs.model);
+  renderDoc(editor, docs.model);
   updateWords();
   showDocuments();
   setState(remote || !docs.stored ? 'From the room' : 'Saved');
@@ -226,7 +256,7 @@ function applyDocument(doc, remote) {
 async function saveDocument() {
   clearTimeout(docs.saveTimer);
   docs.saveTimer = 0;
-  if (!docs.host || !api || !docs.active || !docs.stored) return;
+  if (!docs.host || !api || !docs.active || !docs.stored || !docs.model) return;
   const doc = noteFrame();
   docs.at = doc.at;
   setState('Saving');
@@ -241,10 +271,16 @@ async function saveDocument() {
   showDocuments();
   // A guest list keeps up without a write per keystroke. One frame every few
   // seconds covers a preview and a date.
-  if (Date.now() - docs.sentAt > 3000) {
-    docs.sentAt = Date.now();
-    send({ op: 'put', doc: { id: doc.id, name: doc.name, at: doc.at, body: doc.body } });
+  if (Date.now() - docs.lentAt > 3000) {
+    docs.lentAt = Date.now();
+    send({ op: 'docs', docs: visibleDocuments() });
   }
+}
+
+function saveSoon() {
+  if (!docs.host || !docs.active) return;
+  clearTimeout(docs.saveTimer);
+  docs.saveTimer = setTimeout(saveDocument, 700);
 }
 
 async function refreshDocuments() {
@@ -270,7 +306,7 @@ function visibleDocuments() {
 
 function broadcastDocuments() {
   if (!docs.host) return;
-  docs.sentAt = Date.now();
+  docs.lentAt = Date.now();
   send({ op: 'docs', docs: visibleDocuments() });
 }
 
@@ -291,10 +327,7 @@ async function openDocument(id) {
   }
   if (!doc) return;
   applyDocument(doc, false);
-  send({
-    op: 'doc-open',
-    doc: { id: doc.id, name: doc.name, at: docs.at, body: doc.body },
-  });
+  broadcastOpen();
 }
 
 async function newDocument() {
@@ -318,15 +351,15 @@ async function newDocument() {
   applyDocument(doc, false);
   if (doc.stored) {
     try {
-      await api.put(doc);
+      await api.put(noteFrame());
     } catch {
       // A failed first save leaves the note in the room only.
     }
-    mergeEntry(doc);
+    mergeEntry(noteFrame());
     showDocuments();
     broadcastDocuments();
   }
-  send({ op: 'doc-open', doc: { id: doc.id, name: doc.name, at: doc.at, body: '' } });
+  broadcastOpen();
 }
 
 // A copy keeps the page as it reads now and writes a new file, so a draft can
@@ -343,6 +376,7 @@ async function duplicateDocument(entry) {
     source = null;
   }
   if (!source) return;
+  const model = modelFor(source);
   const copy = {
     id: api.id(),
     kind: 'note',
@@ -350,7 +384,8 @@ async function duplicateDocument(entry) {
     at: Date.now(),
     hidden: false,
     stored: docs.stored,
-    body: cleanHtml(source.body || ''),
+    body: htmlOf(model),
+    crdt: snapshot(model),
   };
   if (copy.stored) {
     try {
@@ -359,13 +394,19 @@ async function duplicateDocument(entry) {
       return;
     }
   }
-  applyDocument(copy, false);
+  docs.model = model;
+  docs.active = copy.id;
+  docs.name = copy.name;
+  docs.at = copy.at;
+  docs.hidden = false;
+  renderDoc(editor, docs.model);
+  updateWords();
   if (copy.stored) {
     mergeEntry(copy);
     showDocuments();
     broadcastDocuments();
   }
-  send({ op: 'doc-open', doc: { id: copy.id, name: copy.name, at: copy.at, body: copy.body } });
+  broadcastOpen();
 }
 
 async function toggleHidden(entry) {
@@ -401,8 +442,8 @@ async function deleteDocument(entry) {
     docs.name = 'Untitled note';
     docs.stored = true;
     docs.hidden = false;
-    editor.innerHTML = '';
-    updateWords();
+    docs.model = null;
+    editor.replaceChildren();
     if (docs.list.length) await openDocument(docs.list[0].id);
     else await newDocument();
   }
@@ -415,19 +456,234 @@ async function deleteDocument(entry) {
 
 function send(data) {
   if (!room.socket || room.socket.readyState !== WebSocket.OPEN) return;
-  room.socket.send(JSON.stringify({ v: 1, type: 'app', peerId: PEER, name: 'notes', data }));
+  const frame = JSON.stringify({ v: 1, type: 'app', peerId: PEER, name: 'notes', data });
+  if (frame.length > 15 * 1024) return;
+  room.socket.send(frame);
 }
 
-const PEER = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 8);
+function sendDirect(peer, data) {
+  send({ ...data, to: peer });
+}
+
+// One operation is small; a paste is many. Cut the batch so every frame stays
+// under the room's ceiling, and let the receiver apply the parts in order.
+function chunkOps(ops) {
+  const out = [];
+  let batch = [];
+  for (const op of ops) {
+    batch.push(op);
+    if (JSON.stringify({ op: 'ops', doc: docs.active, ops: batch }).length > 10000) {
+      const last = batch.pop();
+      if (batch.length) out.push(batch);
+      batch = [last];
+    }
+  }
+  if (batch.length) out.push(batch);
+  return out;
+}
+
+function sendOps(ops) {
+  if (!ops.length) return;
+  const stamped = ops.map((op) => ({ ...op, s: PEER, n: (room.seq += 1) }));
+  for (const batch of chunkOps(stamped)) send({ op: 'ops', doc: docs.active, ops: batch });
+  // The operation already changed this page, so mark the doc dirty for the
+  // host write even when the socket is down.
+  saveSoon();
+}
+
+function snapshotFrames() {
+  const state = snapshot(docs.model);
+  const items = [];
+  for (const block of state.blocks) {
+    const base = { id: block.id, l: block.l, t: block.t };
+    if (block.d === 1) base.d = 1;
+    let chunk = [];
+    let size = 0;
+    for (const row of block.c || []) {
+      const rowSize = JSON.stringify(row).length;
+      if (chunk.length && size + rowSize > 5000) {
+        items.push({ ...base, c: chunk });
+        chunk = [];
+        size = 0;
+      }
+      chunk.push(row);
+      size += rowSize;
+    }
+    items.push({ ...base, c: chunk });
+  }
+  const frames = [];
+  let batch = [];
+  for (const item of items) {
+    batch.push(item);
+    if (JSON.stringify({ op: 'snap', doc: docs.active, items: batch }).length > 10000) {
+      const last = batch.pop();
+      if (batch.length) frames.push(batch);
+      batch = [last];
+    }
+  }
+  if (batch.length) frames.push(batch);
+  return frames.map((items, index) => ({
+    op: 'snap',
+    doc: docs.active,
+    name: docs.name,
+    at: docs.at,
+    items,
+    part: index + 1,
+    of: frames.length,
+  }));
+}
+
+function sendSnapshot(to) {
+  if (!docs.host || !docs.active || !docs.model) return;
+  for (const frame of snapshotFrames()) {
+    if (to) sendDirect(to, frame);
+    else send(frame);
+  }
+}
+
+function broadcastOpen() {
+  if (!docs.host || !docs.active) return;
+  send({ op: 'doc-open', doc: { id: docs.active, name: docs.name, at: docs.at } });
+  sendSnapshot();
+}
+
+function askForSync() {
+  if (docs.active) send({ op: 'resync', doc: docs.active });
+}
+
+// A frame carries the sender's counter. A jump means a frame was lost, and the
+// host can rebuild this page from its own copy.
+function noteSequence(op) {
+  if (!op || typeof op.s !== 'string' || typeof op.n !== 'number') return;
+  const last = room.last.get(op.s) || 0;
+  if (op.n <= last) return;
+  room.last.set(op.s, op.n);
+  if (op.n > last + 1) askForSync();
+}
 
 function showRoom(text) {
   if (roomEl) roomEl.textContent = text;
 }
 
-// The relay fans every frame out to the room, so a reply for one page carries
-// the peer it is for and the other pages drop it.
-function sendDirect(peer, data) {
-  send({ ...data, to: peer });
+const COLOURS = ['#2563eb', '#db2777', '#059669', '#d97706', '#7c3aed', '#dc2626', '#0891b2', '#4d7c0f'];
+
+function colourFor(id) {
+  let hash = 0;
+  for (const ch of String(id)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return COLOURS[hash % COLOURS.length];
+}
+
+function pointPayload(point) {
+  return {
+    start: { b: point.start.b, n: point.start.n, id: point.start.id },
+    end: { b: point.end.b, n: point.end.n, id: point.end.id },
+  };
+}
+
+let lastCaretAt = 0;
+
+function shareCaret(force) {
+  if (!room.socket || !docs.active || !docs.model) return;
+  const now = Date.now();
+  if (!force && now - lastCaretAt < 140) return;
+  lastCaretAt = now;
+  const point = capturePoint(editor, docs.model);
+  if (!point) {
+    send({ op: 'caret', doc: docs.active, gone: true });
+    return;
+  }
+  send({ op: 'caret', doc: docs.active, at: pointPayload(point), name: WHO, colour: colourFor(PEER) });
+}
+
+function drawCarets() {
+  if (!caretLayer) return;
+  caretLayer.replaceChildren();
+  if (!docs.model) return;
+  const wrap = caretLayer.parentElement;
+  const box = wrap ? wrap.getBoundingClientRect() : { left: 0, top: 0 };
+  const page = editor.getBoundingClientRect();
+  const now = Date.now();
+  for (const [id, peer] of room.carets) {
+    if (now - peer.seen > 8000) {
+      room.carets.delete(id);
+      continue;
+    }
+    if (!peer.at) continue;
+    const rects = rectsForRange(editor, docs.model, peer.at.start, peer.at.end);
+    const visible = rects.filter((rect) => rect.bottom > page.top && rect.top < page.bottom && rect.right > page.left);
+    if (!visible.length) continue;
+    const collapsed =
+      peer.at.start.b === peer.at.end.b && peer.at.start.n === peer.at.end.n;
+    if (!collapsed) {
+      for (const rect of visible) {
+        const mark = document.createElement('div');
+        mark.className = 'peer-mark';
+        mark.style.left = rect.left - box.left + 'px';
+        mark.style.top = rect.top - box.top + 'px';
+        mark.style.width = Math.max(2, rect.width) + 'px';
+        mark.style.height = rect.height + 'px';
+        mark.style.background = peer.colour;
+        caretLayer.append(mark);
+      }
+    }
+    const last = visible[visible.length - 1];
+    const bar = document.createElement('div');
+    bar.className = 'peer-caret';
+    bar.dataset.peer = id;
+    bar.style.left = last.left - box.left + (collapsed ? 0 : last.width) + 'px';
+    bar.style.top = last.top - box.top + 'px';
+    bar.style.height = last.height + 'px';
+    bar.style.background = peer.colour;
+    const tag = document.createElement('span');
+    tag.className = 'peer-name';
+    tag.textContent = peer.name;
+    tag.style.background = peer.colour;
+    bar.append(tag);
+    caretLayer.append(bar);
+  }
+}
+
+function applyRemote(ops, from) {
+  if (!docs.model || !Array.isArray(ops)) return;
+  const before = capturePoint(editor, docs.model);
+  const touched = new Set();
+  for (const op of ops) {
+    noteSequence(op);
+    for (const id of apply(docs.model, op)) touched.add(id);
+  }
+  if (!touched.size) return;
+  let whole = false;
+  for (const id of touched) {
+    if (!renderBlock(editor, docs.model, id)) {
+      whole = true;
+      break;
+    }
+  }
+  if (whole) renderDoc(editor, docs.model);
+  if (before) restorePoint(editor, docs.model, before);
+  updateWords();
+  drawCarets();
+  if (docs.host) saveSoon();
+  else setState('Shared');
+}
+
+function adoptSnapshot(items, from) {
+  const byId = new Map();
+  for (const item of items) {
+    if (!item || typeof item.id !== 'string' || !item.id) continue;
+    const held = byId.get(item.id);
+    if (held) held.c.push(...(item.c || []));
+    else byId.set(item.id, { id: item.id, l: item.l, t: item.t, d: item.d, c: [...(item.c || [])] });
+  }
+  const point = capturePoint(editor, docs.model);
+  docs.model = restore({ v: 1, blocks: [...byId.values()] }, PEER);
+  ensureBlock(docs.model);
+  renderDoc(editor, docs.model);
+  if (point) restorePoint(editor, docs.model, point);
+  updateWords();
+  drawCarets();
+  if (docs.host) saveSoon();
+  else setState('Shared');
 }
 
 function handle(from, data) {
@@ -453,13 +709,12 @@ function handle(from, data) {
   if (data.op === 'docs-ask') {
     if (!docs.host) return;
     broadcastDocuments();
-    // A page that joins after the host opened a note gets that note, so it
-    // starts on the same page as the rest of the room.
     if (docs.active) {
       sendDirect(from, {
         op: 'doc-open',
-        doc: { id: docs.active, name: docs.name, at: docs.at, body: cleanHtml(editor.innerHTML) },
+        doc: { id: docs.active, name: docs.name, at: docs.at },
       });
+      sendSnapshot(from);
     }
     return;
   }
@@ -479,38 +734,75 @@ function handle(from, data) {
 
   if (data.op === 'doc-open' && data.doc) {
     if (docs.host) return;
-    applyDocument(data.doc, true);
-    docs.stored = false;
+    const doc = data.doc;
+    if (doc.id === docs.active) return;
+    docs.active = doc.id;
+    docs.name = label(doc.name) || 'Untitled note';
+    docs.at = Number(doc.at) || Date.now();
+    docs.model = createDoc(PEER);
+    ensureBlock(docs.model);
+    renderDoc(editor, docs.model);
     showDocuments();
-    setState('Shared');
+    updateWords();
+    setState('Opening');
     return;
   }
 
-  if (data.op === 'put' && data.doc) {
-    const doc = data.doc;
-    if (!doc || doc.id !== docs.active) return;
-    const at = Number(doc.at) || 0;
-    if (at <= docs.at) return;
-    if (docs.host) {
-      docs.at = at;
-      // A host that is mid sentence keeps the caret and writes on the next
-      // pause instead of having the page replaced under the hand.
-      if (document.activeElement !== editor) {
-        editor.innerHTML = cleanHtml(doc.body || '');
-        updateWords();
-      }
-      if (docs.stored) {
-        clearTimeout(docs.saveTimer);
-        docs.saveTimer = setTimeout(saveDocument, 900);
-      }
-      return;
+  if (data.op === 'snap' && Array.isArray(data.items)) {
+    if (docs.host) return;
+    if (data.doc && data.doc !== docs.active) {
+      docs.active = data.doc;
+      docs.name = label(data.name) || docs.name;
+      docs.model = createDoc(PEER);
+      ensureBlock(docs.model);
+      renderDoc(editor, docs.model);
+      showDocuments();
     }
-    docs.at = at;
-    if (document.activeElement !== editor) {
-      editor.innerHTML = cleanHtml(doc.body || '');
-      updateWords();
+    const key = 'snap';
+    let held = room.snaps.get(key);
+    if (!held || data.part === 1) {
+      held = { items: [], of: Number(data.of) || 1 };
+      room.snaps.set(key, held);
+    }
+    held.items.push(...data.items);
+    if ((Number(data.part) || 1) >= (held.of || 1)) {
+      room.snaps.delete(key);
+      adoptSnapshot(held.items, from);
     }
     return;
+  }
+
+  if (data.op === 'ops' && Array.isArray(data.ops)) {
+    if (!docs.active || data.doc !== docs.active) return;
+    applyRemote(data.ops, from);
+    return;
+  }
+
+  if (data.op === 'resync') {
+    if (!docs.host) return;
+    if (data.doc && data.doc !== docs.active) return;
+    sendSnapshot(from);
+    return;
+  }
+
+  if (data.op === 'caret' && data.doc === docs.active) {
+    if (data.gone) room.carets.delete(from);
+    else if (data.at) {
+      room.carets.set(from, {
+        name: label(data.name) || 'Guest',
+        colour: /^#[0-9a-f]{6}$/i.test(data.colour || '') ? data.colour : colourFor(from),
+        at: data.at,
+        seen: Date.now(),
+      });
+    }
+    drawCarets();
+    return;
+  }
+
+  if (data.op === 'doc-name' && typeof data.name === 'string' && !docs.host) {
+    if (data.doc && data.doc !== docs.active) return;
+    docs.name = label(data.name) || 'Untitled note';
+    showDocuments();
   }
 }
 
@@ -518,23 +810,20 @@ function connect() {
   if (!/^https?:$/.test(location.protocol)) return;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const socket = new WebSocket(
-    scheme + '://' + location.host + '/room?room=' + encodeURIComponent(ROOM)
+    scheme + '://' + location.host + '/room?room=' + encodeURIComponent(ROOM) + '&peer=' + PEER
   );
   room.socket = socket;
 
   socket.addEventListener('open', () => {
     showRoom('Connected');
+    room.last.clear();
     if (docs.host) {
       broadcastDocuments();
-      if (docs.active) {
-        send({
-          op: 'doc-open',
-          doc: { id: docs.active, name: docs.name, at: docs.at, body: cleanHtml(editor.innerHTML) },
-        });
-      }
+      if (docs.active) broadcastOpen();
     } else {
       send({ op: 'docs-ask' });
     }
+    shareCaret(true);
   });
   socket.addEventListener('message', (event) => {
     let frame;
@@ -550,6 +839,8 @@ function connect() {
   socket.addEventListener('close', () => {
     room.socket = null;
     showRoom('Solo');
+    room.carets.clear();
+    drawCarets();
     clearTimeout(room.retry);
     room.retry = setTimeout(connect, 2000);
   });
@@ -557,40 +848,99 @@ function connect() {
 }
 
 // ---------------------------------------------------------------------------
-// Editor
+// Editing
 
-function saveSoon() {
-  if (!docs.active) return;
-  if (docs.host) {
-    clearTimeout(docs.saveTimer);
-    docs.saveTimer = setTimeout(saveDocument, 800);
-    return;
-  }
-  clearTimeout(docs.putTimer);
-  docs.putTimer = setTimeout(() => {
-    send({ op: 'put', doc: { id: docs.active, name: docs.name, at: Date.now(), body: cleanHtml(editor.innerHTML) } });
-  }, 500);
-}
+let composing = false;
 
-editor.addEventListener('input', () => {
+function syncLocal() {
+  if (!docs.model || !docs.active) return;
+  const ops = syncFromDom(editor, docs.model);
+  if (!ops.length) return;
   updateWords();
   setState(docs.host ? 'Saving' : 'Editing');
-  saveSoon();
+  sendOps(ops);
+  shareCaret(true);
+}
+
+editor.addEventListener('compositionstart', () => {
+  composing = true;
+});
+
+editor.addEventListener('compositionend', () => {
+  composing = false;
+  syncLocal();
+});
+
+editor.addEventListener('input', () => {
+  if (composing) return;
+  syncLocal();
 });
 
 editor.addEventListener('blur', () => {
   if (docs.host && docs.active && docs.stored) saveDocument();
 });
 
-// A paste from the web brings a whole stylesheet with it. Notes keep the text,
-// which is what a page here is for.
+// A paste from the web brings a whole stylesheet with it. Notes keep the words,
+// and one pasted block stays in the paragraph it lands in.
 editor.addEventListener('paste', (event) => {
   const data = event.clipboardData || window.clipboardData;
   if (!data) return;
   const text = data.getData('text/plain');
   if (!text) return;
   event.preventDefault();
-  document.execCommand('insertText', false, text);
+  document.execCommand('insertText', false, text.replace(/\s*\n+\s*/g, ' '));
+});
+
+document.addEventListener('selectionchange', () => {
+  if (document.activeElement === editor) shareCaret(false);
+});
+
+setInterval(() => {
+  if (room.carets.size) drawCarets();
+  if (document.activeElement === editor) shareCaret(true);
+}, 2000);
+
+editor.addEventListener('scroll', drawCarets, { passive: true });
+window.addEventListener('resize', drawCarets);
+
+// Enter inside a bullet continues the bullet. The model owns the split, so the
+// new block keeps an id the room can place.
+editor.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || composing) return;
+  if (!docs.model) return;
+  const point = capturePoint(editor, docs.model);
+  if (!point) return;
+  const block = docs.model.blocks.get(point.start.b);
+  if (!block || (block.type !== 'li' && block.type !== 'li1')) return;
+  const live = charOrder(block);
+  if (!live.length) {
+    event.preventDefault();
+    const op = setBlockType(docs.model, block.id, 'p');
+    if (op) {
+      renderDoc(editor, docs.model);
+      placeCaret(editor, docs.model, point);
+      sendOps([op]);
+    }
+    return;
+  }
+  event.preventDefault();
+  const at = point.start.n;
+  const end = point.end.b === block.id ? Math.max(at, point.end.n) : live.length;
+  const tail = live.slice(at).map((node) => node.ch).join('');
+  const face = live[at] ? live[at].marks : '';
+  const ops = [];
+  for (const op of deleteText(docs.model, block.id, at, end - at)) ops.push(op);
+  for (const op of deleteText(docs.model, block.id, at, Math.max(0, live.length - at))) ops.push(op);
+  const made = addBlock(docs.model, block.id, block.type);
+  ops.push(made.op);
+  for (const op of insertText(docs.model, made.id, 0, tail, face)) ops.push(op);
+  renderDoc(editor, docs.model);
+  placeCaret(editor, docs.model, {
+    start: { b: made.id, n: 0, id: '' },
+    end: { b: made.id, n: 0, id: '' },
+  });
+  sendOps(ops);
+  updateWords();
 });
 
 if (toolbar) {
@@ -598,6 +948,21 @@ if (toolbar) {
   toolbar.addEventListener('mousedown', (event) => {
     if (event.target.closest('button')) event.preventDefault();
   });
+}
+
+function setBlock(type) {
+  if (!docs.model) return;
+  const point = capturePoint(editor, docs.model);
+  const id = point ? point.start.b : blockOrder(docs.model)[0];
+  const block = docs.model.blocks.get(id);
+  if (!block) return;
+  const next = type === block.type ? 'p' : type;
+  const op = setBlockType(docs.model, id, next);
+  editor.focus();
+  if (!op) return;
+  renderDoc(editor, docs.model);
+  if (point) placeCaret(editor, docs.model, point);
+  sendOps([op]);
 }
 
 for (const button of document.querySelectorAll('.toolbar button[data-cmd]')) {
@@ -612,15 +977,16 @@ for (const button of document.querySelectorAll('.toolbar button[data-cmd]')) {
       document.execCommand(cmd, false, null);
     }
     editor.focus();
-    saveSoon();
+    syncLocal();
   });
 }
 
 for (const button of document.querySelectorAll('.toolbar button[data-block]')) {
   button.addEventListener('click', () => {
-    document.execCommand('formatBlock', false, button.dataset.block);
-    editor.focus();
-    saveSoon();
+    const type = button.dataset.block;
+    if (type === 'list') setBlock('li');
+    else if (type === 'list1') setBlock('li1');
+    else setBlock(type);
   });
 }
 
@@ -629,7 +995,7 @@ if (fontSize) {
     document.execCommand('styleWithCSS', false, true);
     document.execCommand('fontSize', false, fontSize.value);
     editor.focus();
-    saveSoon();
+    syncLocal();
   });
 }
 
@@ -642,6 +1008,7 @@ if (nameInput) {
     showDocuments();
     saveSoon();
     broadcastDocuments();
+    send({ op: 'doc-name', doc: docs.active, name: docs.name });
   });
 }
 
@@ -684,7 +1051,7 @@ document.getElementById('export').addEventListener('click', () => {
     '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>' +
     escapeHtml(name) +
     '</title>\n<style>\nbody{max-width:44rem;margin:3rem auto;padding:0 1.25rem;font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b1b1f;background:#fff}\nh1,h2{line-height:1.2}\nmark{background:#fde68a}\n</style>\n</head>\n<body>\n' +
-    cleanHtml(editor.innerHTML) +
+    htmlOf(docs.model) +
     '\n</body>\n</html>\n';
   const blob = new Blob([html], { type: 'text/html' });
   const link = document.createElement('a');
@@ -708,9 +1075,14 @@ window.addEventListener('keydown', (event) => {
 
 async function start() {
   document.body.classList.toggle('is-guest', !docs.host);
+  document.execCommand('defaultParagraphSeparator', false, 'p');
   if (!docs.host) {
+    docs.model = createDoc(PEER);
+    ensureBlock(docs.model);
+    renderDoc(editor, docs.model);
     showDocuments();
     setState('Shared');
+    updateWords();
     connect();
     return;
   }

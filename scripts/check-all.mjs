@@ -88,6 +88,7 @@ run('canvas layout', ['scripts/check-canvas-layout.mjs'], 240000, layout);
 run('landing layout', ['scripts/check-landing-layout.mjs'], 240000, layout);
 run('room apps layout', ['scripts/check-room-apps-layout.mjs'], 240000, layout);
 run('chess play', ['scripts/check-chess-play.mjs'], 240000, layout);
+run('notes cotyping', ['scripts/check-notes-cotyping.mjs'], 240000, layout);
 
 const tests = ['core/test', 'host/test'].flatMap((dir) =>
   fs
