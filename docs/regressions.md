@@ -13,6 +13,7 @@ crosses that boundary does not count.
 | A grant or tab refusal only says something failed | The app message dropped the reason before the CLI saw it | `host/test/panel-reason.test.mjs` |
 | The welcome screen never lists a live room | The one-shot host printed its answer but a fetch pool held the process open for ten seconds, and the app reads the answer only after exit | `host/test/cli-answer.test.mjs` |
 | The host film stops following a peer after that peer loses control, and a film-tab reload is the only cure | The release of a hold was one frame. A revoked peer could no longer send its recovery, and the host ignored a stutter from an ungranted peer, so a lost release left the film tab paused for the session because a hold had no deadline | `core/test/fate.test.mjs` |
+| A release builds every platform but publishes no `latest.json` | The updater job passed `--dir <value>`, and the script parsed only `--dir=<value>`, so every value read as empty and the job exited with a usage error after the builds finished | `host/test/updater-feed.test.mjs` |
 
 ## The rules
 

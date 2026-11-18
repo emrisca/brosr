@@ -5,9 +5,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// A caller can write --name=value or --name value. The release workflow uses
+// the space form, and a parser that only knew the equals form read every value
+// as empty and exited with a usage error after every platform had built.
 function valueOf(name, fallback = '') {
-  const hit = process.argv.find((entry) => entry.startsWith(`--${name}=`));
-  return hit ? hit.slice(name.length + 3) : fallback;
+  const flag = `--${name}`;
+  const hit = process.argv.find((entry) => entry.startsWith(`${flag}=`));
+  if (hit) return hit.slice(flag.length + 1);
+  const index = process.argv.indexOf(flag);
+  return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : fallback;
 }
 
 const dir = valueOf('dir');
