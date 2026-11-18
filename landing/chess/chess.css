@@ -271,6 +271,8 @@ body::before {
   align-items: center;
   justify-content: center;
   min-width: 0;
+  /* A touch that starts on a tile picks the piece up instead of scrolling. */
+  touch-action: none;
   padding: 0;
   border: 0;
   appearance: none;
@@ -286,6 +288,19 @@ body::before {
 
 .square:disabled {
   cursor: default;
+}
+
+.square.is-grabbable {
+  cursor: grab;
+}
+
+.square.is-dragging {
+  cursor: grabbing;
+}
+
+.square.is-dragging .piece {
+  z-index: 4;
+  filter: drop-shadow(0 10px 16px oklch(0.1 0 0 / 0.4));
 }
 
 .square:focus-visible {

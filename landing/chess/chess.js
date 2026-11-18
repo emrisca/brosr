@@ -58,6 +58,10 @@ let pending = null;
 let awaiting = false;
 let flipped = false;
 let autoSide = null;
+// The live drag: the pointer that holds a piece and the square it came from.
+let drag = null;
+// A drop also sends a click, and that click must not read as a tap.
+let dropClick = false;
 let session = 1;
 let queue = [];
 const labels = new Map();
@@ -73,6 +77,10 @@ flipEl.addEventListener('click', () => {
   renderBoard();
 });
 boardEl.addEventListener('click', onBoardClick);
+boardEl.addEventListener('pointerdown', onBoardDown);
+boardEl.addEventListener('pointermove', onBoardMove);
+boardEl.addEventListener('pointerup', onBoardUp);
+boardEl.addEventListener('pointercancel', onBoardCancel);
 promotionEl.addEventListener('click', onPromotionClick);
 promotionCancelEl.addEventListener('click', cancelPromotion);
 document.addEventListener('keydown', (event) => {
@@ -365,10 +373,16 @@ function newGame() {
   renderAll();
 }
 
+let openQuietUntil = 0;
+
 function openSeat() {
   if (!HOST) return;
+  // The release hands the seat to the first person in line. A second click
+  // from the same burst must not take it straight back off them.
+  if (Date.now() < openQuietUntil) return;
   const blackPeer = seatOwner('b');
   if (!blackPeer) return;
+  openQuietUntil = Date.now() + 800;
   seen.delete(blackPeer);
   releaseSeat(blackPeer);
 }
@@ -384,9 +398,12 @@ function joinSeat(peer) {
     seats[peer] = free;
     names[free] = labels.get(peer) || 'Guest';
     status = gameStatus();
+  } else if (queue.length >= 32) {
+    // The list keeps the people who have waited longest. A newcomer is turned
+    // away rather than at the back of a queue that drops its front to fit.
+    sendState();
   } else if (!queue.some((entry) => entry.id === peer)) {
     queue.push({ id: peer, name: labels.get(peer) || 'Guest' });
-    if (queue.length > 32) queue = queue.slice(-32);
   }
   sendState();
   renderAll();
@@ -467,13 +484,28 @@ function pruneSeats() {
     changed = true;
   }
   if (!seatOwner('b') && seatFromQueue()) changed = true;
+  // A name is only worth keeping while its peer holds a seat or a place.
+  for (const peer of labels.keys()) {
+    if (seats[peer] || queue.some((entry) => entry.id === peer)) continue;
+    if (Date.now() - (seen.get(peer) || 0) > STALE_MS) labels.delete(peer);
+  }
   return changed;
 }
 
 function onBoardClick(event) {
+  // A drag already delivered its move, and the browser still sends a click
+  // for the press and the release. Swallow that one so the square the piece
+  // landed on does not light up as a fresh selection.
+  if (dropClick) {
+    dropClick = false;
+    return;
+  }
   const button = event.target.closest('button[data-square]');
   if (!button || !boardEl.contains(button)) return;
-  const square = button.dataset.square;
+  tapSquare(button.dataset.square);
+}
+
+function tapSquare(square) {
   if (!square || !canMove()) return;
 
   if (selected === square) {
@@ -502,6 +534,100 @@ function onBoardClick(event) {
   const piece = game.get(square);
   selected = piece && piece.color === game.turn() ? square : '';
   renderBoard();
+}
+
+// A press that travels more than a few pixels picks the piece up, and it
+// follows the pointer until it is dropped on a legal square. A press that
+// stays put remains a tap, so the click path keeps its old meaning.
+const DRAG_SLOP = 4;
+
+function onBoardDown(event) {
+  dropClick = false;
+  drag = null;
+  if (event.button !== 0 || !event.isPrimary) return;
+  const button = event.target.closest('button[data-square]');
+  if (!button || !boardEl.contains(button)) return;
+  const square = button.dataset.square;
+  if (!square || !canMove()) return;
+  const piece = game.get(square);
+  if (!piece || piece.color !== game.turn()) return;
+  drag = {
+    pointerId: event.pointerId,
+    from: square,
+    x: event.clientX,
+    y: event.clientY,
+    node: button,
+    glyph: button.querySelector('.piece'),
+    moved: false,
+  };
+}
+
+function onBoardMove(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const dx = event.clientX - drag.x;
+  const dy = event.clientY - drag.y;
+  if (!drag.moved) {
+    if (Math.hypot(dx, dy) < DRAG_SLOP) return;
+    drag.moved = true;
+    // Capture only once the press is a drag. A tap keeps its click on the
+    // square, because a captured release would send the click to the board.
+    try {
+      boardEl.setPointerCapture(drag.pointerId);
+    } catch {
+      // the pointer is still tracked while it stays over the board
+    }
+    selected = drag.from;
+    renderBoard();
+    const node = boardEl.querySelector('button[data-square="' + drag.from + '"]');
+    drag.node = node;
+    drag.glyph = node ? node.querySelector('.piece') : null;
+    if (node) node.classList.add('is-dragging');
+  }
+  if (!drag.glyph) return;
+  drag.glyph.style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
+  event.preventDefault();
+}
+
+function onBoardUp(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const held = drag;
+  drag = null;
+  releasePointer(event.pointerId);
+  if (!held.moved) return;
+
+  // The click that follows this release belongs to the drag, not to a tap.
+  dropClick = true;
+
+  const under = document.elementFromPoint(event.clientX, event.clientY);
+  const button = under && under.closest('button[data-square]');
+  const to = button && boardEl.contains(button) ? button.dataset.square : '';
+  const legal =
+    Boolean(to) &&
+    to !== held.from &&
+    game.moves({ square: held.from, verbose: true }).some((move) => move.to === to);
+
+  if (!legal) {
+    selected = '';
+    renderBoard();
+    return;
+  }
+  tapSquare(to);
+}
+
+function onBoardCancel(event) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  drag = null;
+  releasePointer(event.pointerId);
+  selected = '';
+  renderBoard();
+}
+
+function releasePointer(pointerId) {
+  try {
+    if (boardEl.hasPointerCapture(pointerId)) boardEl.releasePointerCapture(pointerId);
+  } catch {
+    // the pointer had already left
+  }
 }
 
 function playMove(from, to, promotion) {
@@ -680,6 +806,7 @@ function renderBoard() {
       );
 
       if (selected === square) button.classList.add('is-selected');
+      if (can && piece && piece.color === game.turn()) button.classList.add('is-grabbable');
       if (target) {
         button.classList.add('is-target');
         if (piece || target.flags.includes('e')) button.classList.add('is-capture');
@@ -773,9 +900,13 @@ function renderStatus() {
   } else if (awaiting) {
     text = 'Waiting for the host.';
   } else if (!game.isGameOver() && !isBoardFull()) {
-    text = queue.length
-      ? 'Waiting for a seat. ' + queue.length + ' in line.'
-      : 'Waiting for a second player.';
+    const queued = queue.some((entry) => entry.id === PEER);
+    text =
+      queue.length >= 32 && !queued
+        ? 'The waiting list is full.'
+        : queue.length
+          ? 'Waiting for a seat. ' + queue.length + ' in line.'
+          : 'Waiting for a second player.';
   }
   statusEl.textContent = text;
   statusEl.classList.toggle('is-over', game.isGameOver());

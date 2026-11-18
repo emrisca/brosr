@@ -31,6 +31,9 @@ crosses that boundary does not count.
 | A notes toolbar letter is too small to hit | The letter buttons shrank to their glyph and the row gave one of them 23 px of width | `scripts/check-room-apps-layout.mjs` |
 | Chess seats and move counts sit at 10 px | The seat label, the session state and the move count used a size meant for the board coordinates | `scripts/check-room-apps-layout.mjs` |
 | Chess squares change size between ranks | The board declared eight columns and no rows, so each implicit auto row sized to the pieces inside it and the ranks holding pieces grew taller than the empty ones | `scripts/check-room-apps-layout.mjs` |
+| A dragged chess piece snaps back | The board listened for clicks only, so a press and a release on two squares read as one tap on the release square | `scripts/check-chess-play.mjs` |
+| The guest who has waited longest loses their place in line | A full waiting list dropped its oldest entry to make room for the newest, so the front of the queue was the first thing thrown away | `scripts/check-chess-play.mjs` |
+| Open seat twice removes the guest it just promoted | The second click of a double click read the newly seated guest as the one to take the seat from | `scripts/check-chess-play.mjs` |
 
 ## The rules
 
