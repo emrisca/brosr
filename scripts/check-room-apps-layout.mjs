@@ -163,6 +163,12 @@ const snapshot = (app) => `(() => {
   }
   const title = titleNode;
   const squares = [...document.querySelectorAll('.square')].map(box);
+  const glyphs = [...document.querySelectorAll('.square')]
+    .map((node) => {
+      const glyph = node.querySelector('.piece');
+      return glyph ? { square: node.dataset.square || '', glyph: box(glyph), cell: box(node) } : null;
+    })
+    .filter(Boolean);
   const parts = {};
   for (const selector of ['.board', '.board-shell', '.editor', '.editor-wrap', '.toolbar', '.files', '.panel', '.workspace', '.status']) {
     const node = document.querySelector(selector);
@@ -180,6 +186,7 @@ const snapshot = (app) => `(() => {
     small,
     spill,
     squares,
+    glyphs,
     parts,
     pageBg: getComputedStyle(document.body).backgroundColor,
     muted: muted ? getComputedStyle(muted).color : getComputedStyle(document.body).color,
@@ -363,9 +370,35 @@ try {
           pass(`${app} at ${width} px keeps all 64 squares the same size`);
         }
       }
+
+      // 7. A piece stays inside the square that holds it. The glyph grows with
+      // the window, so a font that renders wider than the tile pushes ink past
+      // the board edge and over the next file.
+      if (page.squares.length === 64) {
+        const grown = page.glyphs.filter(
+          (item) =>
+            item.glyph.left < item.cell.left - 0.5 ||
+            item.glyph.top < item.cell.top - 0.5 ||
+            item.glyph.right > item.cell.right + 0.5 ||
+            item.glyph.bottom > item.cell.bottom + 0.5
+        );
+        if (grown.length) {
+          fail(
+            `${app} at ${width} px lets ${grown.length} piece${grown.length === 1 ? '' : 's'} grow past the square: ${grown
+              .slice(0, 3)
+              .map(
+                (item) =>
+                  `${item.square} ${round(item.glyph.width)}x${round(item.glyph.height)} in ${round(item.cell.width)}x${round(item.cell.height)}`
+              )
+              .join(', ')}`
+          );
+        } else {
+          pass(`${app} at ${width} px keeps every piece inside its square`);
+        }
+      }
     }
 
-    // 7. The app answers both colour schemes. A page that keeps one set of
+    // 8. The app answers both colour schemes. A page that keeps one set of
     // colours in light and dark fails here, and so does a muted label under
     // 4.5:1 on its own panel.
     const themes = {};
