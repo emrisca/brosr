@@ -34,6 +34,7 @@ crosses that boundary does not count.
 | A dragged chess piece snaps back | The board listened for clicks only, so a press and a release on two squares read as one tap on the release square | `scripts/check-chess-play.mjs` |
 | The guest who has waited longest loses their place in line | A full waiting list dropped its oldest entry to make room for the newest, so the front of the queue was the first thing thrown away | `scripts/check-chess-play.mjs` |
 | Open seat twice removes the guest it just promoted | The second click of a double click read the newly seated guest as the one to take the seat from | `scripts/check-chess-play.mjs` |
+| The chess page opens as bare HTML from the shipped relay | The relay's file server knew html, js, json, png and webm only, so the stylesheet and the icon arrived as application/octet-stream and the browser refused them | `scripts/check-relay-files.mjs` |
 
 ## The rules
 

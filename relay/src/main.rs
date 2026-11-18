@@ -208,12 +208,21 @@ async fn files(State(app): State<Arc<App>>, uri: Uri) -> Response {
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
     let file = root.join(relative);
+    // A browser refuses a stylesheet, a module or an icon that arrives with
+    // the wrong type, so every extension the pages ship carries its own.
     let kind = match file.extension().and_then(|value| value.to_str()) {
         Some("html") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
         Some("webm") => "video/webm",
+        Some("mp4") => "video/mp4",
         _ => "application/octet-stream",
     };
     match tokio::fs::read(&file).await {

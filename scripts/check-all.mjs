@@ -77,6 +77,7 @@ if (fs.existsSync(signed)) {
   process.stdout.write('[check-all] skip signed guard, no signed copy in zen/.runtime\n');
 }
 
+run('relay files', ['scripts/check-relay-files.mjs'], 60000);
 run('zen lane', ['scripts/check-two-instance.mjs'], 240000);
 run('chromium lane', ['scripts/check-two-instance.mjs', '--chrome'], 240000);
 
