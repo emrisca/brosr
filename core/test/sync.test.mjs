@@ -1492,6 +1492,76 @@ test('a local copy offset changes the drift by exactly that offset', () => {
   assert.equal(after.driftMs - before.driftMs, 4100);
 });
 
+test('a film report is carried forward from the instant it was read', () => {
+  // A room frame names one instant. The film tab reads a position, and the room
+  // sends it a moment later. A frame that kept the older position and stamped
+  // the send put every guest the age of the report past the film. A guest whose
+  // own clock sits 1.9 s ahead must not add a second error on top.
+  const hostVideo = fakeVideo();
+  let hostNow = 100000;
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => hostNow,
+    mediaRoot: { querySelectorAll: () => [hostVideo] },
+    send: (text) => sent.push(text),
+    overlay: false,
+  });
+
+  const guestVideo = fakeVideo();
+  guestVideo.paused = false;
+  guestVideo.currentTime = 40.2;
+  let guestNow = 101900;
+  const guest = createRoomClient({
+    role: 'peer',
+    peerId: 'guest',
+    hostId: 'host',
+    now: () => guestNow,
+    mediaRoot: { querySelectorAll: () => [guestVideo] },
+    send: () => {},
+    overlay: false,
+  });
+  // One clean reply sets the guest clock 1900 ms ahead of the host.
+  guest.receive(encode({ type: 'pong', t0: 101900, t1: 100000, t2: 100000 }), 101900);
+
+  hostNow = 100200;
+  host.sendHostMedia(
+    { key: KEY, position: 40, playing: true, rate: 1, volume: 1, duration: 120, at: 100000 },
+    100200
+  );
+  const frame = decode(sent.at(-1));
+  assert.equal(frame.roomTime, 100200, 'the frame is stamped at the send');
+  assert.equal(frame.position, 40.2, 'the position is the one that belongs to the send');
+
+  guestNow = 102100;
+  const applied = guest.receive(sent.at(-1), guestNow);
+  assert.ok(Math.abs(applied.driftMs) <= 5, `the guest drift read ${applied.driftMs} ms`);
+});
+
+test('a report with no read instant is taken as current', () => {
+  // A tab from an older build sends no instant, so the position is the one it
+  // read. A paused report also stays put, because no clock runs under it.
+  const video = fakeVideo();
+  let local = 100000;
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    mediaRoot: { querySelectorAll: () => [video] },
+    send: (text) => sent.push(text),
+    overlay: false,
+  });
+  local = 100500;
+  host.sendHostMedia({ key: KEY, position: 12, playing: true, rate: 1, volume: 1 });
+  assert.equal(decode(sent.at(-1)).position, 12);
+  host.sendHostMedia({ key: KEY, position: 30, playing: false, rate: 1, volume: 1, at: 100000 });
+  assert.equal(decode(sent.at(-1)).position, 30);
+});
+
 test('a remote alignment claim is rate limited and never moves this peer', () => {
   let local = 1000;
   const client = createRoomClient({

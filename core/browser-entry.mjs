@@ -386,6 +386,10 @@ async function startPageMedia() {
   function reportMedia(userAction = false) {
     const state = mediaStateFromDocument(document, pageHref(), location.hostname);
     if (!state) return;
+    // The position belongs to this instant, so the report names it. The room
+    // sends the report a moment later, and a frame that stamped the send would
+    // put every guest the age of the report past the film.
+    state.at = Date.now();
     // A person's play, pause, seek or rate change is an act. The four-a-second
     // tick only reads the clock, and a granted peer that sent its own lag as
     // an anchor pulled the host's playhead back and beat the host's own play
@@ -828,6 +832,10 @@ export async function start() {
       const position = Number.isFinite(message.expected)
         ? message.expected
         : Number(message.position || 0);
+      // The expected position was worked out at the instant the room passed
+      // on, so that is the anchor instant. A fresh stamp here would shorten
+      // the age the film tab adds and land the film short.
+      const at = Number(message.at) || Date.now();
       roomMedia = {
         key: message.key,
         position,
@@ -837,7 +845,7 @@ export async function start() {
         volume: Number(message.volume ?? 1),
         buffering: Boolean(message.buffering),
         ad: Boolean(message.ad),
-        at: Date.now(),
+        at,
       };
       if (!api || !api.runtime || !api.runtime.sendMessage) return false;
       api.runtime
@@ -854,7 +862,7 @@ export async function start() {
           // The ad belongs to the host's film. A viewer tab has to know, so it
           // can wait instead of seeking to the ad's own clock.
           ad: Boolean(message.ad),
-          at: Date.now(),
+          at,
         })
         .catch(() => {});
       return true;
@@ -1127,7 +1135,9 @@ export async function start() {
     const anchor = relayedMedia.state();
     if (!anchor) return;
     greetedAt = Date.now();
-    client.sendHostMedia({ ...relayedMedia.latest, ...anchor });
+    // The projection already names this instant, so the report is sent as it
+    // stands rather than carried forward a second time.
+    client.sendHostMedia({ ...relayedMedia.latest, ...anchor, at: Date.now() });
   }, 500);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees

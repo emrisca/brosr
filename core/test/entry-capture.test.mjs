@@ -100,7 +100,11 @@ test('a host greets a guest that joins a paused room', () => {
   const greet = source.slice(source.indexOf('const greeted = new Set()'));
   const body = greet.slice(0, greet.indexOf('}, 500);'));
   assert.match(body, /relayedMedia\.state\(\)/);
-  assert.match(body, /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor \}\)/);
+  assert.match(
+    body,
+    /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor, at: Date\.now\(\) \}\)/,
+    'the projected anchor is sent as it stands'
+  );
   assert.match(body, /greeted\.delete\(id\)/, 'a rejoin is greeted again');
   // A guest usually opens the room first, so the greet can arrive before its
   // film tab exists. The refresh covers a film that opens after the join.
@@ -122,4 +126,23 @@ test('a film report refreshes presence while its room tab is hidden', () => {
     body,
     /state && typeof state === 'object' && state\.key\)[\s\S]*?client\.presence\(\)/
   );
+});
+
+test('a film report names the instant its position was read', () => {
+  // The room sends a report a moment after the tab reads it. A report with no
+  // read time makes the room stamp the send, and every guest then extrapolates
+  // from an instant later than the position it was given. On a hidden tab the
+  // gap is a whole throttled tick.
+  const report = source.slice(source.indexOf('function reportMedia('));
+  const body = report.slice(0, report.indexOf('setInterval(reportMedia'));
+  assert.match(body, /state\.at = Date\.now\(\)/);
+});
+
+test('a room frame keeps the anchor instant it arrived with', () => {
+  // The expected position was worked out at that instant. A fresh stamp at the
+  // handoff shortens the age the film tab adds, so the playhead lands short.
+  const media = source.slice(source.indexOf('onMedia: (message) =>'));
+  const body = media.slice(0, media.indexOf('input: {'));
+  assert.match(body, /const at = Number\(message\.at\) \|\| Date\.now\(\)/);
+  assert.doesNotMatch(body, /at: Date\.now\(\)/);
 });

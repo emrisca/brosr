@@ -39,6 +39,8 @@ crosses that boundary does not count.
 | An empty note is a narrow strip in the middle of the pane | The sheet asked for auto width with auto margins inside a grid cell, so a note with no text shrank to the width of its placeholder instead of the width of the page | `scripts/check-room-apps-layout.mjs` |
 | Two people typing in one note lose each other's words | The room carried the whole body and the host skipped a remote body while its own caret was in the page, so the later save overwrote the other hand | `scripts/check-notes-cotyping.mjs` |
 | The chess page opens as bare HTML from the shipped relay | The relay's file server knew html, js, json, png and webm only, so the stylesheet and the icon arrived as application/octet-stream and the browser refused them | `scripts/check-relay-files.mjs` |
+| A guest plays the age of a report past the host's film | The film tab read a position and the room sent it a moment later, but the frame kept the older position and stamped the send, so every guest extrapolated from an instant after the position. On a hidden tab the gap is a whole throttled tick | `core/test/sync.test.mjs`, `core/test/entry-capture.test.mjs` |
+| Every playhead keeps one fixed offset for the session | The clock estimator kept the first sample that held the smallest round trip, so one sample taken across a clock step stayed the answer while every later path tied on round trip, and a fixed offset is a fixed error in every playhead that reads room time | `core/test/clock.test.mjs` |
 
 ## The rules
 

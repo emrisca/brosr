@@ -593,12 +593,26 @@ export function createRoomClient({
     if (!isHost()) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
     noteMedia(state, local);
-    const position = Number(state.position || 0);
-    const changed = Boolean(state.action) || stats.playing !== Boolean(state.playing);
+    // A room frame names one instant. The film tab reads a position, and the
+    // room sends it a moment later, so a report that carries the instant it was
+    // read is carried forward to the send. A report with no such instant is
+    // taken as current, which is what a tab from an older build sends. Without
+    // this every guest extrapolates from a stamp later than the position, and
+    // the gap is the age of the report, up to a whole tick of a hidden tab.
+    const rate = Number(state.rate || 1);
+    const playing = Boolean(state.playing);
+    const sampledAt = Number(state.at);
+    const sampled =
+      Number.isFinite(sampledAt) && sampledAt > 0 && sampledAt <= local ? sampledAt : local;
+    const read = Number(state.position || 0);
+    const ahead = playing && sampled < local ? ((local - sampled) / 1000) * rate : 0;
+    const limit = Number(state.duration || 0);
+    const position = limit > 0 ? Math.min(read + ahead, limit) : read + ahead;
+    const changed = Boolean(state.action) || stats.playing !== playing;
     if (changed) lastHostActAt = local;
     stats.key = state.key;
     stats.position = Math.round(position * 1000) / 1000;
-    stats.playing = Boolean(state.playing);
+    stats.playing = playing;
     lastHostTick = local;
     sendMessage({
       type: 'media',
@@ -606,8 +620,8 @@ export function createRoomClient({
       key: state.key,
       action: 'tick',
       position,
-      playing: Boolean(state.playing),
-      rate: Number(state.rate || 1),
+      playing,
+      rate,
       volume: Number(state.volume ?? 1),
       buffering: Boolean(state.buffering),
       ad: Boolean(state.ad),

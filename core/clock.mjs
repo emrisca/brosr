@@ -5,6 +5,12 @@
 export const PING_INTERVAL_MS = 30000;
 // A lost pong must not silence the clock for the whole session.
 export const PING_TIMEOUT_MS = 5000;
+// An equal round trip is as clean a witness as the best one. A later sample
+// replaces it, because an offset belongs to the present. Without this one
+// sample taken across a clock step holds its wrong offset for as long as every
+// later path ties on round trip, and a fixed offset is a fixed error in every
+// playhead that reads room time.
+export const RTT_TIE_MS = 0;
 
 export class ClockEstimator {
   constructor({ now = () => Date.now(), intervalMs = PING_INTERVAL_MS } = {}) {
@@ -43,7 +49,7 @@ export class ClockEstimator {
     this.samples += 1;
     this.pending = null;
     this.lastSampleAt = local;
-    if (!this.best || rtt < this.best.rtt) this.best = { rtt, offset };
+    if (!this.best || rtt <= this.best.rtt + RTT_TIE_MS) this.best = { rtt, offset };
     return { rtt, offset };
   }
 

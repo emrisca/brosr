@@ -35,6 +35,24 @@ test('the sample with the smallest round trip wins', () => {
   assert.equal(clock.samples, 3);
 });
 
+test('a later sample with the same round trip replaces a stale offset', () => {
+  // The room's live guest read a clock offset that was large and steady. The
+  // estimator kept the first sample that held the smallest round trip, so one
+  // sample taken across a clock step stayed the answer for the whole session
+  // even though every later path tied on round trip. A fixed offset is a fixed
+  // error in every playhead that reads room time.
+  const clock = new ClockEstimator();
+  const stepped = clock.answer(clock.ping(1000), 100, 100);
+  clock.onPong(stepped, 1010);
+  assert.equal(clock.roundTrip(), 10);
+  assert.equal(clock.offset(), -905, 'the first sample caught a clock step');
+
+  const settled = clock.answer(clock.ping(2000), 2005, 2005);
+  clock.onPong(settled, 2010);
+  assert.equal(clock.roundTrip(), 10, 'the path is just as clean');
+  assert.equal(clock.offset(), 0, 'the newer sample wins the tie');
+});
+
 test('an impossible sample is dropped', () => {
   const clock = new ClockEstimator();
   // The reply left 200 ms after it arrived but reached this side 50 ms after
