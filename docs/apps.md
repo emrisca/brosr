@@ -129,7 +129,7 @@ want the same level. The list below is what the room follows today.
 | A player inside an iframe | The content script runs in every frame, and the frame key comes from the frame URL | Built, not yet run on a live film |
 | Cinecat, `cinecat.eu` | An inline HTML5/HLS player on `/media/<id>`; the title page names the film | Verified on two browsers, 16 November 2026: play, pause, seek and resume stayed within 250 ms |
 | Miruro, `miruro.cx` | A `<strmcx-embed>` shadow host around a generic `strm.cx/?embed=1` iframe; that URL does not name the episode | Title page probed 16 November 2026; playback not verified, needs a film handoff |
-| Movy, `movy.sx` | Not yet probed beyond the home page | Home page loaded on 15 November 2026; playback still open |
+| Movy, `movy.sx` | A top-page `<video>` with a blob source and custom controls, so the element adapter reads it | Title page probed 18 November 2026: `/movie/1561726` named the film, rendered one `<video>` and no iframe. Playback has not run on two browsers |
 | Cinejoy, `cinejoy.pk` | Not yet probed beyond the supplied link | Added 16 November 2026; playback not tested |
 | p-stream and its forks | One page and one player, so one adapter covers each fork | Built, not yet run on a live film |
 | HLS and DASH pages | The page names the film, so a quality switch keeps the same key | Built, not yet run on a live film |

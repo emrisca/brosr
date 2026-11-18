@@ -114,6 +114,10 @@ Mac guest `guest-2e76`, 141 samples over 4 min 54 s.
 The host never seeked, stalled or applied a guest action, so all 17 corrections were the guest
 correcting itself.
 
+The window was not re-run on 18 November. The Windows machine and Cinecat were not available, so
+the one second gap is diagnosed and not closed. The fix is proved at the unit boundary and on the
+loopback lane only, and both of those share one clock.
+
 ## Open in the plan
 
 ### Media
@@ -130,7 +134,9 @@ correcting itself.
       seek per ten minutes.
 - [ ] One deliberate 600 ms delay, to prove it causes one seek rather than a loop.
 - [ ] Cinecat cross-machine again, with the fix and a fresh room.
-- [ ] Movy playback. The home page loaded, no film has played.
+- [ ] Movy playback. On 18 November the title page `/movie/1561726` named the film, rendered
+      one top-page `<video>` with a blob source and no iframe, and showed a custom seek bar. No
+      film has played on two browsers yet.
 - [ ] Cinejoy playback. The link is recorded, nothing was probed past it.
 - [ ] Miruro. The embed URL is the same for every episode, so it needs a title and episode
       handoff before it can join the list.
@@ -145,8 +151,10 @@ correcting itself.
 
 ### Room, relay and reconnect
 
-- [ ] M1 done-when: four peers on one LAN under 80 ms p95 for an hour. The plan below is that
-      run. Two peers for 420 s was the longest window, at 6 ms p95.
+- [ ] M1 done-when: four peers on one LAN under 80 ms p95 for an hour. A 45 s four-peer
+      rehearsal ran on one machine on 18 November at 1 to 2 ms p95, with four relay sockets and
+      zero reconnects. That checks the runner, the relay table and the peer journal. It is not an
+      hour and not a LAN, so the hour still needs the Windows box. The plan below is that run.
 - [ ] Host migration after the host closes its lid, on a live room rather than in the suite.
 - [ ] A live Zen run with the seal on, after a relay restart, with every peer back on the same
       scroll.

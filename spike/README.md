@@ -323,6 +323,38 @@ This is the Mac half. The Windows pages held the room from 20:22:38 to 20:37:36,
 cover the same 420 s. Their own counters are in `HANDOFF.md` and stop before `mac` joined. The
 window is 420 s rather than 600 s, and it is not a WAN window.
 
+## Four-peer rehearsal, 18 November 2026
+
+Environment: macOS 26.6.2 on arm64, Node 23.9.0. One machine, four Node peers, no browser page.
+The relay ran from `spike/relay.js` on `127.0.0.1:8891`. Three peers came from `lan-peers.mjs`
+and `mac4` ran by hand so it could read the relay table.
+
+```
+node spike/lan-peers.mjs --relay=127.0.0.1 --port=8891 --room=rehearsal2 \
+  --peers=mac1,mac2,mac3 --seconds=45 --out-prefix=.runtime/rehearsal2
+node spike/peer.mjs --relay=127.0.0.1 --port=8891 --room=rehearsal2 --peer=mac4 \
+  --name=Mac4 --seconds=45 --probe=10 --out=.runtime/rehearsal2-mac4.json
+```
+
+The window ran from 23:05:08 to 23:05:53 UTC.
+
+| Item | Reading |
+| --- | --- |
+| Relay `rooms.rehearsal2` at T+12 and T+32 | 4 and 4 |
+| Relay count at T+48 | 0, every peer left on its own timer |
+| `mac4` probe `roomSockets` | 1 at start, then 4, 4, 4, 4 |
+| Samples in each journal | 44 |
+| Presence p50, p95, max, ms | 1, 1 to 2, 2 to 4 |
+| `peerIds` in each journal | the other three ids, no extra entry |
+| Reconnects | 0 |
+| Clock round trip and offset | not read, because no host joined and no exchange ran |
+| Frames forwarded | 12750 |
+
+This checks the relay table, the peer journal and the presence path over a real socket. It is not
+an hour, it is not a LAN, and it has no browser page or host, so it says nothing about the page's
+own presence sample or the clock. M1 stays open. One runner gap showed up: `lan-peers.mjs` does
+not forward `--probe`, so the relay witness needs one peer started by hand, as above.
+
 ## What it does not prove
 
 - Release Firefox. The temporary bridge install needs Nightly or Developer Edition. A release
