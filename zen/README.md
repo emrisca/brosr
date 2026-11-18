@@ -301,11 +301,11 @@ missing, unsigned, or behind the source manifest. A release can refuse the gap t
 - Compact mode could not be exercised headless. A toggle leaves the column at its full width in
   that run, so the panel had no reason to park. The collapse test hides the column instead. The
   dock parks the card in that pass.
-- The room profile carries a safe browsing set: uBlock Origin, SponsorBlock, AdGuard Extra and
-  P-Stream. `zen/safe-browsing.mjs` stages the four signed XPIs and copies them into the
-  profile, so a new room starts blocked. No profile starts with toolbar bookmarks. The landing
-  page is the site list. The `brosr.sites` pref still carries the two pages the essentials strip
-  seeds on the first start.
+- The room profile carries a safe browsing set: uBlock Origin, SponsorBlock, AdGuard Extra,
+  P-Stream and Skip Redirect. `zen/safe-browsing.mjs` stages the five signed XPIs and copies
+  them into the profile, so a new room starts blocked. No profile starts with toolbar
+  bookmarks. The landing page is the site list. The `brosr.sites` pref still carries the two
+  pages the essentials strip seeds on the first start.
 - A headless pass writes the FMHY list into uBlock Origin. A second window reads the list back
   and counts blocked probe requests. The marker holds those counters.
 - Setup needs network once. The XPIs and the list text stay in `zen/.runtime/`, so they are never

@@ -18,8 +18,8 @@ function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brosr-sb-'));
 }
 
-test('the set holds four signed extensions with unique ids and files', () => {
-  assert.equal(EXTENSIONS.length, 4);
+test('the set holds five signed extensions with unique ids and files', () => {
+  assert.equal(EXTENSIONS.length, 5);
   const ids = EXTENSIONS.map((entry) => entry.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const entry of EXTENSIONS) {
@@ -29,7 +29,7 @@ test('the set holds four signed extensions with unique ids and files', () => {
   }
   assert.deepEqual(
     EXTENSIONS.map((entry) => entry.name),
-    ['uBlock Origin', 'SponsorBlock', 'AdGuard Extra', 'P-Stream extension']
+    ['uBlock Origin', 'SponsorBlock', 'AdGuard Extra', 'P-Stream extension', 'Skip Redirect']
   );
 });
 

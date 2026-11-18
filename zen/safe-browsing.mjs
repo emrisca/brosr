@@ -1,8 +1,9 @@
 // The room profile ships with a safe browsing set: uBlock Origin, SponsorBlock,
-// AdGuard Extra and P-Stream. Each one is a signed XPI, so each one goes in as a
-// file under the profile's extensions folder. One headless pass then writes the
-// FMHY list into uBlock Origin's storage. A second pass proves what survived.
-// The pass writes a marker, so a later start opens no window.
+// AdGuard Extra, P-Stream and Skip Redirect. Each one is a signed XPI, so each
+// one goes in as a file under the profile's extensions folder. One headless
+// pass then writes the FMHY list into uBlock Origin's storage. A second pass
+// proves what survived. The pass writes a marker, so a later start opens no
+// window.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -14,9 +15,10 @@ import { findZen } from './binary.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const RUNTIME = process.env.BROSR_ZEN_RUNTIME || path.join(here, '.runtime');
 
-// Full uBlock Origin is the reason this build is Firefox based. The other three
+// Full uBlock Origin is the reason this build is Firefox based. The other four
 // complete the set: SponsorBlock skips sponsor segments, AdGuard Extra fights
-// anti adblock scripts, and P-Stream carries the media site controls.
+// anti adblock scripts, P-Stream carries the media site controls, and Skip
+// Redirect jumps past shortener and countdown pages before they load.
 export const EXTENSIONS = [
   {
     id: 'uBlock0@raymondhill.net',
@@ -53,6 +55,16 @@ export const EXTENSIONS = [
     url: 'https://addons.mozilla.org/firefox/downloads/latest/p-stream-extension-v1/latest.xpi',
     minBytes: 200000,
   },
+  {
+    id: 'skipredirect@sblask',
+    name: 'Skip Redirect',
+    file: 'skipredirect@sblask.xpi',
+    cache: 'skip-redirect.xpi',
+    // It reads the destination out of an intermediary page and goes there at
+    // the request stage, which a content script cannot do, so it stays an XPI.
+    url: 'https://addons.mozilla.org/firefox/downloads/latest/skip-redirect/latest.xpi',
+    minBytes: 80000,
+  },
 ];
 
 // The FMHY documentation names filterlist.txt as the uBlock Origin build. That
@@ -84,7 +96,7 @@ export function cachedCopy(entry, dir = RUNTIME) {
   }
 }
 
-// A request that stalls must not hold the setup. Four downloads with no limit
+// A request that stalls must not hold the setup. Five downloads with no limit
 // can sit on one dead host for minutes, so each one gets a deadline.
 const FETCH_MS = 30000;
 
@@ -112,7 +124,7 @@ async function download(entry, dir) {
   return cachePath(entry, dir);
 }
 
-// All four requests go out together, so a cold setup waits for the slowest file
+// All five requests go out together, so a cold setup waits for the slowest file
 // and not for the sum of them. A cached file answers at once and adds no wait.
 export async function stageExtensions(dir = RUNTIME, options = {}) {
   const onEach = typeof options.onEach === 'function' ? options.onEach : null;
