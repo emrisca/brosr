@@ -253,6 +253,13 @@ const COMMANDS = {
   },
 };
 
+// The answer line, then an exit from inside the write callback. The app reads
+// the answer only after this process exits, and a fetch pool can hold the loop
+// open for ten seconds, so the exit cannot wait for the loop to drain.
+export function answer(result) {
+  process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
+}
+
 async function main() {
   const name = process.argv[2] || '';
   const command = COMMANDS[name];
@@ -264,7 +271,7 @@ async function main() {
   }
   try {
     const result = await command();
-    process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0)); // One shot. The app reads the answer after this process exits, and a fetch pool can hold it open for 10 s.
+    answer(result);
   } catch (error) {
     process.stderr.write(`brosr host: ${error.message}\n`);
     process.stdout.write(

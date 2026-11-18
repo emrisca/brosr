@@ -1,5 +1,7 @@
-# A tag cuts a release. Each platform builds, signs its updater bundle and
-# attaches latest.json, so an installed app can offer the next version.
+# A tag cuts a release. Each platform builds and signs its updater bundle. One
+# final job writes latest.json from every platform, because three jobs writing
+# that one asset race each other and the last one wins with only its own
+# platform in it.
 name: Release
 
 on:
@@ -76,4 +78,44 @@ jobs:
             inside it, and refuses a release signed with another key.
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          includeUpdaterJson: false
+
+  # The feed is one file for every platform, so one job owns it. It runs only
+  # after every build succeeds, so a failed platform cannot publish a feed that
+  # omits it.
+  updater:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Collect the signatures and the notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/updater"
+          gh release download "$TAG" --pattern '*.sig' --dir "$RUNNER_TEMP/updater"
+          gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/notes.md"
+
+      - name: Write latest.json
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          node app/scripts/updater-json.mjs \
+            --dir "$RUNNER_TEMP/updater" \
+            --tag "$TAG" \
+            --repo "$REPO" \
+            --notes "$RUNNER_TEMP/notes.md" \
+            --out "$RUNNER_TEMP/latest.json"
+
+      - name: Attach it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber
