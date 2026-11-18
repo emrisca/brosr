@@ -264,7 +264,7 @@ async function main() {
   }
   try {
     const result = await command();
-    process.stdout.write(JSON.stringify(result) + '\n');
+    process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0)); // One shot. The app reads the answer after this process exits, and a fetch pool can hold it open for 10 s.
   } catch (error) {
     process.stderr.write(`brosr host: ${error.message}\n`);
     process.stdout.write(
