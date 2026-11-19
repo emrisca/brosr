@@ -1032,15 +1032,23 @@ try {
     // prove that a row was painted.
     let shots = null;
     await openHost(offerUrl);
-    // A host page sends its own offer out and keeps its list for others, so the
-    // guest is the side that must show the row. The row also has to sit under
-    // the host, because the owner comes from the sender and not from a claim.
+    // The row the guest reads must sit under the host, because the owner comes
+    // from the sender and not from a claim.
     const offered = await until(async () => {
       const state = await readTabs(guestPage);
       const groups = (state && state.groups) || [];
       const host = groups.find((group) => group.role === 'host');
       return host && host.tabs.some((tab) => tab.url === offerUrl) ? { host } : null;
     }, 'the host tab offer at the guest', 20000).catch(() => null);
+    // The browser that published the tab must draw its own row. The relay skips
+    // the sender and the page drops a frame that names this peer, so this row
+    // exists only when the announce path writes the offer locally.
+    const ownOffer = await until(async () => {
+      const state = await readTabs(hostPage);
+      const groups = (state && state.groups) || [];
+      const own = groups.find((group) => state && group.ownerId === state.peerId);
+      return own && own.tabs.some((tab) => tab.url === offerUrl) ? own : null;
+    }, 'the host own offer on its landing page', 20000).catch(() => null);
     // The tab that was open before the room. Without an offer from the room's
     // start the guest never learns about it, because that tab never loads
     // again.
@@ -1149,6 +1157,7 @@ try {
     }
     offerOk =
       Boolean(offered) &&
+      Boolean(ownOffer) &&
       Boolean(earlySeen) &&
       Boolean(controlOffer) &&
       Boolean(replayed) &&
@@ -1158,6 +1167,10 @@ try {
       guestOwner: offered ? offered.host.owner : null,
       guestRole: offered ? offered.host.role : null,
       guestTabs: offered ? offered.host.tabs.map((tab) => tab.url) : null,
+      own: {
+        seen: Boolean(ownOffer),
+        tabs: ownOffer ? ownOffer.tabs.map((tab) => tab.url) : null,
+      },
       early: { url: earlyUrl, seen: Boolean(earlySeen) },
       control: {
         url: controlUrl,

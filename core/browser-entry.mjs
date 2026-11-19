@@ -1973,13 +1973,50 @@ export async function start() {
         // The background saw a tab this person chose to share. It goes out on
         // the room socket like any other app message. The name travels too,
         // because the receiver has only the sender id.
-        client.sendApp(TAB_APP, {
-          action: 'open',
-          url: String(message.url || ''),
-          key: message.key === undefined || message.key === null ? null : String(message.key),
-          title: String(message.title || ''),
-          owner: name,
-        });
+        const ask =
+          message.action === undefined || message.action === null ? 'open' : message.action;
+        // An action this page does not know is refused with a reason, not
+        // turned into an open. A future action would otherwise publish an
+        // empty offer the room drops, and nobody would know why.
+        if (ask !== 'open' && ask !== 'media' && ask !== 'close') {
+          return reply({ ok: false, reason: 'action' });
+        }
+        const action = ask;
+        const key =
+          message.key === undefined || message.key === null ? null : String(message.key);
+        const data = { action };
+        if (key !== null) data.key = key;
+        if (action === 'open') {
+          data.url = String(message.url || '');
+          data.title = String(message.title || '');
+          data.owner = name;
+          // The first offer of a film tab names whether it plays, so the local
+          // row keeps the same badge the room receives.
+          if (typeof message.playing === 'boolean') data.playing = message.playing;
+        }
+        if (action === 'media') data.playing = message.playing === true;
+        client.sendApp(TAB_APP, data);
+        // The relay skips the sending socket, and this page drops a frame that
+        // names this peer, so a published tab never comes back here. The row is
+        // written from the same data that just went out, which is what lets the
+        // landing page show a Sharing row for this browser's own tabs.
+        const ownOffer = (entry) =>
+          Boolean(entry) && entry.key === key && entry.ownerId === peerId;
+        if (action === 'open') {
+          const offer = sharedTab(data, { from: peerId, hostId });
+          if (offer) {
+            sharedTabs = rememberSharedTab(sharedTabs, offer);
+            publishSharedTabs();
+          }
+        } else if (action === 'media' && key !== null) {
+          sharedTabs = sharedTabs.map((entry) =>
+            ownOffer(entry) ? { ...entry, playing: data.playing } : entry
+          );
+          publishSharedTabs();
+        } else if (key !== null) {
+          sharedTabs = sharedTabs.filter((entry) => !ownOffer(entry));
+          publishSharedTabs();
+        }
         return reply({ ok: true });
       }
       if (message.type === 'brosr:tabs-resumed') {
