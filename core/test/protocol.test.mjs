@@ -42,6 +42,19 @@ test('a media message needs an action the plan defines', () => {
     () => encode({ type: 'media', action: 'rewind', position: 1, roomTime: 1 }),
     /media action rewind is unknown/
   );
+  assert.doesNotThrow(
+    () => encode({ type: 'media', action: 'rate', position: 1, roomTime: 1 })
+  );
+});
+
+test('a view names its page and a scroll policy names its sites', () => {
+  const view = decode(
+    encode({ type: 'view', url: 'http://x/a.html', scroll: 0.2, roomTime: 1 })
+  );
+  assert.equal(view.url, 'http://x/a.html');
+  assert.doesNotThrow(() =>
+    encode({ type: 'scrollpolicy', sites: null, roomTime: 1 })
+  );
 });
 
 test('an app message carries a named payload', () => {

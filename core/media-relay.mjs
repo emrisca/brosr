@@ -10,7 +10,7 @@
 // The room keeps its own drift policy. This file uses a plain tolerance, so a
 // tab that shows the film stays near the host without a second seek loop.
 
-import { mediaKey } from './media.mjs';
+import { bufferedAround, mediaKey } from './media.mjs';
 import { adPlayingFrom, hostOf, isYouTubeMusic, playerKey } from './youtube.mjs';
 
 // The room samples its own media at the host tick rate. A tab uses the same
@@ -21,6 +21,9 @@ export const RELAY_DRIFT_SECONDS = 1;
 export const RELAY_NUDGE_SECONDS = 0.25;
 // A seek takes a moment to land. Another one before it lands fights the first.
 export const RELAY_SEEK_SETTLE_MS = 700;
+// A seek into data the player has not fetched can wedge the element. Wait for
+// the range to arrive, then seek anyway so a big gap is never held forever.
+export const RELAY_BUFFER_WAIT_MS = 2500;
 // A paused or unbuffered element can hold a seek open. The drift then stays
 // large, so the seek branch would win every tick and the film would sit at the
 // old point for the whole room. A fresh seek is what frees it.
@@ -198,6 +201,20 @@ export function freshState(state, now = Date.now(), staleMs = RELAY_STALE_MS) {
 
 function clamp(value, max) {
   return Math.max(0, Number.isFinite(max) && max > 0 ? Math.min(value, max) : value);
+}
+
+// A tab the room opened has no gesture of its own, so the browser can refuse an
+// unmuted start. Muting is the retry that works, and the viewer can raise the
+// volume again.
+function startPlayback(video) {
+  const started = video.play();
+  if (started && typeof started.catch === 'function') {
+    started.catch(() => {
+      video.muted = true;
+      const retry = video.play();
+      if (retry && typeof retry.catch === 'function') retry.catch(() => {});
+    });
+  }
 }
 
 // A room names a film by key. The panel opens a page for it, so the key turns
@@ -391,6 +408,19 @@ export class RemoteMediaSync {
     this.lastSeekAt = -Infinity;
     this.seekIssuedAt = -Infinity;
     this.lastSeekTarget = null;
+    // The first tick that wanted a seek outside the buffered range. The wait
+    // has a deadline, so a player that never fetches still catches up.
+    this.waitingSince = null;
+    // The film is paused while it waits. Without this flag the next room tick
+    // would start it again and the tab would play and pause on every tick.
+    this.bufferHeld = false;
+    // The target last checked against the buffered ranges. The room moves on
+    // while the tab waits, so this follows the current expected point.
+    this.waitingTarget = null;
+    // A hold can outlive the buffer deadline. The wait then reports recovery so
+    // the room releases, and this flag makes the release frame seek at once
+    // instead of starting another wait.
+    this.bufferReady = false;
     // A tab that has never applied a frame has no position of its own. Its
     // first frame seeds the player, so it seeks rather than nudges.
     this.primed = false;
@@ -399,7 +429,17 @@ export class RemoteMediaSync {
     // the hold.
     this.held = false;
     this.heldAt = 0;
-    this.stats = { applied: 0, seeks: 0, skips: 0, stuckSeeks: 0, holds: 0, expiredHolds: 0, last: null };
+    this.stats = {
+      applied: 0,
+      seeks: 0,
+      skips: 0,
+      stuckSeeks: 0,
+      bufferWaits: 0,
+      bufferHolds: 0,
+      holds: 0,
+      expiredHolds: 0,
+      last: null,
+    };
   }
 
   video() {
@@ -421,6 +461,25 @@ export class RemoteMediaSync {
     return live || this.hostname;
   }
 
+  // A report asks whether the film is still waiting for data. The answer
+  // clears the wait when the range arrives or the deadline passes, so a room
+  // hold can release even when the film tab receives no further frames. The
+  // player stays paused until the release frame carries the seek.
+  bufferWaitActive(now = this.now()) {
+    if (this.waitingSince === null) return false;
+    const video = this.video();
+    const target = Number(this.waitingTarget);
+    const ready =
+      Number.isFinite(target) && video ? bufferedAround(video, target) : false;
+    if (ready || now - this.waitingSince >= RELAY_BUFFER_WAIT_MS) {
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferReady = true;
+      return false;
+    }
+    return true;
+  }
+
   handle(frame) {
     const now = this.now();
     const video = this.video();
@@ -433,6 +492,11 @@ export class RemoteMediaSync {
     // position. A normal tick during that window must not resume the film.
     if (frame.hold === true) {
       if (!video.paused) video.pause();
+      // A hold can be the room's answer to this very buffer wait. Keep the
+      // wait, or the release starts the film at the old point and the hold
+      // begins again. A hold that came from another source also keeps the
+      // wait; the film stays paused until the range arrives either way.
+      this.bufferWaitActive(now);
       this.held = true;
       this.heldAt = now;
       this.stats.holds += 1;
@@ -442,6 +506,10 @@ export class RemoteMediaSync {
     if (this.held && frame.hold !== false) {
       if (now - this.heldAt < RELAY_HOLD_MAX_MS) {
         if (!video.paused) video.pause();
+        // The room hold may be the answer to this buffer wait. Once the range
+        // arrives or the wait deadline passes, stop reporting buffering so the
+        // room can release; the release frame then seeks instead of waiting.
+        this.bufferWaitActive(now);
         this.stats.skips += 1;
         this.stats.last = 'held';
         return { ok: true, skipped: 'held' };
@@ -485,18 +553,8 @@ export class RemoteMediaSync {
     // the seek follows it.
     if (!frame.playing) {
       if (!video.paused) video.pause();
-    } else if (video.paused) {
-      const started = video.play();
-      if (started && typeof started.catch === 'function') {
-        // A tab the room opened has no gesture of its own, so the browser can
-        // refuse an unmuted start. Muting is the retry that works, and the
-        // viewer can raise the volume again.
-        started.catch(() => {
-          video.muted = true;
-          const retry = video.play();
-          if (retry && typeof retry.catch === 'function') retry.catch(() => {});
-        });
-      }
+    } else if (video.paused && !this.bufferHeld) {
+      startPlayback(video);
     }
 
     // A paused room has no clock to nudge against. A small gap there is a seek,
@@ -510,6 +568,17 @@ export class RemoteMediaSync {
     const seed = !this.primed;
     this.primed = true;
     const seekLimit = paused || seed ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
+    // The guest may catch up on its own. A gap that no longer needs a seek
+    // must not keep the next one inside the old buffer deadline.
+    if (Math.abs(drift) <= seekLimit) {
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferReady = false;
+      if (this.bufferHeld) {
+        this.bufferHeld = false;
+        if (frame.playing && video.paused) startPlayback(video);
+      }
+    }
     // A seek that never lands keeps the drift large, and this branch would win
     // every tick, so the film would never catch up. The retry is the one write
     // that frees the element, and the count says it happened.
@@ -518,6 +587,10 @@ export class RemoteMediaSync {
       this.lastSeekTarget !== null &&
       now - this.seekIssuedAt > RELAY_SEEK_TIMEOUT_MS
     ) {
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferHeld = false;
+      this.bufferReady = false;
       video.currentTime = expected;
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
@@ -525,6 +598,7 @@ export class RemoteMediaSync {
       this.stats.stuckSeeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek-retry';
+      if (frame.playing && video.paused) startPlayback(video);
       return { ok: true, action: 'seek', retry: true, drift: Math.round(drift * 1000) / 1000 };
     }
     if (
@@ -532,6 +606,35 @@ export class RemoteMediaSync {
       !video.seeking &&
       now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS
     ) {
+      // The range check belongs on the element that owns the player. A seek
+      // outside the fetched data is the long stall this path used to take.
+      if (!this.bufferReady && !bufferedAround(video, expected)) {
+        if (this.waitingSince === null) {
+          this.waitingSince = now;
+          this.stats.bufferWaits += 1;
+        }
+        this.waitingTarget = expected;
+        if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
+          const roomRate = Number(frame.rate || 1);
+          if (Math.abs(Number(video.playbackRate || 1) - roomRate) > 0.001) {
+            video.playbackRate = roomRate;
+          }
+          // Stop the film while it waits, or it keeps moving away from the
+          // target and the seek has to cover a larger gap when data arrives.
+          if (frame.playing && !video.paused) {
+            video.pause();
+            this.bufferHeld = true;
+            this.stats.bufferHolds += 1;
+          }
+          this.stats.skips += 1;
+          this.stats.last = 'buffer';
+          return { ok: true, skipped: 'buffer', drift: Math.round(drift * 1000) / 1000 };
+        }
+      }
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferHeld = false;
+      this.bufferReady = false;
       video.currentTime = expected;
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
@@ -539,6 +642,7 @@ export class RemoteMediaSync {
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';
+      if (frame.playing && video.paused) startPlayback(video);
       return { ok: true, action: 'seek', drift: Math.round(drift * 1000) / 1000 };
     }
 

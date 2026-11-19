@@ -181,6 +181,13 @@ export class InputBatcher {
     }
   }
 
+  // A site can leave the mirror list between two events. The queued records
+  // belong to the old rule, so they go instead of crossing the new one.
+  clear() {
+    this.pendingMove = null;
+    this.queue = [];
+  }
+
   flush() {
     const records = [];
     if (this.pendingMove) records.push(this.pendingMove);

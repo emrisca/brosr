@@ -989,6 +989,18 @@ function renderTrust(data) {
   }
 }
 
+// The report button is one click. It stays disabled until a room answers, so
+// a copied report never says only that the panel had no data.
+function renderReportButton() {
+  const button = $('copy-sync');
+  if (!button) return;
+  const ready = Boolean(lastReply && lastReply.data);
+  button.disabled = !ready;
+  button.title = ready
+    ? 'Copy the room, film and sync readings for a bug report'
+    : 'Open a room first';
+}
+
 function render(reply) {
   lastReply = reply;
   delete document.body.dataset.state;
@@ -1089,6 +1101,7 @@ function render(reply) {
     data.socket === 1 ? (reconnects ? `Live, ${reconnects} reconnects` : 'Live') : 'Reconnecting';
   $('playback').textContent =
     typeof data.playing === 'boolean' ? (data.playing ? 'Playing' : 'Paused') : '-';
+  renderReportButton();
 
 }
 
@@ -1126,6 +1139,7 @@ function missing(reason) {
   $('playback').textContent = '-';
   $('relay').textContent = '-';
   renderWatch(null);
+  renderReportButton();
 }
 
 // A sidebar sender can report the placeholder id -1. Sending to it throws, so
@@ -1683,6 +1697,7 @@ renderSkeleton();
 renderTabs();
 renderSettings(null);
 loadTabs();
+renderReportButton();
 $('refresh').addEventListener('click', refresh);
 
 // The watch button opens the room's film. A tab that already shows it comes to
@@ -1705,6 +1720,68 @@ $('watch-toggle').addEventListener('click', async () => {
     notice('The browser did not open the film.', true);
   }
 });
+
+// Build the report from the same status and reading the panel already shows.
+// The builder is a separate classic script so the text can be tested without
+// a browser, and a page that somehow lacks it says so instead of copying junk.
+function reportText() {
+  const builder = globalThis.brosrSyncReport;
+  if (!builder || typeof builder.buildSyncReport !== 'function') return '';
+  return builder.buildSyncReport(lastReply, filmReading, {
+    now: Date.now(),
+    userAgent: navigator.userAgent || '',
+    surface: SURFACE,
+    route: askRoute,
+    readingReply: filmReadingReply,
+  });
+}
+
+function flashReport(button) {
+  if (!button) return;
+  const label = button.dataset.label || button.textContent;
+  button.dataset.label = label;
+  button.textContent = 'Copied';
+  setTimeout(() => {
+    button.textContent = label;
+  }, 1400);
+}
+
+function legacyCopy(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  area.style.opacity = '0';
+  document.body.append(area);
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  return copied;
+}
+
+async function copySyncReport(button) {
+  if (!lastReply) return notice('Open a room tab first.', true);
+  const text = reportText();
+  if (!text) return notice('The sync report builder did not load. Reload the panel.', true);
+  try {
+    await navigator.clipboard.writeText(text);
+    flashReport(button);
+    notice('Sync report copied. Check it before sending.');
+    return;
+  } catch {
+    if (!legacyCopy(text)) return notice('Could not copy the sync report.', true);
+    flashReport(button);
+    notice('Sync report copied. Check it before sending.');
+  }
+}
+
+$('copy-sync').addEventListener('click', (event) => copySyncReport(event.currentTarget));
 
 // One copy path serves the invite card and the menu item. The button confirms
 // in place, so a person sees the copy without reading the notice line.

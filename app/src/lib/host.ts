@@ -153,6 +153,8 @@ export type PanelState = {
   cursorSites: string[] | null;
   cursorSeen: string[];
   cursorForgot: string[];
+  scrollSites: string[] | null;
+  scrollSeen: string[];
   trust: boolean;
   trustTarget: string | null;
   build?: BridgeBuild;
@@ -163,6 +165,7 @@ export type PanelAction =
   | 'grant'
   | 'cursor-site'
   | 'cursor-forget'
+  | 'scroll-site'
   | 'room-name'
   | 'set'
   | 'tab'

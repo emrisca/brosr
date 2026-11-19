@@ -277,6 +277,19 @@ const mediaRestored = state()
 // A host tab can reach the open path from several frames at once. One slot per
 // host tab keeps that burst to a single local tab.
 const opening = new Set();
+// A mirrored click and a shared-tab announcement can name the same URL at the
+// same instant under different keys. The URL map lets the second request join
+// the first open instead of racing it and creating another tab.
+const openingByUrl = new Map();
+
+async function mapRemoteKey(key, tabId) {
+  if (key === undefined || key === null || key === '' || !validId(tabId)) return;
+  const id = String(key);
+  if (remoteKeys.get(id) === tabId && remoteOrigins.get(tabId) === key) return;
+  remoteKeys.set(id, tabId);
+  remoteOrigins.set(tabId, key);
+  await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+}
 // The film this browser plays last. A paused background tab does not replace
 // the film someone is watching, so only a playing tab takes the focus.
 let mediaFocus = '';
@@ -348,11 +361,7 @@ async function shareTab(tab) {
     // names itself.
     const arrived = remoteOrigins.get(tab.id);
     const key = arrived === undefined || arrived === null ? tab.id : arrived;
-    if (remoteKeys.get(String(key)) !== tab.id) {
-      remoteKeys.set(String(key), tab.id);
-      remoteOrigins.set(tab.id, key);
-      await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
-    }
+    await mapRemoteKey(key, tab.id);
     return await announce(tab.url, key);
   } finally {
     announcing.delete(tab.id);
@@ -695,8 +704,19 @@ async function handle(message, sender) {
     const key = message.key === undefined || message.key === null ? null : String(message.key);
     const slot = key === null ? `url:${message.url}` : `key:${key}`;
     if (opening.has(slot)) return { ok: true, opening: true };
+    // A shared announcement and a mirrored click can name the same URL at the
+    // same instant. Their slots differ, so the second request waits for the
+    // open already in flight and then maps its key to that one tab.
+    const pending = openingByUrl.get(message.url);
+    if (pending) {
+      const result = await pending;
+      if (result && result.ok && validId(result.tabId)) {
+        await mapRemoteKey(key, result.tabId);
+        return { ...result, joined: true };
+      }
+    }
     opening.add(slot);
-    try {
+    const work = (async () => {
       const known = key === null ? null : remoteKeys.get(key);
       // The same host tab moved to another page. Its copy here moves too, so a
       // click on a video or a search result does not spawn a second tab. A
@@ -705,21 +725,21 @@ async function handle(message, sender) {
       if (validId(known) && typeof api.tabs.update === 'function') {
         const copy = await api.tabs.get(known).catch(() => null);
         if (copy && copy.url === message.url) {
-          if (key !== null) remoteOrigins.set(known, key);
+          await mapRemoteKey(key, known);
           return { ok: true, tabId: known, updated: false };
         }
         if (copy) {
           try {
             await api.tabs.update(known, { url: message.url });
-            if (key !== null) remoteOrigins.set(known, key);
+            await mapRemoteKey(key, known);
             return { ok: true, tabId: known, updated: true };
           } catch {
             // The copy is gone, so the next step opens a fresh one.
-            remoteKeys.delete(key);
+            if (key !== null) remoteKeys.delete(key);
             remoteTabs.delete(known);
           }
         } else {
-          remoteKeys.delete(key);
+          if (key !== null) remoteKeys.delete(key);
           remoteTabs.delete(known);
         }
       }
@@ -729,25 +749,26 @@ async function handle(message, sender) {
       const all = await api.tabs.query({}).catch(() => []);
       const shown = all.find((tab) => validId(tab.id) && tab.url === message.url);
       if (shown) {
-        if (key !== null) remoteOrigins.set(shown.id, key);
+        await mapRemoteKey(key, shown.id);
         return { ok: true, tabId: shown.id, existing: true };
       }
       try {
         const tab = await api.tabs.create({ url: message.url, active: false });
         if (tab && validId(tab.id)) {
           remoteTabs.add(tab.id);
-          if (key !== null) {
-            remoteKeys.set(key, tab.id);
-            remoteOrigins.set(tab.id, key);
-            await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
-          }
+          await mapRemoteKey(key, tab.id);
         }
         return { ok: true, tabId: tab && tab.id, updated: false };
       } catch (error) {
         return { ok: false, reason: 'create', error: text(error) };
       }
+    })();
+    openingByUrl.set(message.url, work);
+    try {
+      return await work;
     } finally {
       opening.delete(slot);
+      if (openingByUrl.get(message.url) === work) openingByUrl.delete(message.url);
     }
   }
   if (message.type === 'brosr:tab-status') {

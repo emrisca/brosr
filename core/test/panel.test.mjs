@@ -16,6 +16,14 @@ test('the app field names parse into one panel request', () => {
     parsePanelArgs(['--action=tab', '--tabId=42', '--shared=false']),
     { action: 'tab', values: { tabId: 42, shared: false }, guest: false }
   );
+  assert.deepEqual(
+    parsePanelArgs(['--action=scroll-site', '--site=https://example.com/watch', '--on=false']),
+    {
+      action: 'scroll-site',
+      values: { site: 'https://example.com/watch', on: false },
+      guest: false,
+    }
+  );
 });
 
 test('the old short names still normalize to the same fields', () => {

@@ -96,6 +96,9 @@ export function createRoomClient({
   // The host names the sites that show pointers. Null keeps the old same-site
   // rule, which a peer holds until the host sends its list.
   cursorSites = null,
+  // The host names the sites the room mirrors: scroll, clicks and typing.
+  // Null allows every site, and an empty list allows none.
+  scrollSites = null,
   // A viewer can hide every pointer name without hiding the pointers.
   showNames = true,
   // The host can make the room wait for a starved host or granted peer.
@@ -110,6 +113,9 @@ export function createRoomClient({
   // A peer that learns a new site list reports it here, so every tab of this
   // browser follows the host at once.
   onPolicy = null,
+  // A peer that learns a new scroll rule reports it here, so the room tab can
+  // keep the rule across a navigation.
+  onScrollPolicy = null,
   send = () => {},
   document: doc = null,
   mediaRoot = null,
@@ -177,6 +183,7 @@ export function createRoomClient({
   let currentCursor = cleanCursor(customCursor);
   let sharingPointer = Boolean(sharePointer);
   let allowedSites = cleanCursorSites(cursorSites);
+  let allowedScrollSites = cleanCursorSites(scrollSites);
   let showingNames = showNames !== false;
   // Every site a presence frame has named. The host panel offers these as
   // toggles, so a site someone is actually on can be switched on.
@@ -368,6 +375,12 @@ export function createRoomClient({
     return allowedSites === null || allowedSites.includes(key);
   }
 
+  function scrollAllowed(url) {
+    const key = cursorSiteOf(url);
+    if (!key) return false;
+    return allowedScrollSites === null || allowedScrollSites.includes(key);
+  }
+
   // A site the host just turned off loses its pointers at once, instead of
   // waiting for the next presence frame to drop each one.
   function dropDisallowed() {
@@ -401,6 +414,35 @@ export function createRoomClient({
     return [...next];
   }
 
+  // The scroll list is separate from the pointer list. A room can follow the
+  // host on an article while leaving the pointer off, and the reverse is true
+  // as well. A null list means every site, so a room that never edits it
+  // behaves exactly as it did before this setting existed.
+  function setScrollSites(value) {
+    if (!isHost()) return null;
+    const next = value === null ? null : cleanCursorSites(value) || [];
+    allowedScrollSites = next;
+    // A record queued before the change must not cross a site just switched off.
+    batcher?.clear();
+    sendMessage({ type: 'scrollpolicy', peerId, sites: next, roomTime: roomTimeOf() });
+    // Turning a site back on should land its current position at once. A host
+    // that scrolls before the next poll would otherwise leave the guest on the
+    // position it had when the site was switched off.
+    const view = viewport ? viewport() : null;
+    if (view && typeof view.scroll === 'number' && scrollAllowed(view.url)) {
+      state.applyView({ scroll: view.scroll });
+      stats.scroll = state.scroll;
+      sendMessage({
+        type: 'view',
+        url: view.url,
+        scroll: state.scroll,
+        fingerprint: view.fingerprint,
+        roomTime: roomTimeOf(),
+      });
+    }
+    return next === null ? null : [...next];
+  }
+
   // Taking a site off the list also switches it off, so the list and the rule
   // never disagree about a site the host removed.
   function forgetSite(key, on) {
@@ -426,6 +468,14 @@ export function createRoomClient({
       // No list means every site, and the peer has to hear that rule as it
       // is. An empty array is the host switching every site off instead.
       sites: allowedSites === null ? null : [...allowedSites],
+      roomTime: roomTimeOf(),
+    });
+    // The scroll rule travels beside the pointer rule. A guest that joins late
+    // gets both from this answer, and a policy change reaches the room at once.
+    sendMessage({
+      type: 'scrollpolicy',
+      peerId,
+      sites: allowedScrollSites === null ? null : [...allowedScrollSites],
       roomTime: roomTimeOf(),
     });
     return true;
@@ -480,7 +530,10 @@ export function createRoomClient({
     // A cursor image is close to the frame ceiling on its own. Sending every
     // peer's image inside one snapshot would overflow the frame, so the roster
     // travels first and each image follows in its own frame.
-    const snapshot = state.snapshot(clientBuild ? { build: clientBuild } : {});
+    const snapshot = state.snapshot({
+      ...(clientBuild ? { build: clientBuild } : {}),
+      scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
+    });
     snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
     sendMessage(snapshot);
     if (!isHost()) return;
@@ -572,7 +625,8 @@ export function createRoomClient({
       type: 'media',
       peerId,
       key: state.key,
-      action: 'tick',
+      action:
+        typeof state.action === 'string' && state.action ? state.action : 'tick',
       // This peer's copy may sit seconds from the room's, and its tab reports
       // a position in that file, so the frame carries room time.
       position: localPosition(Number(state.position || 0), -alignOffset),
@@ -814,6 +868,13 @@ export function createRoomClient({
       stats.inputReasons.origin = (stats.inputReasons.origin || 0) + message.records.length;
       return { ok: false, reason: 'origin' };
     }
+    // A site the host took off the mirror list takes no relayed click, key,
+    // wheel or text, even when the peer still holds a browser-wide grant.
+    if (here && !scrollAllowed(here)) {
+      stats.inputDropped += message.records.length;
+      stats.inputReasons.site = (stats.inputReasons.site || 0) + message.records.length;
+      return { ok: false, reason: 'site' };
+    }
     if (!state.allowInput(message.peerId)) return { ok: false, reason: 'rate' };
     const accepted = state.acceptInput({
       peerId: message.peerId,
@@ -892,9 +953,15 @@ export function createRoomClient({
     stats.capture = true;
 
     // Synthetic events never travel back. That is the first loop guard, and
-    // the second is that only a granted peer captures at all.
+    // the second is that only a granted peer captures at all. A site the host
+    // took off the mirror list is the third, so nothing is even queued there.
+    const siteOff = () => {
+      const href = doc.location ? doc.location.href : '';
+      return Boolean(href) && !scrollAllowed(href);
+    };
     const skip = (event) =>
       !event.isTrusted ||
+      siteOff() ||
       (event.target &&
         typeof event.target.closest === 'function' &&
         event.target.closest('[data-brosr-overlay]'));
@@ -1123,8 +1190,28 @@ export function createRoomClient({
       stats.position = Math.round(read.position * 1000) / 1000;
       stats.playing = read.playing;
     }
+    // A granted peer's play, pause or rate change says what the room should
+    // do, not where the host's copy is. Its own playhead can sit behind the
+    // host, and using that position here pulled the host backwards at the
+    // moment control was granted. A seek is the one act that carries a new
+    // position, so only a seek uses the peer's timestamp.
+    const explicit =
+      typeof message.action === 'string' && message.action !== 'tick'
+        ? message.action
+        : null;
+    const derived = explicit
+      ? null
+      : mediaAction(lastMediaFrame, { ...message, position: message.position }, local);
+    const action = explicit || derived || null;
+    // The host is the timekeeper, so only an explicit seek may move its
+    // playhead. A tick can disagree because the peer is behind, and reading
+    // that gap as a seek put the host back at the peer's old position after a
+    // pause. Legacy peers send every act as a tick; those acts still apply,
+    // but a tick never counts as a seek.
+    const hostAnchor = isHost() && read && explicit !== 'seek';
+    const base = hostAnchor ? read.position : localPosition(message.position, alignOffset);
     const expected =
-      localPosition(message.position, alignOffset) +
+      base +
       (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
     // The notice names a person, not a socket id. The room knows the name the
     // peer chose when it joined.
@@ -1133,7 +1220,6 @@ export function createRoomClient({
     // The panel and the film tab share one reading of the change. The expected
     // position is what this tab assumes the frame means, so a seek is measured
     // against the frame that came before it.
-    const action = mediaAction(lastMediaFrame, { ...message, position: expected }, local);
     lastMediaFrame = {
       key: message.key,
       position: expected,
@@ -1308,7 +1394,15 @@ export function createRoomClient({
     }
     if (typeof message.scroll === 'number') {
       state.scroll = message.scroll;
-      if (!isHost() && scrollTo) scrollTo(message.scroll);
+      // A snapshot names its page too. A guest that has moved elsewhere must
+      // not take the host's scroll with it.
+      if (
+        !isHost() &&
+        scrollTo &&
+        (!message.url || scrollAllowed(message.url))
+      ) {
+        scrollTo(message.scroll);
+      }
     }
   }
 
@@ -1384,6 +1478,17 @@ export function createRoomClient({
       case 'snapshot':
         if (message.build) hostBuild = cleanBuild(message.build);
         state.applySnapshot(message);
+        if (message.scrollSites !== undefined) {
+          allowedScrollSites =
+            message.scrollSites === null ? null : cleanCursorSites(message.scrollSites) || [];
+          if (onScrollPolicy) {
+            try {
+              onScrollPolicy(allowedScrollSites);
+            } catch {
+              // A listener cannot break the room.
+            }
+          }
+        }
         if (!isHost() && message.roomName) {
           currentRoomName = cleanRoomName(message.roomName);
           state.roomName = currentRoomName;
@@ -1400,6 +1505,16 @@ export function createRoomClient({
         if (!isHost() && navigate) navigate(message.url);
         return { ok: true, url: message.url };
       case 'view': {
+        // A view names the page it came from. Without that identity a host
+        // scroll could land on a guest that had moved to another page, which
+        // looks like the room scrolling a site the host never meant to drive.
+        const here = viewport ? viewport() : null;
+        if (message.url && here && here.url && message.url !== here.url) {
+          return { ok: true, ignored: 'other-page' };
+        }
+        if (message.url && !scrollAllowed(message.url)) {
+          return { ok: true, ignored: 'site-off' };
+        }
         const applied = state.applyView({ scroll: message.scroll, fingerprint: message.fingerprint });
         stats.scroll = applied.scroll;
         stats.layoutMismatch = applied.mismatch;
@@ -1450,6 +1565,25 @@ export function createRoomClient({
         if (onPolicy) {
           try {
             onPolicy(next);
+          } catch {
+            // A listener cannot break the room.
+          }
+        }
+        return { ok: true, sites: next };
+      }
+      case 'scrollpolicy': {
+        // The host is the authority. A frame that echoes its own list back is
+        // not a change. Null means every site; an empty list means none.
+        if (isHost()) return { ok: true, ignored: 'host' };
+        if (message.sites !== null && !Array.isArray(message.sites)) {
+          return { ok: false, reason: 'bad-sites' };
+        }
+        const next = message.sites === null ? null : cleanCursorSites(message.sites) || [];
+        allowedScrollSites = next;
+        batcher?.clear();
+        if (onScrollPolicy) {
+          try {
+            onScrollPolicy(next);
           } catch {
             // A listener cannot break the room.
           }
@@ -1563,20 +1697,28 @@ export function createRoomClient({
     lastViewTick = local;
     const view = viewport();
     if (!view) return;
+    if (view.url) noteSite(view.url);
     if (view.url && view.url !== lastUrl) {
       lastUrl = view.url;
       state.applyNav({ url: view.url });
       sendMessage({ type: 'nav', url: view.url, roomTime: local });
     }
     if (typeof view.scroll !== 'number') return;
-    if (Math.abs(view.scroll - state.scroll) <= SCROLL_EPSILON) return;
-    // This tab is the reference the peer follows. Its own resize is not a
-    // mismatch with a peer, and treating it as one would drop every click the
-    // peer sends from then on.
-    state.applyView({ scroll: view.scroll });
-    stats.scroll = state.scroll;
+    const moved = Math.abs(view.scroll - state.scroll) > SCROLL_EPSILON;
+    if (moved) {
+      // This tab is the reference the peer follows. Its own resize is not a
+      // mismatch with a peer, and treating it as one would drop every click the
+      // peer sends from then on.
+      state.applyView({ scroll: view.scroll });
+      stats.scroll = state.scroll;
+    }
+    if (!moved) return;
+    // A site the host switched off still tracks its own position here, so a
+    // later switch back on can send the current place without another scroll.
+    if (!scrollAllowed(view.url)) return;
     sendMessage({
       type: 'view',
+      url: view.url,
       scroll: state.scroll,
       fingerprint: view.fingerprint,
       roomTime: local,
@@ -1777,6 +1919,8 @@ export function createRoomClient({
       sharePointer: sharingPointer,
       cursorSites: allowedSites === null ? null : [...allowedSites],
       cursorSeen: [...seenSites],
+      scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
+      scrollSeen: [...seenSites],
       cursorForgot: [...forgottenSites],
       cursorNames: showingNames,
       cursorDrops: { ...cursorDropCounts },
@@ -1846,6 +1990,7 @@ export function createRoomClient({
     setCursor,
     setSharePointer,
     setCursorSites,
+    setScrollSites,
     forgetSite,
     setShowNames,
     sendPolicy,

@@ -18,6 +18,7 @@ export const TYPES = [
   'roomname',
   'cursor',
   'cursorpolicy',
+  'scrollpolicy',
   'control',
   'fate',
   'stutter',
@@ -27,7 +28,7 @@ export const TYPES = [
 ];
 
 const KNOWN = new Set(TYPES);
-const MEDIA_ACTIONS = new Set(['play', 'pause', 'seek', 'tick']);
+const MEDIA_ACTIONS = new Set(['play', 'pause', 'seek', 'rate', 'tick']);
 
 function fail(message) {
   throw new Error(message);
@@ -51,6 +52,9 @@ export function validate(message) {
       break;
     case 'view':
       if (!isNumber(message.scroll)) fail('view needs a scroll ratio');
+      if (message.url !== undefined && typeof message.url !== 'string') {
+        fail('view url must be text');
+      }
       break;
     case 'media':
       if (!MEDIA_ACTIONS.has(message.action)) fail(`media action ${message.action} is unknown`);
@@ -95,6 +99,12 @@ export function validate(message) {
       // null means "every site is allowed". An empty list means "no sites".
       if (message.sites !== null && !Array.isArray(message.sites)) {
         fail('cursorpolicy needs a sites list or null');
+      }
+      break;
+    case 'scrollpolicy':
+      // The same shape as the cursor policy, with the same null meaning.
+      if (message.sites !== null && !Array.isArray(message.sites)) {
+        fail('scrollpolicy needs a sites list or null');
       }
       break;
     case 'control':

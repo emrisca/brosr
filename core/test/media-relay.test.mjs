@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  RELAY_BUFFER_WAIT_MS,
   RELAY_SEEK_TIMEOUT_MS,
   RELAY_TICK_MS,
   RelayMediaAdapter,
@@ -21,6 +22,7 @@ function fakeVideo({
   readyState = 4,
   playbackRate = 1,
   volume = 1,
+  buffered = null,
 } = {}) {
   return {
     src,
@@ -33,6 +35,11 @@ function fakeVideo({
     readyState,
     playbackRate,
     volume,
+    buffered: buffered || {
+      length: 1,
+      start: () => 0,
+      end: () => duration,
+    },
     plays: 0,
     pauses: 0,
     play() {
@@ -242,6 +249,88 @@ test('a tab that shows the film seeks when the room is far ahead', () => {
   const again = sync.handle({ key: ytKey, position: 130, playing: true, rate: 1, at: now });
   assert.equal(again.action, 'tick');
   assert.equal(video.currentTime, 100);
+});
+
+test('a seek outside the buffered range waits, then lands when data arrives', () => {
+  let end = 60;
+  const buffered = { length: 1, start: () => 0, end: () => end };
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered });
+  let now = 10000;
+  const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => now });
+
+  const first = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(first.skipped, 'buffer');
+  assert.equal(video.currentTime, 50);
+  assert.equal(video.paused, true, 'the film stops instead of running away from the target');
+  assert.equal(sync.stats.seeks, 0);
+  assert.equal(sync.stats.bufferWaits, 1);
+  assert.equal(sync.stats.bufferHolds, 1);
+
+  // A second tick keeps waiting, does not start the film again, and does not
+  // count a second wait.
+  now += 500;
+  const held = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(held.skipped, 'buffer');
+  assert.equal(video.currentTime, 50);
+  assert.equal(video.paused, true);
+  assert.equal(sync.stats.bufferWaits, 1);
+
+  // The player fetched the range, so the next tick can land the seek and
+  // resume the room's playback.
+  end = 200;
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+  assert.equal(sync.stats.seeks, 1);
+});
+
+test('a buffer wait reports recovery after the deadline without another frame', () => {
+  const video = fakeVideo({
+    currentTime: 50,
+    duration: 300,
+    paused: false,
+    buffered: { length: 1, start: () => 0, end: () => 60 },
+  });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(sync.bufferWaitActive(now), true);
+
+  // The report timer is what releases a room hold when the film tab receives
+  // no further frames. It must expire the wait and leave the film paused until
+  // the release frame carries the seek.
+  now += RELAY_BUFFER_WAIT_MS + 1;
+  assert.equal(sync.bufferWaitActive(now), false);
+  assert.equal(sync.waitingSince, null);
+  assert.equal(sync.bufferReady, true);
+  assert.equal(video.paused, true);
+
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+});
+
+test('a buffer that never arrives still seeks after the wait deadline', () => {
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered: { length: 1, start: () => 0, end: () => 60 } });
+  let now = 10000;
+  const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => now });
+
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  now += RELAY_BUFFER_WAIT_MS + 1;
+  const result = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+
+  assert.equal(result.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+  assert.equal(sync.stats.seeks, 1);
 });
 
 test('a small gap gets a rate nudge instead of a seek', () => {

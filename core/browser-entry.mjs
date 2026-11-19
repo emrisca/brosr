@@ -321,7 +321,10 @@ async function startPageMedia() {
       return Promise.resolve({
         ok: true,
         requestId: message.requestId || null,
-        relay: { ...relay },
+        // The panel needs the relay's own counts, not only the room's. A film
+        // tab can wait on a buffer and retry a stuck seek without either one
+        // showing up in the room counters.
+        relay: { ...relay, stats: { ...remote.stats } },
         position: Number(video.currentTime || 0),
         duration: Number(video.duration || 0),
         paused: Boolean(video.paused),
@@ -333,6 +336,10 @@ async function startPageMedia() {
     const result = remote.handle(message);
     relay.last = result;
     publishRelay();
+    // A buffer hold pauses the film from inside the relay. That pause is not a
+    // person's act, so it must not travel back as a fresh command when the
+    // player fires its pause event.
+    if (result && result.skipped === 'buffer') remoteAppliedAt = Date.now();
     // Only a frame that carries an act, or a correction this tab had to issue,
     // starts the echo window. A routine tick arrives four times a second, and a
     // window that every tick refreshed never opened: a granted peer's own pause
@@ -390,11 +397,18 @@ async function startPageMedia() {
     // sends the report a moment later, and a frame that stamped the send would
     // put every guest the age of the report past the film.
     state.at = Date.now();
+    // A film paused for an unbuffered seek is not a starved element, but the
+    // room should see the wait. Same fate can then hold every player instead
+    // of letting this one run away from its target. The check also expires the
+    // wait, so a room hold releases when the range arrives or the deadline
+    // passes even while no frame reaches this tab.
+    if (remote.bufferWaitActive()) state.buffering = true;
     // A person's play, pause, seek or rate change is an act. The four-a-second
     // tick only reads the clock, and a granted peer that sent its own lag as
     // an anchor pulled the host's playhead back and beat the host's own play
-    // and pause. An act crosses the room, a tick stays home.
-    state.action = Boolean(userAction);
+    // and pause. An act crosses the room, a tick stays home. The action keeps
+    // its name so the host can apply a pause at the host's own playhead.
+    state.action = typeof userAction === 'string' ? userAction : Boolean(userAction);
     if (state.key !== relayKey) {
       relayKey = state.key;
       send({ type: 'brosr:media-hello', key: state.key }).catch(() => {});
@@ -413,12 +427,17 @@ async function startPageMedia() {
   // while the interval above catches the rest of the clock. An act this tab
   // just applied from the room is skipped, or two browsers answer each
   // other's corrections forever.
-  const act = () => {
+  const act = (action) => {
     if (Date.now() - remoteAppliedAt < 600) return;
-    reportMedia(true);
+    reportMedia(action);
   };
-  for (const type of ['play', 'pause', 'seeked', 'ratechange']) {
-    document.addEventListener(type, act, true);
+  for (const [type, action] of [
+    ['play', 'play'],
+    ['pause', 'pause'],
+    ['seeked', 'seek'],
+    ['ratechange', 'rate'],
+  ]) {
+    document.addEventListener(type, () => act(action), true);
   }
 
   return { started: true, role: 'media', room: null, peerId: null };
@@ -532,6 +551,16 @@ export async function start() {
     }
   })());
   let cursorSites = savedSites;
+  // Scroll follows its own list, so switching pointers off on a site does not
+  // also stop the room from following the host's reading place there.
+  const savedScrollSites = cleanCursorSites((() => {
+    try {
+      return JSON.parse(readSetting('brosr-scroll-sites') || 'null');
+    } catch {
+      return null;
+    }
+  })());
+  let scrollSites = savedScrollSites;
   // Sites the host removed from the panel list. The list belongs to the host,
   // so only the room tab of the host browser ever writes this.
   const savedForgot = cleanCursorSites((() => {
@@ -685,8 +714,14 @@ export async function start() {
     sharePointer,
     sameFate,
     cursorSites,
+    scrollSites,
     cursorForgot,
     showNames,
+    onScrollPolicy: (sites) => {
+      const list = Array.isArray(sites) ? sites : null;
+      scrollSites = list;
+      writeSetting('brosr-scroll-sites', JSON.stringify(list));
+    },
     // A learned list is written here and sent to the rest of this browser, so
     // every tab follows the host without holding a socket.
     onPolicy: (sites) => {
@@ -935,6 +970,8 @@ export async function start() {
       cursorSites: Array.isArray(live.cursorSites) ? live.cursorSites : null,
       cursorSeen: Array.isArray(live.cursorSeen) ? live.cursorSeen : [],
       cursorForgot: Array.isArray(live.cursorForgot) ? live.cursorForgot : [],
+      scrollSites: Array.isArray(live.scrollSites) ? live.scrollSites : null,
+      scrollSeen: Array.isArray(live.scrollSeen) ? live.scrollSeen : [],
       trust: Boolean(trust),
       trustTarget: trustTarget || null,
     };
@@ -991,6 +1028,18 @@ export async function start() {
             writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
           }
         }
+      } else if (data.action === 'scroll-site') {
+        if (role !== 'host') throw refusal('Only the host can change scroll sites.', 'not-host');
+        const site = cursorSiteOf(String(data.site || ''));
+        if (!site) throw refusal('That site is not valid.', 'bad-site');
+        const published = client.publish();
+        const base = Array.isArray(published.scrollSites)
+          ? published.scrollSites
+          : published.scrollSeen || [];
+        const next = new Set(base);
+        if (data.on) next.add(site);
+        else next.delete(site);
+        client.setScrollSites([...next]);
       } else if (data.action === 'room-name') {
         if (role !== 'host') throw refusal('Only the host can rename the room.', 'not-host');
         client.setRoomName(String(data.value || ''));

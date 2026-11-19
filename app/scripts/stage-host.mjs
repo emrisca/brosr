@@ -53,6 +53,7 @@ const FILES = [
   'bridge/bridge-youtube.js',
   'bridge/panel/room.html',
   'bridge/panel/room.css',
+  'bridge/panel/sync-report.js',
   'bridge/panel/room.js',
 ];
 

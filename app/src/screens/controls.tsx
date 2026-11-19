@@ -174,6 +174,13 @@ export function RoomControls({ open, onOpenChange }: Props) {
     state?.cursorSites === null || state?.cursorSites === undefined
       ? true
       : state.cursorSites.includes(site);
+  const scrollSites = [
+    ...new Set([...(state?.scrollSites ?? []), ...(state?.scrollSeen ?? [])]),
+  ].sort((a, b) => siteLabel(a).localeCompare(siteLabel(b)));
+  const scrollOn = (site: string) =>
+    state?.scrollSites === null || state?.scrollSites === undefined
+      ? true
+      : state.scrollSites.includes(site);
   const disabled = Boolean(busy);
 
   return (
@@ -356,6 +363,39 @@ export function RoomControls({ open, onOpenChange }: Props) {
                     ))}
                   </div>
                 ) : null}
+              </section>
+
+              <Separator />
+
+              <section className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-muted-foreground">Mirror sites</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose where the room follows scroll and accepts clicks and typing. A site
+                  joins the list after someone visits it.
+                </p>
+                {scrollSites.length ? (
+                  <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                    {scrollSites.map((site) => (
+                      <label
+                        key={site}
+                        className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border p-2 hover:bg-accent/40"
+                      >
+                        <span className="min-w-0 truncate text-sm" title={site}>
+                          {siteLabel(site)}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={scrollOn(site)}
+                          disabled={disabled}
+                          onChange={() => act('scroll-site', { site, on: !scrollOn(site) })}
+                          className="size-4 shrink-0 accent-primary"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No sites yet.</p>
+                )}
               </section>
 
               <Separator />

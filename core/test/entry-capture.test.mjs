@@ -128,6 +128,29 @@ test('a film report refreshes presence while its room tab is hidden', () => {
   );
 });
 
+test('a film waiting for a buffer reports the wait and suppresses its own pause', () => {
+  // The relay pauses the film so it does not run away from an unfetched seek
+  // target. That pause is internal, and the next room tick must not start the
+  // film again. The wait also travels as buffering, so same fate can hold the
+  // room instead of letting the guest fall behind.
+  const apply = source.slice(source.indexOf('const result = remote.handle(message);'));
+  const body = apply.slice(0, apply.indexOf('const action = message.action'));
+  assert.match(body, /result\.skipped === 'buffer'[\s\S]*?remoteAppliedAt = Date\.now\(\)/);
+  const report = source.slice(source.indexOf('function reportMedia'));
+  const reportBody = report.slice(0, report.indexOf('setInterval(reportMedia'));
+  assert.match(reportBody, /remote\.bufferWaitActive\(\)[\s\S]*?state\.buffering = true/);
+});
+
+test('a local media act keeps its kind for the host', () => {
+  // The host applies a pause at its own playhead and a seek at the peer's.
+  // A boolean action lost that difference and let a peer's lag move the host.
+  assert.match(source, /state\.action = typeof userAction === 'string' \? userAction : Boolean\(userAction\)/);
+  assert.match(source, /\['play', 'play'\]/);
+  assert.match(source, /\['pause', 'pause'\]/);
+  assert.match(source, /\['seeked', 'seek'\]/);
+  assert.match(source, /\['ratechange', 'rate'\]/);
+});
+
 test('a film report names the instant its position was read', () => {
   // The room sends a report a moment after the tab reads it. A report with no
   // read time makes the room stamp the send, and every guest then extrapolates
