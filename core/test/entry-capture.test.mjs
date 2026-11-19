@@ -150,6 +150,17 @@ test('a film report refreshes presence while its room tab is hidden', () => {
   );
 });
 
+test('a hidden film tab reports when the room drives it', () => {
+  // A hidden tab throttles its report timer, but the room still sends applies.
+  // The frame that owns the player answers one with its current state, so the
+  // host's local position does not go stale while the app is in front.
+  const apply = source.slice(source.indexOf("if (message.type !== 'brosr:media-apply')"));
+  const body = apply.slice(0, apply.indexOf('let relayKey'));
+  assert.match(body, /document\.visibilityState === 'hidden'/);
+  assert.match(body, /queueMicrotask\(reportMedia\)/);
+  assert.match(body, /lastHiddenReportAt/);
+});
+
 test('a film waiting for a buffer reports the wait and suppresses its own pause', () => {
   // The relay pauses the film so it does not run away from an unfetched seek
   // target. That pause is internal, and the next room tick must not start the

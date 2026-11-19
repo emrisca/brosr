@@ -17,6 +17,8 @@ crosses that boundary does not count.
 | A granted peer's new tab opens several copies on other peers | A mirrored click and the shared-tab announcement named the same URL under different keys, so both requests passed separate guards and each created a tab | `core/test/background-tab-open.test.mjs` |
 | A grant or tab refusal only says something failed | The app message dropped the reason before the CLI saw it | `host/test/panel-reason.test.mjs` |
 | The host's film reading is unavailable in Chrome | The film tab returned a promise from the message listener. Chrome does not guarantee promise replies, so the read timed out. | `core/test/entry-capture.test.mjs`, `core/test/panel.test.mjs` |
+| The app log says the film reading is unavailable while the room is live | The background waited forever for the session restore before it looked at the film tab already in the live map | `core/test/background-tab-open.test.mjs` |
+| The host's local film position is empty while the room is paused | A hidden film tab's report timer was throttled, so it applied the room's frames but never sent its own state | `core/test/entry-capture.test.mjs` |
 | A guest shows an empty film title | The host media frame omitted the title the host already had | `core/test/sync.test.mjs`, `core/test/entry-capture.test.mjs` |
 | A host drops peer acts seconds after its own pause | The periodic greeting replayed an old host action and reopened the 500 ms priority window | `core/test/entry-capture.test.mjs` |
 | A guest report says its film tab dropped dozens of acts | Suppressed echo events were counted as lost commands | `core/test/sync-report.test.mjs` |

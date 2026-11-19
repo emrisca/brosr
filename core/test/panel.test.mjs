@@ -86,7 +86,8 @@ test('the background reads one film owner and returns one answer', () => {
     'utf8'
   );
   assert.match(source, /function filmOwner\(/);
-  assert.match(source, /const owner = filmOwner\(filmKey\)/);
+  assert.match(source, /let owner = filmOwner\(filmKey\)/);
+  assert.match(source, /Promise\.race\(\[mediaRestored, mediaRestoreDeadline\]\)/);
   assert.match(source, /const \[id\] = owner/);
   assert.equal(
     (source.match(/type: 'brosr:relay-reading'/g) || []).length,

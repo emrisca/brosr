@@ -274,6 +274,9 @@ const mediaRestored = state()
     }
   })
   .catch(() => {});
+// A state read can stall while the worker wakes. A film read has a live map to
+// fall back on, so its restore wait needs a deadline.
+const mediaRestoreDeadline = new Promise((resolve) => setTimeout(resolve, 250));
 // A host tab can reach the open path from several frames at once. One slot per
 // host tab keeps that burst to a single local tab.
 const opening = new Set();
@@ -834,11 +837,15 @@ async function handle(message, sender) {
   if (message.type === 'brosr:film-reading') {
     const filmKey = String(message.key || '');
     if (!filmKey) return { ok: false, reason: 'key' };
-    // A restarted worker fills this map from its book after a message can
-    // already arrive, so the read waits for that fill instead of answering
-    // no-tab for a film tab this browser shows.
-    await mediaRestored;
-    const owner = filmOwner(filmKey);
+    // A live tab is already in the map. A restarted worker fills it from its
+    // book after a message can arrive, so an empty map waits for that fill.
+    // The restore can stall while the worker wakes, so it gets a short head
+    // start and no more; the live map is enough to answer.
+    let owner = filmOwner(filmKey);
+    if (!owner) {
+      await Promise.race([mediaRestored, mediaRestoreDeadline]);
+      owner = filmOwner(filmKey);
+    }
     if (!owner) {
       return {
         ok: false,

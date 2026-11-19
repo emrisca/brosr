@@ -16,7 +16,7 @@ const source = fs.readFileSync(
   'utf8'
 );
 
-function loadBackground() {
+function loadBackground({ sessionGet } = {}) {
   const tabs = [];
   const saved = {};
   const created = [];
@@ -31,7 +31,7 @@ function loadBackground() {
   const api = {
     storage: {
       session: {
-        get: async () => ({}),
+        get: sessionGet || (async () => ({})),
         set: async (changes) => Object.assign(saved, changes),
       },
       local: {
@@ -86,15 +86,61 @@ function loadBackground() {
   };
 }
 
-function ask(listener, message) {
+function ask(listener, message, sender = {}) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('background did not answer')), 1000);
-    listener(message, {}, (reply) => {
+    listener(message, sender, (reply) => {
       clearTimeout(timer);
       resolve(reply);
     });
   });
 }
+
+test('a live film tab answers a read without waiting for the session restore', async () => {
+  let reads = 0;
+  const { listener } = loadBackground({
+    sessionGet: async () => {
+      reads += 1;
+      if (reads === 3) return new Promise(() => {});
+      return {};
+    },
+  });
+  const hello = await ask(
+    listener,
+    { type: 'brosr:media-hello', key: 'youtube:test' },
+    { tab: { id: 22, active: true, url: 'https://www.youtube.com/watch?v=test' } }
+  );
+  assert.equal(hello.ok, true);
+  const started = Date.now();
+  const reply = await ask(listener, {
+    type: 'brosr:film-reading',
+    key: 'youtube:test',
+    requestId: 'read-live',
+  });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.tabId, 22);
+  assert.ok(Date.now() - started < 500, 'the read did not wait for the stalled restore');
+});
+
+test('a stalled restore with no live owner answers instead of hanging', async () => {
+  let reads = 0;
+  const { listener } = loadBackground({
+    sessionGet: async () => {
+      reads += 1;
+      if (reads === 3) return new Promise(() => {});
+      return {};
+    },
+  });
+  const started = Date.now();
+  const reply = await ask(listener, {
+    type: 'brosr:film-reading',
+    key: 'youtube:missing',
+    requestId: 'read-empty',
+  });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.reason, 'no-tab');
+  assert.ok(Date.now() - started < 900, 'the read waited past its deadline');
+});
 
 test('a mirrored click and a shared tab open one copy for the same URL', async () => {
   const { created, saved, listener, release } = loadBackground();

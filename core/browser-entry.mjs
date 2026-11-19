@@ -298,6 +298,9 @@ async function startPageMedia() {
   // with the action it was told to perform. Only that action is an echo; a
   // person's pause after a remote seek is a new act and must travel.
   let remoteEcho = null;
+  // A hidden tab throttles its own report timer. The room still sends applies,
+  // so the frame that owns the player answers one with its current state.
+  let lastHiddenReportAt = 0;
   runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
@@ -380,6 +383,13 @@ async function startPageMedia() {
       rate: Number(message.rate || 1),
       at: Date.now(),
     };
+    // A hidden tab throttles its report timer to once a minute. The room still
+    // sends applies, so answer one with the state the player now holds. This
+    // keeps the host's local position fresh while the app is in front.
+    if (document.visibilityState === 'hidden' && Date.now() - lastHiddenReportAt >= 1000) {
+      lastHiddenReportAt = Date.now();
+      queueMicrotask(reportMedia);
+    }
     return undefined;
   });
 
