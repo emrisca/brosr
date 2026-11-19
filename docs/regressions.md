@@ -22,6 +22,7 @@ crosses that boundary does not count.
 | A stopped copy cannot be resumed from the panel | Stop dropped the key, so the only route back was a fresh copy from the landing page | `core/test/background-tab-open.test.mjs`, `core/test/tab-sync-controls.test.mjs` |
 | A resumed copy opens a second tab | Resume restored the key but the room tab asked for a fresh open instead of following the offer again | `core/test/background-tab-open.test.mjs` |
 | The panel header says nothing while a copy is stopped | The count lived only in the Room pane, so a stop was invisible from the Cursor pane | `core/test/tab-sync-controls.test.mjs` |
+| The panel shows no room details and host tabs never reach the landing page | The bridge package left `core/live-tabs.mjs` out of its hand kept file list, so the injected core failed at import and never opened a socket | `core/test/package-core.test.mjs` |
 | A grant or tab refusal only says something failed | The app message dropped the reason before the CLI saw it | `host/test/panel-reason.test.mjs` |
 | The host's film reading is unavailable in Chrome | The film tab returned a promise from the message listener. Chrome does not guarantee promise replies, so the read timed out. | `core/test/entry-capture.test.mjs`, `core/test/panel.test.mjs` |
 | The app log says the film reading is unavailable while the room is live | The background waited forever for the session restore before it looked at the film tab already in the live map | `core/test/background-tab-open.test.mjs` |

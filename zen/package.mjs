@@ -32,6 +32,9 @@ const CORE = [
   'panel.mjs',
   'page-entry.mjs',
   'tabs.mjs',
+  // The entry imports the offer model, so a bundle without it leaves the
+  // injected script with a failed import and the page with no socket.
+  'live-tabs.mjs',
   'youtube.mjs',
   'media-relay.mjs',
 ];

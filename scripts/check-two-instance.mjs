@@ -22,6 +22,7 @@
 //   BROSR_CHECK_BROWSER=/path/to/chromium node scripts/check-two-instance.mjs --chrome
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -529,6 +530,7 @@ let bridge = null;
 let bridgeTemp = false;
 let shipped = null;
 let signed = null;
+let offerServer = null;
 
 try {
   shipped = shippedBridge();
@@ -692,11 +694,13 @@ try {
   }
 
   const formUrl = `http://${ORIGIN}:${RELAY_PORT}/form.html`;
-  const form = await openHost(formUrl);
-  await form.eval(
-    "(() => { const f = document.getElementById('field'); if (!f) return false; f.focus(); window.__keys = []; f.addEventListener('keydown', (e) => window.__keys.push({ key: e.key, trusted: e.isTrusted })); return true; })()"
-  );
   out.steps.form = formUrl;
+  // The form fixture name matches the bridge's room page pattern, and the
+  // bridge keeps one room tab per browser. Opening the form first made the
+  // background record it as the room, so the real room tab's hello was ignored
+  // and the host could never publish a tab offer. The form therefore opens
+  // after the room tab has claimed that role.
+  let form = null;
 
   // The agent binds before the page reads its port, because the room's trust
   // client posts to this exact address and no other. The page object stands in
@@ -723,6 +727,11 @@ try {
     return s && s.socket === 1 && s.role === 'host' ? s : null;
   }, 'the host socket', 30000);
   if (!hostState.trust) throw new Error('the host page has no trust client');
+
+  form = await openHost(formUrl);
+  await form.eval(
+    "(() => { const f = document.getElementById('field'); if (!f) return false; f.focus(); window.__keys = []; f.addEventListener('keydown', (e) => window.__keys.push({ key: e.key, trusted: e.isTrusted })); return true; })()"
+  );
 
   const guestUrl =
     `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest&relay=${RELAY_PORT}` +
@@ -892,6 +901,64 @@ try {
   }, 'the applied trust count', 10000).catch(() => null);
   const hostTrust = settled || (await hostPage.read());
   out.steps.hostTrust = hostTrust && { trust: hostTrust.trust, target: hostTrust.trustTarget };
+
+  // A tab the host opens is an offer, not a push. The guest page must read it
+  // from the room grouped under the host, and the host's own page must show the
+  // same row. The landing page fixture proves the drawing, so this is the only
+  // step that proves the offer channel between two real browsers.
+  let offerOk = true;
+  try {
+    offerServer = http.createServer((request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end('<!doctype html><title>Offered tab</title><p>offer</p>');
+    });
+    await new Promise((resolve) => offerServer.listen(0, '127.0.0.1', resolve));
+    const offerUrl = `http://127.0.0.1:${offerServer.address().port}/offer.html`;
+    const readTabs = async (page) => {
+      const raw = await page.eval("document.documentElement.dataset.brosrTabs || ''");
+      try {
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    };
+    await openHost(offerUrl);
+    // A host page sends its own offer out and keeps its list for others, so the
+    // guest is the side that must show the row. The row also has to sit under
+    // the host, because the owner comes from the sender and not from a claim.
+    const offered = await until(async () => {
+      const state = await readTabs(guestPage);
+      const groups = (state && state.groups) || [];
+      const host = groups.find((group) => group.role === 'host');
+      return host && host.tabs.some((tab) => tab.url === offerUrl) ? { host } : null;
+    }, 'the host tab offer at the guest', 20000).catch(() => null);
+    offerOk = Boolean(offered);
+    out.steps.offer = {
+      url: offerUrl,
+      guestOwner: offered ? offered.host.owner : null,
+      guestRole: offered ? offered.host.role : null,
+      guestTabs: offered ? offered.host.tabs.map((tab) => tab.url) : null,
+      ok: offerOk,
+    };
+    if (!offerOk) {
+      const guestTabs = await readTabs(guestPage).catch(() => null);
+      out.steps.offer.groups = guestTabs
+        ? guestTabs.groups.map((group) => ({
+            owner: group.owner,
+            role: group.role,
+            tabs: group.tabs.length,
+          }))
+        : null;
+      process.stderr.write(`[brosr] the offer did not reach the guest: ${JSON.stringify(out.steps.offer)}\n`);
+    }
+  } catch (error) {
+    offerOk = false;
+    out.steps.offer = { ok: false, error: String((error && error.message) || error) };
+    process.stderr.write(`[brosr] the offer step failed: ${out.steps.offer.error}\n`);
+  } finally {
+    if (offerServer) offerServer.close();
+  }
+
   const wrongKeyOk = out.steps.wrongKey ? out.steps.wrongKey.ok : true;
   out.ok =
     shipped.ok &&
@@ -899,6 +966,7 @@ try {
     sealOk &&
     wrongKeyOk &&
     out.steps.contract.ok &&
+    offerOk &&
     typed.value === 'trusted' &&
     keys.length >= 7 &&
     keys.every((k) => k.trusted === true) &&
