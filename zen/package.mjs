@@ -12,32 +12,29 @@ const core = path.join(root, 'core');
 const MANIFEST = path.join(bridge, 'manifest.json');
 const CHROME_MANIFEST = path.join(bridge, 'manifest.chrome.json');
 
-const CORE = [
-  'protocol.mjs',
-  // The entry and the sync client both import this one, so a bundle without
-  // it leaves the injected script with a failed import and the page with no
-  // dataset and no socket.
-  'cursor.mjs',
-  'clock.mjs',
-  'drift.mjs',
-  'align.mjs',
-  'media.mjs',
-  'room.mjs',
-  'overlay.mjs',
-  'input.mjs',
-  'trust.mjs',
-  'sync.mjs',
-  'seal.mjs',
-  'browser-entry.mjs',
-  'panel.mjs',
-  'page-entry.mjs',
-  'tabs.mjs',
-  // The entry imports the offer model, so a bundle without it leaves the
-  // injected script with a failed import and the page with no socket.
-  'live-tabs.mjs',
-  'youtube.mjs',
-  'media-relay.mjs',
-];
+// The file list is derived from the imports instead of kept by hand. A hand
+// kept list already shipped a bundle one module short: the injected core failed
+// at its import, and every room page lost its dataset and its socket. The walk
+// starts at every module the bridge loads as an entry, and a module the entries
+// cannot reach, such as the host side friends.mjs, stays out.
+const ENTRIES = ['browser-entry.mjs', 'page-entry.mjs', 'panel.mjs'];
+
+export function coreFiles() {
+  const seen = new Set();
+  const walk = (name) => {
+    if (seen.has(name)) return;
+    const file = path.join(core, name);
+    if (!fs.existsSync(file)) return;
+    seen.add(name);
+    const source = fs.readFileSync(file, 'utf8');
+    for (const hit of source.matchAll(/from\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
+    for (const hit of source.matchAll(/import\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
+  };
+  for (const name of ENTRIES) walk(name);
+  return [...seen].sort();
+}
+
+const CORE = coreFiles();
 const PANEL = ['room.html', 'room.css', 'sync-report.js', 'room.js'];
 const ICONS = [16, 32, 48, 96, 128];
 const ACTIONS = ['action-16.png', 'action-32.png', 'action-48.png'];

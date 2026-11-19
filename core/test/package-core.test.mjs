@@ -1,43 +1,38 @@
-// The bridge package keeps its core file list by hand. A module left out of
-// that list still imports on disk, so only the browser fails: the injected
-// script stops at its import and the page ends up with no dataset and no
-// socket. This test walks the imports of both shipped entry points and names
-// every reachable module the package list omits. Host-only modules such as
-// friends.mjs are not reachable from a browser entry, so they stay optional.
+// The bridge package builds its core file list from the imports, so the bundle
+// has to hold every module the entries reach. This test walks those imports on
+// its own and reads the files the builder would pack. A missing module only
+// fails inside the browser: the injected core stops at its import, and the page
+// ends up with no dataset and no socket.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { bridgeEntries } from '../../zen/package.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const core = path.join(here, '..');
-const pack = path.join(core, '..', 'zen', 'package.mjs');
-const ENTRY = ['browser-entry.mjs', 'panel.mjs'];
+const ENTRY = ['browser-entry.mjs', 'page-entry.mjs', 'panel.mjs'];
 
-test('the bridge package ships every module its entries reach', () => {
-  const source = fs.readFileSync(pack, 'utf8');
-  const listed = new Set(
-    [...source.matchAll(/'([\w-]+\.mjs)'/g)].map((hit) => hit[1])
-  );
-
+test('the bridge package holds every module its entries reach', () => {
+  const packed = new Set(bridgeEntries().map((entry) => entry.name));
   const reached = new Set();
   const walk = (name) => {
     if (reached.has(name)) return;
     const file = path.join(core, name);
     if (!fs.existsSync(file)) return;
     reached.add(name);
-    const text = fs.readFileSync(file, 'utf8');
-    for (const hit of text.matchAll(/from\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
-    for (const hit of text.matchAll(/import\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
+    const source = fs.readFileSync(file, 'utf8');
+    for (const hit of source.matchAll(/from\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
+    for (const hit of source.matchAll(/import\s+'\.\/([\w-]+\.mjs)'/g)) walk(hit[1]);
   };
   for (const name of ENTRY) walk(name);
 
-  const missing = [...reached].filter((name) => !listed.has(name));
+  const missing = [...reached].filter((name) => !packed.has(`core/${name}`));
   assert.deepEqual(
     missing,
     [],
-    `zen/package.mjs does not list ${missing.join(', ')}, which ${ENTRY.join(' or ')} imports`
+    `the bridge omits ${missing.join(', ')}, which ${ENTRY.join(' or ')} imports`
   );
 });

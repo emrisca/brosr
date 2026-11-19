@@ -531,6 +531,7 @@ let bridgeTemp = false;
 let shipped = null;
 let signed = null;
 let offerServer = null;
+let fixturesDir = null;
 
 try {
   shipped = shippedBridge();
@@ -568,13 +569,28 @@ try {
     if (!(await free(port, host))) throw new Error(`port ${port} for ${name} is busy`);
   }
 
+  // The relay serves the room at its root, and a room URL names the relay, so
+  // the real landing page has to come from that same origin. A copy on its own
+  // port would lose the room the moment a guest follows the host, because the
+  // follow strips the room params and sessionStorage does not cross origins.
+  // Only the pages this lane opens are copied.
+  fixturesDir = await mkdtemp(path.join(tmpdir(), 'brosr-check-fixtures-'));
+  for (const [name, from] of [
+    ['sync.html', 'landing/index.html'],
+    ['landing.css', 'landing/landing.css'],
+    ['favicon.svg', 'landing/favicon.svg'],
+    ['form.html', 'spike/fixtures/form.html'],
+  ]) {
+    fs.copyFileSync(path.join(root, from), path.join(fixturesDir, name));
+  }
+
   relay = spawn(RELAY, [], {
     cwd: root,
     env: {
       ...process.env,
       HOST: ORIGIN,
       PORT: String(RELAY_PORT),
-      FIXTURES: path.join(root, 'spike', 'fixtures'),
+      FIXTURES: fixturesDir,
       ASSETS: path.join(root, 'assets'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -693,6 +709,23 @@ try {
     };
   }
 
+  // Every open page in the guest browser, so an Open click is judged by the tab
+  // it created and not by the row that says it did.
+  const guestTabUrls = async () => {
+    if (!chromeLane) {
+      const tree = await guestBidi.cmd('browsingContext.getTree', {});
+      const urls = [];
+      const visit = (node) => {
+        if (node && node.url) urls.push(node.url);
+        for (const child of (node && node.children) || []) visit(child);
+      };
+      for (const node of (tree && tree.contexts) || []) visit(node);
+      return urls;
+    }
+    const list = await (await fetch(`http://127.0.0.1:${GUEST_PORT}/json/list`)).json();
+    return list.map((item) => item.url);
+  };
+
   const formUrl = `http://${ORIGIN}:${RELAY_PORT}/form.html`;
   out.steps.form = formUrl;
   // The form fixture name matches the bridge's room page pattern, and the
@@ -733,15 +766,32 @@ try {
     "(() => { const f = document.getElementById('field'); if (!f) return false; f.focus(); window.__keys = []; f.addEventListener('keydown', (e) => window.__keys.push({ key: e.key, trusted: e.isTrusted })); return true; })()"
   );
 
+  // The guest loads the same real landing page at the relay root, so the Open
+  // button under test is the one a person clicks and the page sits on the
+  // origin a room URL uses.
+  out.steps.landing = 'landing/index.html served at /';
   const guestUrl =
-    `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest&relay=${RELAY_PORT}` +
-    (inviteKey ? `#k=${inviteKey}` : '');
+    `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=${PEER}&name=Guest` +
+    `&relay=${RELAY_PORT}${inviteKey ? `#k=${inviteKey}` : ''}`;
   const guestPage = await openGuest(guestUrl);
   out.steps.guestUrl = guestUrl;
-  const joined = await until(async () => {
-    const s = await guestPage.read();
-    return s && s.socket === 1 ? s : null;
-  }, 'the guest socket', 30000);
+  // A guest that never joins is the one failure a bare timeout cannot explain.
+  // The page itself names the reason: no dataset means the core never started,
+  // a dataset with socket 0 means it started and the wire stayed shut.
+  let joined;
+  try {
+    joined = await until(async () => {
+      const s = await guestPage.read();
+      return s && s.socket === 1 ? s : null;
+    }, 'the guest socket', 30000);
+  } catch (error) {
+    out.steps.guestDiagnosis = await guestPage
+      .eval(
+        "JSON.stringify({ href: location.href, title: document.title, ready: document.readyState, dataset: document.documentElement.dataset.brosr || null, error: document.documentElement.dataset.brosrError || null, entries: Array.from(document.querySelectorAll('script[data-brosr-entry], script[data-brosr-player]')).map((tag) => tag.src) })"
+      )
+      .catch((cause) => String(cause));
+    throw error;
+  }
   out.steps.guestJoined = { socket: joined.socket, role: joined.role, peerId: joined.peerId };
 
   const granted = await until(async () => {
@@ -932,12 +982,37 @@ try {
       const host = groups.find((group) => group.role === 'host');
       return host && host.tabs.some((tab) => tab.url === offerUrl) ? { host } : null;
     }, 'the host tab offer at the guest', 20000).catch(() => null);
-    offerOk = Boolean(offered);
+    const key = offered ? offered.host.tabs.find((tab) => tab.url === offerUrl).key : null;
+    // Open is the real button on the landing page. It posts join-tab, the core
+    // asks the bridge for a local tab, and the copy has to appear in this
+    // browser and land in the joined list. A row that opens nothing is the
+    // failure this step exists for.
+    const clicked = key
+      ? await guestPage.eval(
+          "(() => { const button = document.querySelector('.live-row .live-action'); if (!button) return false; button.click(); return true; })()"
+        )
+      : false;
+    const joinedOk = clicked
+      ? Boolean(
+          await until(async () => {
+            const state = await readTabs(guestPage);
+            return ((state && state.joined) || []).includes(key) ? state : null;
+          }, 'the joined key at the guest', 20000).catch(() => null)
+        )
+      : false;
+    const openedTabs = joinedOk
+      ? await until(async () => {
+          const urls = await guestTabUrls();
+          return urls.includes(offerUrl) ? urls : null;
+        }, 'the opened copy in the guest browser', 20000).catch(() => null)
+      : null;
+    offerOk = Boolean(offered) && Boolean(clicked && joinedOk && openedTabs);
     out.steps.offer = {
       url: offerUrl,
       guestOwner: offered ? offered.host.owner : null,
       guestRole: offered ? offered.host.role : null,
       guestTabs: offered ? offered.host.tabs.map((tab) => tab.url) : null,
+      open: { key, clicked, joined: joinedOk, tabs: openedTabs },
       ok: offerOk,
     };
     if (!offerOk) {
@@ -984,6 +1059,7 @@ try {
   if (hostProfile) await rm(hostProfile, { recursive: true, force: true }).catch(() => {});
   if (guestProfile) await rm(guestProfile, { recursive: true, force: true }).catch(() => {});
   if (extensionDir) await rm(extensionDir, { recursive: true, force: true }).catch(() => {});
+  if (fixturesDir) await rm(fixturesDir, { recursive: true, force: true }).catch(() => {});
   if (bridge && bridgeTemp) await rm(bridge, { force: true }).catch(() => {});
 }
 
