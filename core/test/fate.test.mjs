@@ -152,8 +152,8 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(ignored.ignored, 'hold');
   assert.equal(video.paused, true);
-  assert.equal(guest.publish().mediaDrops.hold, 1);
-  assert.equal(guest.publish().lastMediaDrop.reason, 'hold');
+  assert.equal(guest.publish().mediaDropTicks.hold, 1);
+  assert.equal(guest.publish().lastMediaDrop, null, 'a tick is not a dropped act');
 
   guest.receive(
     encode({
@@ -183,6 +183,78 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(applied.ok, true);
   assert.equal(video.paused, false);
+});
+
+test('a source seek during a hold moves the release point instead of being dropped', () => {
+  let local = 1000;
+  const holds = [];
+  const relayed = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    send: () => {},
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+    onHold: (hold) => holds.push(hold),
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'brave',
+      key: KEY,
+      position: 10,
+      playing: true,
+      active: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(host.publish().stutter.active, true);
+
+  local += 500;
+  const absorbed = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'seek',
+      position: 30,
+      playing: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(absorbed.held, true);
+  assert.equal(absorbed.action, 'seek');
+  assert.equal(relayed.length, 0, 'the film stays held until release');
+  assert.equal(host.publish().mediaDrops.hold, undefined);
+  assert.equal(host.publish().mediaDropTicks.hold, undefined);
+  assert.equal(host.publish().lastMediaAction.text, 'Bob jumped to 0:30');
+
+  local += 500;
+  host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'brave',
+      key: KEY,
+      position: 30,
+      playing: true,
+      active: false,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(holds.at(-1).active, false);
+  assert.equal(holds.at(-1).position, 30, 'the release lands on the absorbed seek');
 });
 
 test('a hold with no recovery report releases itself', () => {

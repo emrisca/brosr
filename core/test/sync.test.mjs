@@ -157,7 +157,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
 
   // A late frame from that peer is ignored even if it reaches the host.
   const stale = host.receive(
-    encode({ type: 'media', peerId: 'brave', key: KEY, action: 'tick', position: 40, playing: false, roomTime: local }),
+    encode({ type: 'media', peerId: 'brave', key: KEY, action: 'seek', position: 40, playing: false, roomTime: local }),
     local
   );
   assert.equal(stale.ignored, 'no-grant');
@@ -229,6 +229,16 @@ test('a granted peer pause keeps the host playhead, and a seek moves it', () => 
   );
   assert.equal(relayed.at(-1).action, 'seek');
   assert.ok(Math.abs(relayed.at(-1).expected - 30) < 0.01);
+
+  // A seek past the clip is clamped by the player. The room names the point
+  // that lands, not a target beyond the end that nobody can reach.
+  assert.equal(
+    peer.sendMedia({ key: KEY, position: 300, playing: false, action: 'seek' }),
+    true
+  );
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 120) < 0.01);
+  assert.equal(host.publish().lastMediaAction.text, 'Bob jumped to 2:00');
 });
 
 test('a host act stays in front of a granted peer for a moment', () => {
@@ -251,7 +261,7 @@ test('a host act stays in front of a granted peer for a moment', () => {
       type: 'media',
       peerId: 'brave',
       key: KEY,
-      action: 'tick',
+      action: 'seek',
       position: 12,
       playing: true,
       roomTime: local,
@@ -268,7 +278,7 @@ test('a host act stays in front of a granted peer for a moment', () => {
       type: 'media',
       peerId: 'brave',
       key: KEY,
-      action: 'tick',
+      action: 'seek',
       position: 12,
       playing: true,
       roomTime: local,

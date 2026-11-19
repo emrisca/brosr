@@ -236,6 +236,7 @@ export function createRoomClient({
     lastApp: null,
     lastMediaAction: null,
     mediaDrops: {},
+    mediaDropTicks: {},
     lastMediaDrop: null,
     hostId,
     hostMigrations: 0,
@@ -1168,14 +1169,22 @@ export function createRoomClient({
   // player. The panel names both the count and the reason, so a report says
   // why a pause or seek did not travel instead of leaving a gap.
   function noteMediaDrop(reason, message, local) {
+    const action =
+      typeof message.action === 'string' && message.action !== 'tick'
+        ? message.action
+        : null;
+    // A routine tick is not an act a person made. Count it apart, or a hold
+    // looks like it swallowed a dozen pause or seek commands when it only
+    // stopped the clock from moving the film.
+    if (!action) {
+      stats.mediaDropTicks[reason] = (stats.mediaDropTicks[reason] || 0) + 1;
+      return;
+    }
     stats.mediaDrops[reason] = (stats.mediaDrops[reason] || 0) + 1;
     stats.lastMediaDrop = {
       at: Math.round(local),
       reason,
-      action:
-        typeof message.action === 'string' && message.action !== 'tick'
-          ? message.action
-          : null,
+      action,
       peerId: message.peerId || null,
     };
   }
@@ -1188,9 +1197,36 @@ export function createRoomClient({
       stats.mediaEcho += 1;
       return { ok: true, ignored: 'self' };
     }
+    const explicit =
+      typeof message.action === 'string' && message.action !== 'tick'
+        ? message.action
+        : null;
     // A hold freezes the room. A routine tick during the hold must not start
     // the player underneath it; the hold release carries the resume position.
-    if (activeHold()) {
+    // The source's own seek is different: it is the new point that release
+    // must land on, so absorb it instead of dropping a person's command.
+    const hold = activeHold();
+    if (hold) {
+      if (explicit === 'seek' && message.peerId === hold.peerId) {
+        const picked = media.pick(message.key);
+        const read = picked ? media.state(picked) : null;
+        const limit = Number(read && read.duration);
+        const target =
+          limit > 0
+            ? Math.max(0, Math.min(Number(message.position || 0), limit))
+            : Math.max(0, Number(message.position || 0));
+        hold.position = target;
+        hold.playing = Boolean(message.playing);
+        const actor =
+          (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
+        stats.lastMediaAction = {
+          name: actor,
+          action: 'seek',
+          text: actionText({ name: actor, action: 'seek', position: target }),
+          at: Math.round(local),
+        };
+        return { ok: true, held: true, action: 'seek' };
+      }
       noteMediaDrop('hold', message, local);
       return { ok: true, ignored: 'hold' };
     }
@@ -1221,10 +1257,6 @@ export function createRoomClient({
     // host, and using that position here pulled the host backwards at the
     // moment control was granted. A seek is the one act that carries a new
     // position, so only a seek uses the peer's timestamp.
-    const explicit =
-      typeof message.action === 'string' && message.action !== 'tick'
-        ? message.action
-        : null;
     const derived = explicit
       ? null
       : mediaAction(lastMediaFrame, { ...message, position: message.position }, local);
@@ -1236,9 +1268,17 @@ export function createRoomClient({
     // but a tick never counts as a seek.
     const hostAnchor = isHost() && read && explicit !== 'seek';
     const base = hostAnchor ? read.position : localPosition(message.position, alignOffset);
-    const expected =
+    const rawExpected =
       base +
       (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+    // A seek past the end is clamped by every player. Name the point that will
+    // actually land, not the request, or the report looks like a jump to a
+    // position neither copy ever held.
+    const duration = Number(read && read.duration);
+    const expected =
+      duration > 0
+        ? Math.max(0, Math.min(rawExpected, duration))
+        : Math.max(0, rawExpected);
     // The notice names a person, not a socket id. The room knows the name the
     // peer chose when it joined.
     const actor =
@@ -1910,6 +1950,7 @@ export function createRoomClient({
     return {
       role: currentRole,
       peerId,
+      name: name || peerId,
       hostId: currentHost,
       hostMigrations: stats.hostMigrations,
       rtt: stats.rtt,
@@ -1981,6 +2022,7 @@ export function createRoomClient({
       controlHistory: stats.sentControls,
       lastMediaAction: stats.lastMediaAction,
       mediaDrops: { ...stats.mediaDrops },
+      mediaDropTicks: { ...stats.mediaDropTicks },
       lastMediaDrop: stats.lastMediaDrop,
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,

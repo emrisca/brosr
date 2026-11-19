@@ -115,7 +115,23 @@
     const add = (label, value) => {
       if (present(value)) lines.push(`${label}: ${value}`);
     };
-    const peers = Array.isArray(data.peerList) ? data.peerList.filter(Boolean) : [];
+    const listedPeers = Array.isArray(data.peerList) ? data.peerList.filter(Boolean) : [];
+    // A host's roster may only name the other people in the room. The copied
+    // report is read on its own, so it adds the person who copied it back.
+    const self =
+      data.peerId && !listedPeers.some((peer) => peer.self)
+        ? {
+            id: data.peerId,
+            name: data.name || data.peerId,
+            self: true,
+            granted: Boolean(data.granted),
+            build: data.build || null,
+          }
+        : null;
+    const peers = self ? [self, ...listedPeers] : listedPeers;
+    const peerCount = Number.isFinite(data.peers)
+      ? Math.max(data.peers, peers.length)
+      : peers.length;
     const media = data.media || null;
     const ownBuild = data.build && (data.build.version || data.build);
     const hostBuild = data.hostBuild && (data.hostBuild.version || data.hostBuild);
@@ -146,7 +162,7 @@
         : 'reconnecting'
     );
     add('Playback', data.playing === true ? 'playing' : data.playing === false ? 'paused' : '');
-    add('Peers', Number.isFinite(data.peers) ? data.peers : peers.length);
+    add('Peers', peerCount);
     add('Page', cleanUrl(data.location || data.url, false));
 
     if (stale.length) {
@@ -211,14 +227,25 @@
     const relay = reading && reading.relay;
     if (relay) {
       const parts = [];
-      if (Number.isFinite(Number(relay.applies))) parts.push(`${Number(relay.applies)} applied`);
+      // `applies` counts every frame the film tab handled. The applied, skipped
+      // and held counts live in stats, and naming only the first number hid
+      // most of a session that spent its time skipping.
+      if (Number.isFinite(Number(relay.applies))) parts.push(`${Number(relay.applies)} frames`);
+      const filmStats = relay.stats || null;
+      if (filmStats) {
+        const applied = Number(filmStats.applied);
+        const skipped = Number(filmStats.skips) || 0;
+        const holds = Number(filmStats.holds) || 0;
+        if (Number.isFinite(applied)) parts.push(`${applied} applied`);
+        if (skipped) parts.push(`${skipped} skipped`);
+        if (holds) parts.push(`${holds} hold${holds === 1 ? '' : 's'}`);
+      }
       if (relay.last && Number.isFinite(Number(relay.last.drift))) {
         parts.push(`${Math.abs(Number(relay.last.drift)).toFixed(2)} s on the last frame`);
       }
       if (media && Number.isFinite(Number(media.behind))) {
         parts.push(`${Math.abs(Number(media.behind)).toFixed(2)} s from the room`);
       }
-      const filmStats = relay.stats || null;
       if (filmStats) {
         const waits = Number(filmStats.bufferWaits) || 0;
         const stuck = Number(filmStats.stuckSeeks) || 0;
@@ -254,6 +281,15 @@
     const localEchoes = Number(localDrops.echo) || 0;
     if (localEchoes) dropParts.push(`film-tab echo=${localEchoes}`);
     if (dropParts.length) add('Dropped media acts', dropParts.join(', '));
+
+    const tickDrops =
+      data.mediaDropTicks && typeof data.mediaDropTicks === 'object'
+        ? data.mediaDropTicks
+        : {};
+    const tickParts = Object.entries(tickDrops)
+      .filter(([, count]) => Number(count) > 0)
+      .map(([reason, count]) => `${reason}=${Number(count)}`);
+    if (tickParts.length) add('Dropped media ticks', tickParts.join(', '));
 
     const roomDrop = data.lastMediaDrop ? { ...data.lastMediaDrop, source: 'room' } : null;
     const localDrop =
@@ -391,6 +427,7 @@
           : null,
         lastMediaAction: data.lastMediaAction || null,
         mediaDrops: data.mediaDrops || null,
+        mediaDropTicks: data.mediaDropTicks || null,
         lastMediaDrop: data.lastMediaDrop || null,
         counters: {
           seeks: data.seeks,

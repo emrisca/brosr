@@ -74,6 +74,7 @@ const reply = {
       at: NOW - 1000,
     },
     mediaDrops: { 'host-priority': 2, hold: 1 },
+    mediaDropTicks: { hold: 12 },
     lastMediaDrop: {
       reason: 'host-priority',
       action: 'seek',
@@ -116,7 +117,7 @@ const reading = {
   relay: {
     applies: 42,
     last: { drift: -0.2 },
-    stats: { bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9 },
+    stats: { applied: 30, bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9, holds: 3 },
     localDrops: { echo: 2 },
     lastLocalDrop: { reason: 'echo', action: 'pause', at: NOW - 250 },
   },
@@ -143,21 +144,39 @@ test('the sync report carries the room, both sides and the film reading', () => 
   assert.match(text, /Local gap: 0\.50 s behind the room/);
   assert.match(
     text,
-    /Reading: 42 applied · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
+    /Reading: 42 frames · 30 applied · 9 skipped · 3 holds · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
   );
   assert.match(text, /Last media action: Bob paused the video at 2026-11-18T19:04:11\.000Z/);
   assert.match(text, /Dropped media acts: host-priority=2, hold=1, film-tab echo=2/);
+  assert.match(text, /Dropped media ticks: hold=12/);
   assert.match(
     text,
     /Last media drop: pause from film tab \(echo\) at 2026-11-18T19:04:11\.750Z/
   );
   assert.match(text, /"mediaDrops":\{"host-priority":2,"hold":1\}/);
+  assert.match(text, /"mediaDropTicks":\{"hold":12\}/);
   assert.match(text, /"lastLocalDrop":\{"reason":"echo"/);
   assert.match(text, /Build warning: Bob runs 0\.3\.9; this room runs 0\.4\.0\./);
   assert.match(text, /Bob: open, playing, 0\.40 s behind the room, in sync/);
   assert.match(text, /Media debug: \{"expected":62\.7/);
   assert.match(text, /seeks=2, nudges=4/);
   assert.match(text, /"bufferWaits":3/);
+});
+
+test('the report adds the host to a roster that only names peers', () => {
+  const data = {
+    ...reply,
+    data: {
+      ...reply.data,
+      name: 'Ada',
+      peers: 1,
+      peerList: [reply.data.peerList[1]],
+    },
+  };
+  const text = buildSyncReport(data, reading, { now: NOW });
+  assert.match(text, /Peers: 2/);
+  assert.match(text, /- Ada \(host-1\) bridge 0\.4\.0 \[you\]/);
+  assert.match(text, /- Bob \(guest-1\) bridge 0\.3\.9 \[control\]/);
 });
 
 test('the sync report leaves invite keys and token parameters out', () => {

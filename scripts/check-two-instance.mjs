@@ -353,6 +353,7 @@ const CONTRACT = [
   'media',
   'mediaEchoLocal',
   'mediaDrops',
+  'mediaDropTicks',
   'lastMediaDrop',
   'viewers',
 ];
@@ -389,6 +390,13 @@ function contractOf(state, keys) {
       Array.isArray(state.mediaDrops)
     ) {
       wrong.push(`mediaDrops=${typeof state.mediaDrops}`);
+    }
+    if (
+      !state.mediaDropTicks ||
+      typeof state.mediaDropTicks !== 'object' ||
+      Array.isArray(state.mediaDropTicks)
+    ) {
+      wrong.push(`mediaDropTicks=${typeof state.mediaDropTicks}`);
     }
     if (
       !(
