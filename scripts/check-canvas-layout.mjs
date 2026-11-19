@@ -78,14 +78,35 @@ class Tab {
   }
 
   send(method, params = {}, timeoutMs = 15000) {
-    const call = () => this.sendOnce(method, params, timeoutMs);
-    if (method !== 'Page.navigate') return call();
-    // A busy renderer can drop the navigate reply. One retry covers that, and
-    // a second miss stays a failure.
-    return call().catch((error) => {
+    return this.sendOnce(method, params, timeoutMs);
+  }
+
+  // A busy renderer can drop the navigate reply while the page itself loads.
+  // The page change is then made from inside the renderer, and the readiness
+  // wait after it decides whether the page arrived.
+  async navigate(url, timeoutMs = 20000) {
+    try {
+      return await this.sendOnce('Page.navigate', { url }, timeoutMs);
+    } catch (error) {
       if (!String(error.message).startsWith('cdp timeout')) throw error;
-      return call();
-    });
+      const answered = await this.sendOnce(
+        'Runtime.evaluate',
+        { expression: '1 + 1', returnByValue: true },
+        5000
+      )
+        .then((out) => Boolean(out && out.result && out.result.value === 2))
+        .catch(() => false);
+      if (!answered) {
+        throw new Error('the page stopped answering after Page.navigate timed out');
+      }
+      await this.sendOnce(
+        'Runtime.evaluate',
+        { expression: `location.href = ${JSON.stringify(url)}` },
+        5000
+      ).catch(() => null);
+      console.log('  Page.navigate did not answer, set the location from the page');
+      return { fallback: true };
+    }
   }
 
   sendOnce(method, params = {}, timeoutMs = 15000) {
@@ -252,7 +273,7 @@ try {
     const out = await tab.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(path.join(process.env.BROSR_SHOTS, `canvas-${name}.png`), Buffer.from(out.data, 'base64'));
   }
-  await tab.send('Page.navigate', { url: `${base}/canvas/?room=${encodeURIComponent(ROOM)}` });
+  await tab.navigate(`${base}/canvas/?room=${encodeURIComponent(ROOM)}`);
   await waitFor(
     () => tab.eval('document.readyState === "complete" && !!document.getElementById("sheet")'),
     'the canvas page'
@@ -482,7 +503,7 @@ try {
   themeFault(theme, 'light');
   await shot('light');
 
-  await tab.send('Page.navigate', { url: `${base}/canvas/?room=${encodeURIComponent(ROOM)}` });
+  await tab.navigate(`${base}/canvas/?room=${encodeURIComponent(ROOM)}`);
   await waitFor(
     () => tab.eval('document.readyState === "complete" && !!document.getElementById("sheet")'),
     'the canvas page after a reload'
@@ -552,7 +573,7 @@ try {
   } else {
     pass('the busy words are for a screen reader and take no room');
   }
-  await tab.send('Page.navigate', { url: `${base}/canvas/?room=${encodeURIComponent(ROOM)}` });
+  await tab.navigate(`${base}/canvas/?room=${encodeURIComponent(ROOM)}`);
   await waitFor(
     () => tab.eval('document.readyState === "complete" && !!document.getElementById("sheet")'),
     'the canvas page after the search lane'

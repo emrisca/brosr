@@ -79,14 +79,35 @@ class Tab {
   }
 
   send(method, params = {}, timeoutMs = 15000) {
-    const call = () => this.sendOnce(method, params, timeoutMs);
-    if (method !== 'Page.navigate') return call();
-    // A busy renderer can drop the navigate reply. One retry covers that, and
-    // a second miss stays a failure.
-    return call().catch((error) => {
+    return this.sendOnce(method, params, timeoutMs);
+  }
+
+  // A busy renderer can drop the navigate reply while the page itself loads.
+  // The page change is then made from inside the renderer, and the readiness
+  // wait after it decides whether the page arrived.
+  async navigate(url, timeoutMs = 20000) {
+    try {
+      return await this.sendOnce('Page.navigate', { url }, timeoutMs);
+    } catch (error) {
       if (!String(error.message).startsWith('cdp timeout')) throw error;
-      return call();
-    });
+      const answered = await this.sendOnce(
+        'Runtime.evaluate',
+        { expression: '1 + 1', returnByValue: true },
+        5000
+      )
+        .then((out) => Boolean(out && out.result && out.result.value === 2))
+        .catch(() => false);
+      if (!answered) {
+        throw new Error('the page stopped answering after Page.navigate timed out');
+      }
+      await this.sendOnce(
+        'Runtime.evaluate',
+        { expression: `location.href = ${JSON.stringify(url)}` },
+        5000
+      ).catch(() => null);
+      console.log('  Page.navigate did not answer, set the location from the page');
+      return { fallback: true };
+    }
   }
 
   sendOnce(method, params = {}, timeoutMs = 15000) {
@@ -153,7 +174,7 @@ async function page(query, label) {
   tabs.push(tab);
   await tab.send('Page.enable');
   await tab.send('Runtime.enable');
-  await tab.send('Page.navigate', { url: `${base}/chess/${query}` });
+  await tab.navigate(`${base}/chess/${query}`);
   await waitFor(
     () => tab.eval('document.readyState === "complete" && document.querySelectorAll(".square").length === 64'),
     `the ${label} board`
