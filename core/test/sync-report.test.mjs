@@ -73,6 +73,13 @@ const reply = {
       text: 'Bob paused the video',
       at: NOW - 1000,
     },
+    mediaDrops: { 'host-priority': 2, hold: 1 },
+    lastMediaDrop: {
+      reason: 'host-priority',
+      action: 'seek',
+      peerId: 'guest-1',
+      at: NOW - 500,
+    },
     seeks: 2,
     nudges: 4,
     corrections: 1,
@@ -110,6 +117,8 @@ const reading = {
     applies: 42,
     last: { drift: -0.2 },
     stats: { bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9 },
+    localDrops: { echo: 2 },
+    lastLocalDrop: { reason: 'echo', action: 'pause', at: NOW - 250 },
   },
 };
 
@@ -137,6 +146,13 @@ test('the sync report carries the room, both sides and the film reading', () => 
     /Reading: 42 applied · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
   );
   assert.match(text, /Last media action: Bob paused the video at 2026-11-18T19:04:11\.000Z/);
+  assert.match(text, /Dropped media acts: host-priority=2, hold=1, film-tab echo=2/);
+  assert.match(
+    text,
+    /Last media drop: pause from film tab \(echo\) at 2026-11-18T19:04:11\.750Z/
+  );
+  assert.match(text, /"mediaDrops":\{"host-priority":2,"hold":1\}/);
+  assert.match(text, /"lastLocalDrop":\{"reason":"echo"/);
   assert.match(text, /Build warning: Bob runs 0\.3\.9; this room runs 0\.4\.0\./);
   assert.match(text, /Bob: open, playing, 0\.40 s behind the room, in sync/);
   assert.match(text, /Media debug: \{"expected":62\.7/);

@@ -242,6 +242,40 @@
       );
     }
 
+    const roomDrops =
+      data.mediaDrops && typeof data.mediaDrops === 'object' ? data.mediaDrops : {};
+    const localDrops =
+      relay && relay.localDrops && typeof relay.localDrops === 'object'
+        ? relay.localDrops
+        : {};
+    const dropParts = Object.entries(roomDrops)
+      .filter(([, count]) => Number(count) > 0)
+      .map(([reason, count]) => `${reason}=${Number(count)}`);
+    const localEchoes = Number(localDrops.echo) || 0;
+    if (localEchoes) dropParts.push(`film-tab echo=${localEchoes}`);
+    if (dropParts.length) add('Dropped media acts', dropParts.join(', '));
+
+    const roomDrop = data.lastMediaDrop ? { ...data.lastMediaDrop, source: 'room' } : null;
+    const localDrop =
+      relay && relay.lastLocalDrop
+        ? { ...relay.lastLocalDrop, source: 'film tab' }
+        : null;
+    const lastDrop =
+      roomDrop && localDrop
+        ? (Number(roomDrop.at) || 0) >= (Number(localDrop.at) || 0)
+          ? roomDrop
+          : localDrop
+        : roomDrop || localDrop;
+    if (lastDrop) {
+      const at = stamp(lastDrop.at);
+      const peer = lastDrop.peerId ? `, ${lastDrop.peerId}` : '';
+      add(
+        'Last media drop',
+        `${lastDrop.action || 'act'} from ${lastDrop.source} (${lastDrop.reason || 'unknown'}${peer})` +
+          (at ? ` at ${at}` : '')
+      );
+    }
+
     const control = [];
     if (present(data.controlSent)) control.push(`sent ${data.controlSent}`);
     if (present(data.controlReceived)) control.push(`received ${data.controlReceived}`);
@@ -347,9 +381,17 @@
             }
           : null,
         reading: relay
-          ? { applies: relay.applies, last: relay.last || null, stats: relay.stats || null }
+          ? {
+              applies: relay.applies,
+              last: relay.last || null,
+              stats: relay.stats || null,
+              localDrops: relay.localDrops || null,
+              lastLocalDrop: relay.lastLocalDrop || null,
+            }
           : null,
         lastMediaAction: data.lastMediaAction || null,
+        mediaDrops: data.mediaDrops || null,
+        lastMediaDrop: data.lastMediaDrop || null,
         counters: {
           seeks: data.seeks,
           nudges: data.nudges,

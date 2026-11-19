@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MEDIA_ECHO_MS,
   RELAY_BUFFER_WAIT_MS,
   RELAY_SEEK_TIMEOUT_MS,
   RELAY_TICK_MS,
@@ -9,8 +10,10 @@ import {
   filmUrl,
   freshState,
   isYouTubeHost,
+  mediaEchoMatches,
   mediaStateFromDocument,
   projectPosition,
+  remoteMediaEcho,
   viewerState,
 } from '../media-relay.mjs';
 
@@ -73,6 +76,47 @@ const ytKey = 'youtube:abc123';
 
 const adRoot = { classList: { contains: (name) => name === 'ad-showing' } };
 const cleanRoot = { classList: { contains: () => false } };
+
+function echoFrame(playing = true) {
+  return { key: ytKey, position: 130, playing, rate: 1, at: 10100 };
+}
+
+function echoPrevious(playing = true) {
+  return { key: ytKey, position: 100, playing, rate: 1, at: 10000 };
+}
+
+test('a remote seek keeps only the seek event home, not a pause after it', () => {
+  const echo = remoteMediaEcho(
+    { ok: true, action: 'seek' },
+    echoPrevious(),
+    echoFrame(),
+    10100
+  );
+  assert.deepEqual(echo.actions, ['seek']);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10150), true);
+  assert.equal(mediaEchoMatches(echo, 'pause', 10150), false);
+  assert.equal(mediaEchoMatches(echo, 'play', 10150), false);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10100 + MEDIA_ECHO_MS), false);
+});
+
+test('a buffer hold keeps its pause home without hiding a later act', () => {
+  const echo = remoteMediaEcho(
+    { ok: true, skipped: 'buffer' },
+    echoPrevious(),
+    echoFrame(),
+    10100
+  );
+  assert.deepEqual(echo.actions, ['pause']);
+  assert.equal(mediaEchoMatches(echo, 'pause', 10150), true);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10150), false);
+});
+
+test('a routine tick opens no echo window', () => {
+  assert.equal(
+    remoteMediaEcho({ ok: true, action: 'tick' }, echoPrevious(), echoFrame(), 10100),
+    null
+  );
+});
 
 test('a playing room starts a paused film even when the seek cannot land', () => {
   const video = fakeVideo({ currentTime: 0, paused: true });

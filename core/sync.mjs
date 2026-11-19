@@ -32,8 +32,9 @@ import { APP_NAME, acceptOffset, localPosition } from './align.mjs';
 export const HOST_TICK_MS = 250;
 // A local act by the host wins briefly. A granted peer's own pause or play can
 // arrive just after it, and without this window the host's pause looked like it
-// did nothing. The peer still drives the room when the host is idle.
-export const HOST_MEDIA_PRIORITY_MS = 1500;
+// did nothing. Half a second covers the frame that was already in flight; a
+// longer window swallowed a deliberate peer act.
+export const HOST_MEDIA_PRIORITY_MS = 500;
 // A starved player reports every tick. One low sample is not worth holding the
 // whole room, so a stutter has to survive this long before it travels.
 export const STUTTER_GRACE_MS = 500;
@@ -234,6 +235,8 @@ export function createRoomClient({
     appDropped: 0,
     lastApp: null,
     lastMediaAction: null,
+    mediaDrops: {},
+    lastMediaDrop: null,
     hostId,
     hostMigrations: 0,
   };
@@ -662,8 +665,10 @@ export function createRoomClient({
     const ahead = playing && sampled < local ? ((local - sampled) / 1000) * rate : 0;
     const limit = Number(state.duration || 0);
     const position = limit > 0 ? Math.min(read + ahead, limit) : read + ahead;
-    const changed = Boolean(state.action) || stats.playing !== playing;
-    if (changed) lastHostActAt = local;
+    // Only a report that carries a local act starts the host-priority window.
+    // A report that merely repeats the peer's pause is not a host act, and
+    // treating it as one dropped the peer's next seek.
+    if (state.action) lastHostActAt = local;
     stats.key = state.key;
     stats.position = Math.round(position * 1000) / 1000;
     stats.playing = playing;
@@ -1159,6 +1164,22 @@ export function createRoomClient({
     stats.cursors = cursor.stats().peers;
   }
 
+  // A media act that reaches this tab can be refused before it reaches a
+  // player. The panel names both the count and the reason, so a report says
+  // why a pause or seek did not travel instead of leaving a gap.
+  function noteMediaDrop(reason, message, local) {
+    stats.mediaDrops[reason] = (stats.mediaDrops[reason] || 0) + 1;
+    stats.lastMediaDrop = {
+      at: Math.round(local),
+      reason,
+      action:
+        typeof message.action === 'string' && message.action !== 'tick'
+          ? message.action
+          : null,
+      peerId: message.peerId || null,
+    };
+  }
+
   function applyMedia(message, local) {
     // The relay fans out to every socket, so a frame also comes back to the tab
     // that sent it. A tab that applied its own anchor would chase itself, and a
@@ -1169,16 +1190,21 @@ export function createRoomClient({
     }
     // A hold freezes the room. A routine tick during the hold must not start
     // the player underneath it; the hold release carries the resume position.
-    if (activeHold()) return { ok: true, ignored: 'hold' };
+    if (activeHold()) {
+      noteMediaDrop('hold', message, local);
+      return { ok: true, ignored: 'hold' };
+    }
     // A host follows only a peer it granted control to. Without this check a
     // viewer could pull the host's film around, and a grant would change
     // nothing about playback.
     if (isHost() && !grants.active().some((grant) => grant.peerId === message.peerId)) {
+      noteMediaDrop('no-grant', message, local);
       return { ok: true, ignored: 'no-grant' };
     }
     // A host's own play, pause or seek wins for a short window. The granted peer
     // can still drive the film when the host is not acting.
     if (isHost() && local - lastHostActAt < HOST_MEDIA_PRIORITY_MS) {
+      noteMediaDrop('host-priority', message, local);
       return { ok: true, ignored: 'host-priority' };
     }
     // The adapter owns every read and write. A player object and a media
@@ -1238,14 +1264,19 @@ export function createRoomClient({
     // The host's room tab holds no player. A granted peer drives the film
     // through the tab that does, and the host keeps sending its own anchor.
     if (isHost()) {
-      if (!onMedia) return { ok: false, reason: 'no-media' };
+      if (!onMedia) {
+        noteMediaDrop('no-media', message, local);
+        return { ok: false, reason: 'no-media' };
+      }
       try {
         if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
+          noteMediaDrop('no-media', message, local);
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
         return { ok: true, relayed: true };
       } catch (error) {
+        noteMediaDrop('handler', message, local);
         return { ok: false, reason: 'handler', error: error.message };
       }
     }
@@ -1253,14 +1284,19 @@ export function createRoomClient({
     // shows the film. The expected position is anchored on this tab's clock,
     // so the tab needs no clock estimate of its own.
     if (!read) {
-      if (!onMedia) return { ok: false, reason: 'no-media' };
+      if (!onMedia) {
+        noteMediaDrop('no-media', message, local);
+        return { ok: false, reason: 'no-media' };
+      }
       try {
         if (onMedia({ ...message, name: actor, action: action || null, expected, at: local }) === false) {
+          noteMediaDrop('no-media', message, local);
           return { ok: false, reason: 'no-media' };
         }
         stats.relayed += 1;
         return { ok: true, relayed: true };
       } catch (error) {
+        noteMediaDrop('handler', message, local);
         return { ok: false, reason: 'handler', error: error.message };
       }
     }
@@ -1944,6 +1980,8 @@ export function createRoomClient({
       controls: stats.controls,
       controlHistory: stats.sentControls,
       lastMediaAction: stats.lastMediaAction,
+      mediaDrops: { ...stats.mediaDrops },
+      lastMediaDrop: stats.lastMediaDrop,
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,

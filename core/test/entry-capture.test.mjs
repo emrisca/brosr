@@ -34,17 +34,12 @@ test('a granted peer sends an act and not its own clock', () => {
   // A peer's own sample inside the anchor window pulled the host playhead back
   // and beat the host's play and pause. Only a real act crosses the room.
   assert.match(source, /if \(!state\.action\) return reply\(\{ ok: true, skipped: 'tick' \}\)/);
-  assert.match(source, /Date\.now\(\) - remoteAppliedAt < 600/);
-  // The echo window opens on an act, not on a tick. A host pause also carries
-  // action: "tick", so the label cannot decide it. A changed playing flag is
-  // the act; a routine sample leaves the flag alone and must not keep a granted
-  // peer's own pause home.
-  assert.match(source, /previous\.playing !== Boolean\(message\.playing\)/);
-  assert.match(source, /playingChanged \|\| corrected/);
-  assert.doesNotMatch(source, /message\.action \|\| corrected/);
-  // A correction seek issues a seek of its own, and that seek would arrive at
-  // the host as a person's act. It opens the window too.
-  assert.match(source, /result\.action === 'seek' \|\| result\.action === 'seek-retry'/);
+  // The echo window names the act the frame caused. A routine tick opens no
+  // window, so a granted peer's own pause is not kept home by housekeeping.
+  assert.match(source, /const echo = remoteMediaEcho\(result, previous, message\)/);
+  assert.match(source, /if \(echo\) remoteEcho = echo/);
+  assert.match(source, /mediaEchoMatches\(remoteEcho, action\)/);
+  assert.doesNotMatch(source, /Date\.now\(\) - remoteAppliedAt < 600/);
 });
 
 test('the active tab names the site a pointer belongs to', () => {
@@ -135,10 +130,19 @@ test('a film waiting for a buffer reports the wait and suppresses its own pause'
   // room instead of letting the guest fall behind.
   const apply = source.slice(source.indexOf('const result = remote.handle(message);'));
   const body = apply.slice(0, apply.indexOf('const action = message.action'));
-  assert.match(body, /result\.skipped === 'buffer'[\s\S]*?remoteAppliedAt = Date\.now\(\)/);
+  assert.match(body, /remoteMediaEcho\(result, previous, message\)/);
+  assert.match(body, /if \(echo\) remoteEcho = echo/);
   const report = source.slice(source.indexOf('function reportMedia'));
   const reportBody = report.slice(0, report.indexOf('setInterval(reportMedia'));
   assert.match(reportBody, /remote\.bufferWaitActive\(\)[\s\S]*?state\.buffering = true/);
+});
+
+test('a local act held by the echo guard names the drop', () => {
+  const act = source.slice(source.indexOf('const act = (action) =>'));
+  const body = act.slice(0, act.indexOf('for (const [type, action]'));
+  assert.match(body, /relay\.localDrops\.echo/);
+  assert.match(body, /relay\.lastLocalDrop = \{/);
+  assert.match(body, /publishRelay\(\)/);
 });
 
 test('a local media act keeps its kind for the host', () => {

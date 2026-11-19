@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  HOST_MEDIA_PRIORITY_MS,
   bufferedAround,
   createRoomClient,
   PEER_IDLE_MS,
@@ -161,6 +162,8 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   );
   assert.equal(stale.ignored, 'no-grant');
   assert.equal(relayed.length, 2);
+  assert.equal(host.publish().mediaDrops['no-grant'], 1);
+  assert.equal(host.publish().lastMediaDrop.reason, 'no-grant');
 });
 
 test('a granted peer pause keeps the host playhead, and a seek moves it', () => {
@@ -256,8 +259,10 @@ test('a host act stays in front of a granted peer for a moment', () => {
     local + 100
   );
   assert.equal(blocked.ignored, 'host-priority');
+  assert.equal(host.publish().mediaDrops['host-priority'], 1);
+  assert.equal(host.publish().lastMediaDrop.reason, 'host-priority');
 
-  local += 2000;
+  local = 1000 + HOST_MEDIA_PRIORITY_MS + 1;
   const allowed = host.receive(
     encode({
       type: 'media',
@@ -272,6 +277,51 @@ test('a host act stays in front of a granted peer for a moment', () => {
   );
   assert.equal(allowed.ok, true);
   assert.equal(allowed.relayed, true);
+});
+
+test('a host report of a peer act does not open the host window', () => {
+  let local = 1000;
+  const relayed = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+  });
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'brave',
+    name: 'Bob',
+    hostId: 'host',
+    now: () => local,
+    send: (text) => host.receive(text, local),
+    overlay: false,
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    local
+  );
+
+  // The peer pauses, and the host film tab reports the state it now holds.
+  // That report is not a local host act, so it must not block the peer.
+  peer.sendMedia({ key: KEY, position: 10, playing: false, action: 'pause' });
+  assert.equal(relayed.at(-1).action, 'pause');
+  local = 1050;
+  host.sendHostMedia({ key: KEY, position: 12.2, playing: false, rate: 1 }, local);
+
+  local = 1100;
+  peer.sendMedia({ key: KEY, position: 30, playing: false, action: 'seek' });
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 30) < 0.01);
 });
 
 test('a granted peer stays on the host roster when presence is quiet', () => {

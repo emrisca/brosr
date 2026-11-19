@@ -15,7 +15,9 @@ import {
   filmUrl,
   framePageHref,
   freshState,
+  mediaEchoMatches,
   mediaStateFromDocument,
+  remoteMediaEcho,
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
@@ -168,7 +170,17 @@ async function startPageMedia() {
     hostname: location.hostname,
     pageHref,
   });
-  const relay = { key: '', position: 0, playing: false, ad: false, sends: 0, applies: 0, last: null };
+  const relay = {
+    key: '',
+    position: 0,
+    playing: false,
+    ad: false,
+    sends: 0,
+    applies: 0,
+    last: null,
+    localDrops: {},
+    lastLocalDrop: null,
+  };
   const publishRelay = () => {
     document.documentElement.dataset.brosrRelay = JSON.stringify(relay);
   };
@@ -283,9 +295,9 @@ async function startPageMedia() {
   const notice = new ActionNotice({ document });
   let lastApplied = null;
   // A frame this tab applies moves its own player, and that player answers
-  // with play, pause and seek events. Those are not this person's acts, so the
-  // window keeps them from travelling back as a fresh command.
-  let remoteAppliedAt = 0;
+  // with the action it was told to perform. Only that action is an echo; a
+  // person's pause after a remote seek is a new act and must travel.
+  let remoteEcho = null;
   runtime.onMessage.addListener((message) => {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
@@ -336,28 +348,12 @@ async function startPageMedia() {
     const result = remote.handle(message);
     relay.last = result;
     publishRelay();
-    // A buffer hold pauses the film from inside the relay. That pause is not a
-    // person's act, so it must not travel back as a fresh command when the
-    // player fires its pause event.
-    if (result && result.skipped === 'buffer') remoteAppliedAt = Date.now();
-    // Only a frame that carries an act, or a correction this tab had to issue,
-    // starts the echo window. A routine tick arrives four times a second, and a
-    // window that every tick refreshed never opened: a granted peer's own pause
-    // or seek was always inside it and never left the browser. A correction is
-    // the other case, because the seek would report itself as a person's act
-    // and pull the host's film back to this tab's own idea of the position.
-    const corrected = Boolean(result) && (result.action === 'seek' || result.action === 'seek-retry');
-    // A routine host tick keeps the local player in the state it already had,
-    // so it must not open the window. A host pause or play also travels labelled
-    // tick, so compare the applied playing flag instead of the label. The change
-    // is an act, and the player's own event is the echo to keep home.
-    const playingChanged =
-      !previous ||
-      previous.key !== message.key ||
-      previous.playing !== Boolean(message.playing);
-    if (result && result.ok && !result.skipped && (playingChanged || corrected)) {
-      remoteAppliedAt = Date.now();
-    }
+    // A buffer hold or a room hold pauses the film from inside the relay. That
+    // pause is not a person's act. A seek correction is the same: the seeked
+    // event belongs to the correction. Keep only those actions home, so a real
+    // pause or seek made just after the correction still reaches the room.
+    const echo = remoteMediaEcho(result, previous, message);
+    if (echo) remoteEcho = echo;
     if (!result || !result.ok || result.skipped) {
       lastApplied = null;
       return undefined;
@@ -426,9 +422,15 @@ async function startPageMedia() {
   // A play, pause, seek or rate change is a whole act. It goes out at once,
   // while the interval above catches the rest of the clock. An act this tab
   // just applied from the room is skipped, or two browsers answer each
-  // other's corrections forever.
+  // other's corrections forever. A different act is this person's, even when
+  // it comes just after a correction.
   const act = (action) => {
-    if (Date.now() - remoteAppliedAt < 600) return;
+    if (mediaEchoMatches(remoteEcho, action)) {
+      relay.localDrops.echo = (relay.localDrops.echo || 0) + 1;
+      relay.lastLocalDrop = { at: Date.now(), action, reason: 'echo' };
+      publishRelay();
+      return;
+    }
     reportMedia(action);
   };
   for (const [type, action] of [

@@ -152,6 +152,8 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(ignored.ignored, 'hold');
   assert.equal(video.paused, true);
+  assert.equal(guest.publish().mediaDrops.hold, 1);
+  assert.equal(guest.publish().lastMediaDrop.reason, 'hold');
 
   guest.receive(
     encode({

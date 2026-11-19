@@ -192,6 +192,32 @@ export const RELAY_STALE_MS = 8000;
 // rest of the session, so a hold also expires on its own.
 export const RELAY_HOLD_MAX_MS = 15000;
 
+// A frame this tab applies changes its player, and the player then emits the
+// action it was told to perform. Only that action is an echo. A blanket window
+// around every correction swallowed a real pause or seek made just after the
+// room moved the film.
+export const MEDIA_ECHO_MS = 600;
+
+export function remoteMediaEcho(result, previous, frame, at = Date.now()) {
+  if (!result || !frame) return null;
+  const actions = new Set();
+  if (result.skipped === 'buffer' || result.action === 'hold') actions.add('pause');
+  if (result.action === 'seek' || result.action === 'seek-retry') actions.add('seek');
+  if (result.ok && !result.skipped) {
+    const changed =
+      !previous ||
+      previous.key !== frame.key ||
+      Boolean(previous.playing) !== Boolean(frame.playing);
+    if (changed) actions.add(frame.playing ? 'play' : 'pause');
+  }
+  return actions.size ? { actions: [...actions], at } : null;
+}
+
+export function mediaEchoMatches(echo, action, now = Date.now()) {
+  if (!echo || !Array.isArray(echo.actions) || !echo.actions.includes(action)) return false;
+  return now - echo.at < MEDIA_ECHO_MS;
+}
+
 export function freshState(state, now = Date.now(), staleMs = RELAY_STALE_MS) {
   if (!state || typeof state !== 'object') return null;
   const at = Number(state.at);
