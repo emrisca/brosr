@@ -362,6 +362,48 @@ test('a buffer wait reports recovery after the deadline without another frame', 
   assert.equal(video.paused, false);
 });
 
+test('the relay keeps recent seek, buffer and hold history', () => {
+  let end = 60;
+  const buffered = { length: 1, start: () => 0, end: () => end };
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  const waiting = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(waiting.skipped, 'buffer');
+  let history = sync.historyView();
+  assert.equal(history.seeks.length, 0);
+  assert.equal(history.buffers.length, 1);
+  assert.equal(history.buffers[0].target, 100);
+  assert.equal(history.buffers[0].outcome, null);
+
+  end = 200;
+  now += 1000;
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  history = sync.historyView();
+  assert.deepEqual(history.seeks[0], { at: now, target: 100, kind: 'seek' });
+  assert.equal(history.buffers[0].outcome, 'ready');
+  assert.equal(history.buffers[0].durationMs, 1000);
+
+  now += 1000;
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now, hold: true });
+  history = sync.historyView();
+  assert.equal(history.holds.length, 1);
+  assert.equal(history.holds[0].outcome, null);
+
+  now += 2000;
+  sync.handle({ key: ytKey, position: 100, playing: false, rate: 1, at: now, hold: false });
+  history = sync.historyView();
+  assert.equal(history.holds[0].outcome, 'released');
+  assert.equal(history.holds[0].durationMs, 2000);
+});
+
 test('a buffer that never arrives still seeks after the wait deadline', () => {
   const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered: { length: 1, start: () => 0, end: () => 60 } });
   let now = 10000;

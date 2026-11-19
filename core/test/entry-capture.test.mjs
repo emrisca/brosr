@@ -122,6 +122,7 @@ test('a film reading answers through sendResponse in both engines', () => {
   assert.match(body, /if \(typeof sendResponse === 'function'\)/);
   assert.match(body, /sendResponse\(reading\)/);
   assert.match(body, /return undefined;/);
+  assert.match(body, /history: remote\.historyView\(\)/);
 });
 
 test('a click flushes at once, so a link cannot unload the page first', () => {

@@ -236,9 +236,11 @@ export function createRoomClient({
     appDropped: 0,
     lastApp: null,
     lastMediaAction: null,
+    lastLocalMediaAction: null,
     mediaDrops: {},
     mediaDropTicks: {},
     lastMediaDrop: null,
+    mediaDropHistory: [],
     hostId,
     hostMigrations: 0,
   };
@@ -669,8 +671,25 @@ export function createRoomClient({
     const position = limit > 0 ? Math.min(read + ahead, limit) : read + ahead;
     // Only a report that carries a local act starts the host-priority window.
     // A report that merely repeats the peer's pause is not a host act, and
-    // treating it as one dropped the peer's next seek.
-    if (state.action) lastHostActAt = local;
+    // treating it as one dropped the peer's next seek. Keep the act itself, so
+    // a dropped peer frame can name what the host did just before it.
+    const act =
+      state.action && state.action !== 'tick'
+        ? typeof state.action === 'string'
+          ? state.action
+          : 'act'
+        : null;
+    if (act) {
+      lastHostActAt = local;
+      stats.lastLocalMediaAction = {
+        name: name || peerId,
+        peerId,
+        action: act,
+        position: Math.round(position * 1000) / 1000,
+        rate,
+        at: Math.round(local),
+      };
+    }
     stats.key = state.key;
     stats.position = Math.round(position * 1000) / 1000;
     stats.playing = playing;
@@ -1197,6 +1216,16 @@ export function createRoomClient({
         : null,
       playing: Boolean(message.playing),
     };
+    if (reason === 'host-priority' && Number.isFinite(lastHostActAt)) {
+      stats.lastMediaDrop.hostActAt = Math.round(lastHostActAt);
+      stats.lastMediaDrop.hostAct = stats.lastLocalMediaAction
+        ? { ...stats.lastLocalMediaAction }
+        : null;
+    }
+    const entry = { ...stats.lastMediaDrop };
+    if (stats.lastMediaDrop.hostAct) entry.hostAct = { ...stats.lastMediaDrop.hostAct };
+    stats.mediaDropHistory.push(entry);
+    if (stats.mediaDropHistory.length > 8) stats.mediaDropHistory.shift();
   }
 
   function applyMedia(message, local) {
@@ -2076,9 +2105,16 @@ export function createRoomClient({
       controls: stats.controls,
       controlHistory: stats.sentControls,
       lastMediaAction: stats.lastMediaAction,
+      lastLocalMediaAction: stats.lastLocalMediaAction
+        ? { ...stats.lastLocalMediaAction }
+        : null,
       mediaDrops: { ...stats.mediaDrops },
       mediaDropTicks: { ...stats.mediaDropTicks },
       lastMediaDrop: stats.lastMediaDrop,
+      mediaDropHistory: stats.mediaDropHistory.map((entry) => ({
+        ...entry,
+        hostAct: entry.hostAct ? { ...entry.hostAct } : null,
+      })),
       capture: Boolean(batcher),
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,

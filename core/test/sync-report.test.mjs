@@ -73,6 +73,13 @@ const reply = {
       text: 'Bob paused the video',
       at: NOW - 1000,
     },
+    lastLocalMediaAction: {
+      name: 'Ada',
+      action: 'seek',
+      position: 62.4,
+      rate: 1,
+      at: NOW - 500,
+    },
     mediaDrops: { 'host-priority': 2, hold: 1 },
     mediaDropTicks: { hold: 12 },
     lastMediaDrop: {
@@ -83,7 +90,35 @@ const reply = {
       position: 62.4,
       playing: false,
       at: NOW - 500,
+      hostAct: {
+        action: 'seek',
+        position: 62.4,
+        rate: 1,
+        at: NOW - 1000,
+      },
     },
+    mediaDropHistory: [
+      {
+        at: NOW - 3000,
+        reason: 'host-priority',
+        action: 'play',
+        peerId: 'guest-1',
+        name: 'Bob',
+        position: 62.4,
+        playing: false,
+        hostAct: { action: 'pause', position: 62.4, rate: 1, at: NOW - 3100 },
+      },
+      {
+        at: NOW - 500,
+        reason: 'host-priority',
+        action: 'seek',
+        peerId: 'guest-1',
+        name: 'Bob',
+        position: 62.4,
+        playing: false,
+        hostAct: { action: 'seek', position: 62.4, rate: 1, at: NOW - 1000 },
+      },
+    ],
     holds: [
       {
         peerId: 'guest-1',
@@ -152,6 +187,18 @@ const reading = {
     stats: { applied: 30, bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9, holds: 3 },
     localDrops: { echo: 2 },
     lastLocalDrop: { reason: 'echo', action: 'pause', at: NOW - 250 },
+    history: {
+      seeks: [
+        { at: NOW - 2000, target: 61.9, kind: 'seek' },
+        { at: NOW - 1000, target: 62.2, kind: 'retry' },
+      ],
+      buffers: [
+        { at: NOW - 3000, target: 60, resolvedAt: NOW - 2000, outcome: 'ready', durationMs: 1000 },
+      ],
+      holds: [
+        { at: NOW - 5000, position: 60, playing: false, releasedAt: NOW - 4000, outcome: 'released', durationMs: 1000 },
+      ],
+    },
   },
 };
 
@@ -179,6 +226,24 @@ test('the sync report carries the room, both sides and the film reading', () => 
     /Reading: 42 frames · 30 applied · 9 skipped · 3 holds · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
   );
   assert.match(text, /Last media action: Bob paused the video at 2026-11-18T19:04:11\.000Z/);
+  assert.match(
+    text,
+    /Last local media action: You jumped to 1:02\.4 at 2026-11-18T19:04:11\.500Z/
+  );
+  assert.match(
+    text,
+    /Relay seeks: 1:01\.9 \(seek\) at 19:04:10\.000Z; 1:02\.2 \(retry\) at 19:04:11\.000Z/
+  );
+  assert.match(text, /Relay buffer waits: 1:00\.0 ready after 1\.0 s at 19:04:09\.000Z/);
+  assert.match(text, /Relay holds: 1:00\.0, paused, released after 1\.0 s at 19:04:07\.000Z/);
+  assert.match(
+    text,
+    /Host act behind drop: seek, target 1:02\.4, at 2026-11-18T19:04:11\.000Z/
+  );
+  assert.match(
+    text,
+    /Host-priority drops: play target 1:02\.4 at .*host pause 1:02\.4 at 19:04:08\.900Z;/
+  );
   assert.match(text, /Dropped media acts: host-priority=2, hold=1/);
   assert.doesNotMatch(text, /Dropped media acts:.*film-tab echo/);
   assert.match(
@@ -209,6 +274,9 @@ test('the sync report carries the room, both sides and the film reading', () => 
   assert.match(text, /"hostPriority":\{"lastActAt":\d+,"remainingMs":0\}/);
   assert.match(text, /"mediaDropTicks":\{"hold":12\}/);
   assert.match(text, /"lastLocalDrop":\{"reason":"echo"/);
+  assert.match(text, /"lastLocalMediaAction":\{"name":"Ada"/);
+  assert.match(text, /"mediaDropHistory":\[\{"at":\d+,"reason":"host-priority"/);
+  assert.match(text, /"history":\{"seeks":\[/);
   assert.match(text, /Build warning: Bob runs 0\.3\.9; this room runs 0\.4\.0\./);
   assert.match(text, /Bob: open, playing, 0\.40 s behind the room, in sync/);
   assert.match(text, /Media debug: \{"expected":62\.7/);
@@ -252,6 +320,20 @@ test('the report says why a film reading is missing', () => {
   );
   assert.match(text, /Film: YouTube film/);
   assert.match(text, /Reading: unavailable \(timeout\)/);
+});
+
+test('the report names a reading with no relay block', () => {
+  const text = buildSyncReport(
+    {
+      data: {
+        roomName: 'Room',
+        media: { key: 'youtube:abc', position: 1, playing: false, open: false },
+      },
+    },
+    { ok: true, position: 1 },
+    { now: NOW, readingReply: { ok: true } }
+  );
+  assert.match(text, /Reading: unavailable \(no-relay\)/);
 });
 
 test('the panel button is wired to the report builder and the clipboard', () => {

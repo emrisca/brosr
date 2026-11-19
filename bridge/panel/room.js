@@ -1254,7 +1254,13 @@ async function readFilm(reply) {
       1500
     );
     filmReadingReply = reading || { ok: false, reason: 'timeout' };
-    filmReading = reading && reading.ok ? reading : null;
+    // A reply can be ok but carry no relay block, for example from a tab that
+    // answers for a player the relay does not own. Name that case instead of
+    // showing the same unexplained "unavailable" as a timeout.
+    if (reading && reading.ok && !reading.relay) {
+      filmReadingReply = { ...reading, reason: 'no-relay' };
+    }
+    filmReading = reading && reading.ok && reading.relay ? reading : null;
   } catch {
     filmReading = null;
     filmReadingReply = { ok: false, reason: 'send-failed' };

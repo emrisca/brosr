@@ -293,6 +293,49 @@ test('a host act stays in front of a granted peer for a moment', () => {
   assert.equal(host.publish().hostPriority.remainingMs, 0);
 });
 
+test('a host keeps its own act and the act behind a priority drop', () => {
+  let local = 1000;
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: () => true,
+  });
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+
+  host.sendHostMedia({ key: KEY, position: 12, playing: false, action: 'seek' }, local);
+  assert.equal(host.publish().lastLocalMediaAction.action, 'seek');
+  assert.equal(host.publish().lastLocalMediaAction.position, 12);
+
+  const blocked = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'seek',
+      position: 12,
+      playing: true,
+      roomTime: local,
+    }),
+    local + 100
+  );
+  assert.equal(blocked.ignored, 'host-priority');
+  const drop = host.publish().lastMediaDrop;
+  assert.equal(drop.hostAct.action, 'seek');
+  assert.equal(drop.hostAct.position, 12);
+  assert.equal(drop.hostAct.at, 1000);
+  assert.equal(host.publish().mediaDropHistory.length, 1);
+
+  local = 1500;
+  host.sendHostMedia({ key: KEY, position: 30, playing: false, action: 'pause' }, local);
+  assert.equal(host.publish().lastLocalMediaAction.action, 'pause');
+  assert.equal(host.publish().lastMediaDrop.hostAct.action, 'seek');
+});
+
 test('the host film title travels with its media anchor', () => {
   const local = 1000;
   const sent = [];

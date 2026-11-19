@@ -334,7 +334,7 @@ async function startPageMedia() {
         // The panel needs the relay's own counts, not only the room's. A film
         // tab can wait on a buffer and retry a stuck seek without either one
         // showing up in the room counters.
-        relay: { ...relay, stats: { ...remote.stats } },
+        relay: { ...relay, stats: { ...remote.stats }, history: remote.historyView() },
         position: Number(video.currentTime || 0),
         duration: Number(video.duration || 0),
         paused: Boolean(video.paused),

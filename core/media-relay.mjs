@@ -29,6 +29,10 @@ export const RELAY_BUFFER_WAIT_MS = 2500;
 // old point for the whole room. A fresh seek is what frees it.
 export const RELAY_SEEK_TIMEOUT_MS = 8000;
 export const RELAY_NUDGE_RATE = 1.05;
+// The report keeps the recent shape of a stall without growing for a long
+// session. Five entries are enough to see whether a problem is repeating; the
+// full session totals stay in stats.
+const RELAY_HISTORY_LIMIT = 8;
 
 // This covers `youtube.com`, `www.youtube.com` and `music.youtube.com`. The
 // music host keeps its track in the same `v` parameter, so one checker serves
@@ -466,6 +470,75 @@ export class RemoteMediaSync {
       expiredHolds: 0,
       last: null,
     };
+    // The report needs the path, not only the totals: which point was wanted,
+    // how long the wait lasted, and whether the hold released or expired.
+    this.history = { seeks: [], buffers: [], holds: [] };
+    this.bufferWait = null;
+    this.holdEvent = null;
+  }
+
+  recordEvent(kind, event) {
+    const list = this.history[kind];
+    if (!list) return event;
+    list.push(event);
+    if (list.length > RELAY_HISTORY_LIMIT) list.shift();
+    return event;
+  }
+
+  historyView() {
+    const copy = (list) => list.map((event) => ({ ...event }));
+    return {
+      seeks: copy(this.history.seeks),
+      buffers: copy(this.history.buffers),
+      holds: copy(this.history.holds),
+    };
+  }
+
+  beginBufferWait(now, target) {
+    this.waitingSince = now;
+    this.stats.bufferWaits += 1;
+    this.bufferWait = this.recordEvent('buffers', {
+      at: now,
+      target: Math.round(Number(target || 0) * 1000) / 1000,
+      resolvedAt: null,
+      outcome: null,
+    });
+  }
+
+  finishBufferWait(now, outcome) {
+    if (!this.bufferWait) return;
+    const event = this.bufferWait;
+    event.resolvedAt = now;
+    event.outcome = outcome;
+    event.durationMs = Math.max(0, Math.round(now - Number(event.at || now)));
+    this.bufferWait = null;
+  }
+
+  beginHold(now, frame) {
+    this.holdEvent = this.recordEvent('holds', {
+      at: now,
+      position: Math.round(Number(frame.position || 0) * 1000) / 1000,
+      playing: Boolean(frame.playing),
+      releasedAt: null,
+      outcome: null,
+    });
+  }
+
+  finishHold(now, outcome) {
+    if (!this.holdEvent) return;
+    const event = this.holdEvent;
+    event.releasedAt = now;
+    event.outcome = outcome;
+    event.durationMs = Math.max(0, Math.round(now - Number(event.at || now)));
+    this.holdEvent = null;
+  }
+
+  recordSeek(now, target, kind) {
+    this.recordEvent('seeks', {
+      at: now,
+      target: Math.round(Number(target || 0) * 1000) / 1000,
+      kind,
+    });
   }
 
   video() {
@@ -498,6 +571,7 @@ export class RemoteMediaSync {
     const ready =
       Number.isFinite(target) && video ? bufferedAround(video, target) : false;
     if (ready || now - this.waitingSince >= RELAY_BUFFER_WAIT_MS) {
+      this.finishBufferWait(now, ready ? 'ready' : 'deadline');
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferReady = true;
@@ -523,6 +597,11 @@ export class RemoteMediaSync {
       // begins again. A hold that came from another source also keeps the
       // wait; the film stays paused until the range arrives either way.
       this.bufferWaitActive(now);
+      if (!this.held) this.beginHold(now, frame);
+      else if (this.holdEvent) {
+        this.holdEvent.position = Math.round(Number(frame.position || 0) * 1000) / 1000;
+        this.holdEvent.playing = Boolean(frame.playing);
+      }
       this.held = true;
       this.heldAt = now;
       this.stats.holds += 1;
@@ -542,10 +621,14 @@ export class RemoteMediaSync {
       }
       // The release never came. Honour the hold for its lifetime and then
       // follow the room again rather than stay paused until a page reload.
+      this.finishHold(now, 'expired');
       this.held = false;
       this.stats.expiredHolds += 1;
     }
-    if (frame.hold === false) this.held = false;
+    if (frame.hold === false) {
+      if (this.held) this.finishHold(now, 'released');
+      this.held = false;
+    }
     // The host sits in an ad, so its frame names the ad clock and not the film.
     // Applying it would drag this tab off the film and back again on every
     // tick. The ad lasts seconds, so the tab waits it out and the room resumes.
@@ -597,6 +680,7 @@ export class RemoteMediaSync {
     // The guest may catch up on its own. A gap that no longer needs a seek
     // must not keep the next one inside the old buffer deadline.
     if (Math.abs(drift) <= seekLimit) {
+      if (this.waitingSince !== null) this.finishBufferWait(now, 'settled');
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferReady = false;
@@ -613,6 +697,7 @@ export class RemoteMediaSync {
       this.lastSeekTarget !== null &&
       now - this.seekIssuedAt > RELAY_SEEK_TIMEOUT_MS
     ) {
+      this.finishBufferWait(now, 'retry');
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferHeld = false;
@@ -621,6 +706,7 @@ export class RemoteMediaSync {
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
+      this.recordSeek(now, expected, 'retry');
       this.stats.stuckSeeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek-retry';
@@ -634,10 +720,12 @@ export class RemoteMediaSync {
     ) {
       // The range check belongs on the element that owns the player. A seek
       // outside the fetched data is the long stall this path used to take.
-      if (!this.bufferReady && !bufferedAround(video, expected)) {
+      const rangeReady = this.bufferReady || bufferedAround(video, expected);
+      if (!this.bufferReady && !rangeReady) {
         if (this.waitingSince === null) {
-          this.waitingSince = now;
-          this.stats.bufferWaits += 1;
+          this.beginBufferWait(now, expected);
+        } else if (this.bufferWait) {
+          this.bufferWait.target = Math.round(expected * 1000) / 1000;
         }
         this.waitingTarget = expected;
         if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
@@ -657,6 +745,7 @@ export class RemoteMediaSync {
           return { ok: true, skipped: 'buffer', drift: Math.round(drift * 1000) / 1000 };
         }
       }
+      this.finishBufferWait(now, rangeReady ? 'ready' : 'deadline');
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferHeld = false;
@@ -665,6 +754,7 @@ export class RemoteMediaSync {
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
+      this.recordSeek(now, expected, 'seek');
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';

@@ -103,6 +103,17 @@
     }
   }
 
+  function shortStamp(value) {
+    const at = stamp(value);
+    return at ? `${at.slice(11, 23)}Z` : '';
+  }
+
+  function durationText(value) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+
   function buildSyncReport(reply, reading, context = {}) {
     const data = reply && reply.data ? reply.data : null;
     const now = Number(context.now) || Date.now();
@@ -260,8 +271,14 @@
       }
       add('Reading', parts.join(' · '));
     } else {
-      const reason = context.readingReply && context.readingReply.reason;
-      add('Reading', `unavailable${reason ? ` (${reason})` : ''}`);
+      const reply = context.readingReply;
+      const failed = reply && Array.isArray(reply.failed) ? reply.failed[0] : null;
+      const reason = reply
+        ? [reply.reason, failed && (failed.answer || failed.error)]
+            .filter(Boolean)
+            .join(', ') || (reply.ok ? 'no-relay' : 'unknown')
+        : 'no-response';
+      add('Reading', `unavailable (${reason})`);
     }
 
     add('Matched copy', offset(data.align && data.align.offsetMs));
@@ -320,6 +337,57 @@
       if (text) add('Last seek', text);
     }
 
+    const relayHistory = relay && relay.history;
+    if (relayHistory) {
+      const recent = (list) => (Array.isArray(list) ? list.slice(-5) : []);
+      const seeks = recent(relayHistory.seeks);
+      if (seeks.length) {
+        add(
+          'Relay seeks',
+          seeks
+            .map((event) => {
+              const at = shortStamp(event.at);
+              return `${clock(event.target)}${event.kind ? ` (${event.kind})` : ''}${
+                at ? ` at ${at}` : ''
+              }`;
+            })
+            .join('; ')
+        );
+      }
+      const buffers = recent(relayHistory.buffers);
+      if (buffers.length) {
+        add(
+          'Relay buffer waits',
+          buffers
+            .map((event) => {
+              const spent = durationText(event.durationMs);
+              const at = shortStamp(event.at);
+              return `${clock(event.target)} ${event.outcome || 'waiting'}${
+                spent ? ` after ${spent}` : ''
+              }${at ? ` at ${at}` : ''}`;
+            })
+            .join('; ')
+        );
+      }
+      const relayHolds = recent(relayHistory.holds);
+      if (relayHolds.length) {
+        add(
+          'Relay holds',
+          relayHolds
+            .map((event) => {
+              const spent = durationText(event.durationMs);
+              const at = shortStamp(event.at);
+              return `${clock(event.position)}, ${
+                event.playing ? 'playing' : 'paused'
+              }, ${event.outcome || 'active'}${spent ? ` after ${spent}` : ''}${
+                at ? ` at ${at}` : ''
+              }`;
+            })
+            .join('; ')
+        );
+      }
+    }
+
     if (data.lastMediaAction) {
       const last = data.lastMediaAction;
       const at = stamp(last.at);
@@ -327,6 +395,20 @@
         'Last media action',
         [last.text || last.action || 'unknown', at ? `at ${at}` : ''].filter(Boolean).join(' ')
       );
+    }
+
+    if (data.lastLocalMediaAction) {
+      const last = data.lastLocalMediaAction;
+      const at = stamp(last.at);
+      let text = last.text;
+      if (!text) {
+        if (last.action === 'seek') text = `You jumped to ${clock(last.position)}`;
+        else if (last.action === 'play') text = 'You played the video';
+        else if (last.action === 'pause') text = 'You paused the video';
+        else if (last.action === 'rate') text = `You set the speed to ${Number(last.rate || 1)}x`;
+        else text = `You changed the film at ${clock(last.position)}`;
+      }
+      add('Last local media action', [text, at ? `at ${at}` : ''].filter(Boolean).join(' '));
     }
 
     const roomDrops =
@@ -371,11 +453,46 @@
       const at = stamp(lastDrop.at);
       const peer = lastDrop.peerId ? `, ${lastDrop.peerId}` : '';
       add(
-        'Last media drop',          `${lastDrop.action || 'act'} from ${lastDrop.source} (${lastDrop.reason || 'unknown'}${peer})` +
+        'Last media drop',
+        `${lastDrop.action || 'act'} from ${lastDrop.source} (${
+          lastDrop.reason || 'unknown'
+        }${peer})` +
           (at ? ` at ${at}` : '') +
           (present(lastDrop.position) ? ` (target ${clock(lastDrop.position)})` : '')
       );
+      const hostAct = lastDrop.hostAct;
+      if (hostAct) {
+        const actAt = stamp(hostAct.at);
+        const target = present(hostAct.position) ? `, target ${clock(hostAct.position)}` : '';
+        add(
+          'Host act behind drop',
+          `${hostAct.action || 'act'}${target}${actAt ? `, at ${actAt}` : ''}`
+        );
+      }
+    }
 
+    const dropHistory = Array.isArray(data.mediaDropHistory)
+      ? data.mediaDropHistory.filter((entry) => entry && entry.reason === 'host-priority')
+      : [];
+    if (dropHistory.length > 1) {
+      add(
+        'Host-priority drops',
+        dropHistory
+          .slice(-4)
+          .map((entry) => {
+            const at = stamp(entry.at);
+            const target = present(entry.position) ? ` target ${clock(entry.position)}` : '';
+            const act = entry.hostAct;
+            const hostAt = act ? shortStamp(act.at) : '';
+            const host = act
+              ? `, host ${act.action || 'act'}${
+                  present(act.position) ? ` ${clock(act.position)}` : ''
+                }${hostAt ? ` at ${hostAt}` : ''}`
+              : '';
+            return `${entry.action || 'act'}${target}${at ? ` at ${at}` : ''}${host}`;
+          })
+          .join('; ')
+      );
     }
 
     const control = [];
@@ -483,12 +600,15 @@
               stats: relay.stats || null,
               localDrops: relay.localDrops || null,
               lastLocalDrop: relay.lastLocalDrop || null,
+              history: relay.history || null,
             }
           : null,
         lastMediaAction: data.lastMediaAction || null,
+        lastLocalMediaAction: data.lastLocalMediaAction || null,
         mediaDrops: data.mediaDrops || null,
         mediaDropTicks: data.mediaDropTicks || null,
         lastMediaDrop: data.lastMediaDrop || null,
+        mediaDropHistory: data.mediaDropHistory || null,
         holds: holds.length ? holds : null,
         lastHoldEvent: data.lastHoldEvent || null,
         hostPriority: data.hostPriority || null,
