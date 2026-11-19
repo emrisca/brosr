@@ -956,7 +956,11 @@ async function handle(message, sender) {
       // film the host is watching cannot start, and YouTube reports that as an
       // error card, so the copy is the fault and not the film.
       const all = await api.tabs.query({}).catch(() => []);
-      const shown = all.find((tab) => validId(tab.id) && tab.url === message.url);
+      // A stopped copy is not a place for a new offer. Reusing it would put
+      // the tab this person left back under a key that moves it again.
+      const shown = all.find(
+        (tab) => validId(tab.id) && tab.url === message.url && !detachedTabs.has(tab.id)
+      );
       if (shown) {
         await mapRemoteKey(key, shown.id);
         if (foreground) api.tabs.update(shown.id, { active: true }).catch(() => {});
@@ -1004,6 +1008,10 @@ async function handle(message, sender) {
   if (message.type === 'brosr:media-hello') {
     const from = sender && sender.tab ? sender.tab.id : null;
     if (!validId(from)) return { ok: false, reason: 'no-tab' };
+    // A stopped copy stays quiet even when its page names a new film. Without
+    // this the next key change put it back in the map and the room drove it
+    // again.
+    if (detachedTabs.has(from)) return { ok: false, reason: 'detached' };
     const id = await roomTab();
     if (id === from) {
       mediaTabs.delete(from);

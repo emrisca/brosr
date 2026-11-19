@@ -797,6 +797,10 @@ export async function start() {
     // A tile names a new tab. This page has no user gesture to open one with,
     // so its browser opens the page beside the room tab instead.
     openTab: (href) => {
+      // A tile lives on the room's own page. A same-site link on a film page
+      // is the sender's own visit, and it reaches this browser as an offer,
+      // so a replayed click opens no copy of it here.
+      if (!isRoomPage(location.href)) return false;
       if (!api || !api.runtime || !api.runtime.sendMessage) return false;
       api.runtime
         .sendMessage({ type: 'brosr:tab-open-local', url: href, key: null })

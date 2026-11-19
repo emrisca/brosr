@@ -108,3 +108,18 @@ test('a room that starts after tabs were opened offers them', () => {
   assert.match(background, /if \(!before && prefs\.granted\) sweepTabs\(\)\.catch/);
   assert.match(background, /async function sweepTabs\(\) \{/);
 });
+
+test('a replay opens a copy only on the room page', () => {
+  // A room tab keeps its socket after the room follows a film to another site.
+  // The old gate compared the link with that film page, so a same-site new tab
+  // passed and every browser opened a copy nobody asked for. Only a page of
+  // the room itself has tiles.
+  const start = source.indexOf('openTab: (href) => {');
+  assert.ok(start > 0, 'the open hook is missing');
+  const hook = source.slice(start, source.indexOf('mediaAdapter,', start));
+  assert.match(hook, /if \(!isRoomPage\(location\.href\)\) return false;/);
+  assert.ok(
+    hook.indexOf('isRoomPage') < hook.indexOf("type: 'brosr:tab-open-local'"),
+    'the room page guard sits before the browser is asked'
+  );
+});

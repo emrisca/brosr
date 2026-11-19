@@ -224,3 +224,53 @@ test('a stopped copy leaves the room and comes back from the panel', async () =>
   assert.equal(after.stopped.length, 0, 'a resumed copy is no longer stopped');
   assert.equal(created.length, 1, 'resume reuses the open tab');
 });
+
+test('a stopped copy does not follow a new film key', async () => {
+  // A stop that only emptied the map held until the page named another film.
+  // The next key change put the tab back in the map, and the room drove the
+  // copy this person had just left.
+  const { listener, release } = loadBackground();
+  const url = 'https://example.test/film';
+  const opened = ask(listener, { type: 'brosr:tab-open-local', url, key: '7' });
+  release();
+  const first = await opened;
+
+  const hello = await ask(
+    listener,
+    { type: 'brosr:media-hello', key: 'film:one' },
+    { tab: { id: first.tabId, active: true, url } }
+  );
+  assert.equal(hello.ok, true);
+  const before = await ask(listener, { type: 'brosr:media-apply', key: 'film:one', position: 10 });
+  assert.equal(before.sent, 1, 'the joined copy follows the film');
+
+  await ask(listener, { type: 'brosr:tab-leave-local', key: '7' });
+  const after = await ask(listener, { type: 'brosr:media-apply', key: 'film:one', position: 20 });
+  assert.equal(after.sent, 0, 'a stopped copy stops following');
+
+  const again = await ask(
+    listener,
+    { type: 'brosr:media-hello', key: 'film:two' },
+    { tab: { id: first.tabId, active: true, url } }
+  );
+  assert.equal(again.ok, false, 'a new film key does not rejoin the stopped copy');
+  assert.equal(again.reason, 'detached');
+  const later = await ask(listener, { type: 'brosr:media-apply', key: 'film:two', position: 30 });
+  assert.equal(later.sent, 0, 'the room never drives the stopped copy again');
+});
+
+test('a stopped copy is not reused for a later offer', async () => {
+  // The open path looked for any tab on the same URL. That matched the copy
+  // this person had stopped, and the new key took it back into the room.
+  const { created, listener, release } = loadBackground();
+  const url = 'https://example.test/film';
+  const opened = ask(listener, { type: 'brosr:tab-open-local', url, key: '7' });
+  release();
+  const first = await opened;
+  await ask(listener, { type: 'brosr:tab-leave-local', key: '7' });
+
+  const second = await ask(listener, { type: 'brosr:tab-open-local', url, key: '8' });
+  assert.equal(second.ok, true);
+  assert.notEqual(second.tabId, first.tabId, 'the stopped tab stays out of the room');
+  assert.equal(created.length, 2, 'the offer opens its own copy');
+});
