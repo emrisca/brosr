@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  HOST_MEDIA_PRIORITY_MS,
   bufferedAround,
   createRoomClient,
   PEER_IDLE_MS,
@@ -156,11 +157,88 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
 
   // A late frame from that peer is ignored even if it reaches the host.
   const stale = host.receive(
-    encode({ type: 'media', peerId: 'brave', key: KEY, action: 'tick', position: 40, playing: false, roomTime: local }),
+    encode({ type: 'media', peerId: 'brave', key: KEY, action: 'seek', position: 40, playing: false, roomTime: local }),
     local
   );
   assert.equal(stale.ignored, 'no-grant');
   assert.equal(relayed.length, 2);
+  assert.equal(host.publish().mediaDrops['no-grant'], 1);
+  assert.equal(host.publish().lastMediaDrop.reason, 'no-grant');
+});
+
+test('a granted peer pause keeps the host playhead, and a seek moves it', () => {
+  let local = 1000;
+  const relayed = [];
+  const hostState = { key: KEY, position: 12.2, playing: true, rate: 1, duration: 120 };
+  const adapter = {
+    pick: (key) => (key === KEY ? hostState : null),
+    state: (picked) => (picked ? { ...hostState } : null),
+    flags: () => ({ buffering: false, adPlaying: false }),
+    apply: () => 'applied',
+  };
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    mediaAdapter: adapter,
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+  });
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'brave',
+    name: 'Bob',
+    hostId: 'host',
+    now: () => local,
+    send: (text) => host.receive(text, local),
+    overlay: false,
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    local
+  );
+
+  // The peer's copy sits at 10 s while the host is at 12.2 s. A pause says
+  // what to do, not where to move, so the host must stay at its own playhead.
+  assert.equal(
+    peer.sendMedia({ key: KEY, position: 10, playing: false, action: 'pause' }),
+    true
+  );
+  assert.equal(relayed.at(-1).action, 'pause');
+  assert.equal(relayed.at(-1).playing, false);
+  assert.ok(Math.abs(relayed.at(-1).expected - 12.2) < 0.01);
+
+  // The peer's next tick still names its older playhead. A tick is not a
+  // seek, so it must leave the host where the pause put it.
+  assert.equal(peer.sendMedia({ key: KEY, position: 10, playing: false }), true);
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 12.2) < 0.01);
+
+  // A seek is the one act that carries a new position, so it does move.
+  assert.equal(
+    peer.sendMedia({ key: KEY, position: 30, playing: false, action: 'seek' }),
+    true
+  );
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 30) < 0.01);
+
+  // A seek past the clip is clamped by the player. The room names the point
+  // that lands, not a target beyond the end that nobody can reach.
+  assert.equal(
+    peer.sendMedia({ key: KEY, position: 300, playing: false, action: 'seek' }),
+    true
+  );
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 120) < 0.01);
+  assert.equal(host.publish().lastMediaAction.text, 'Bob jumped to 2:00');
 });
 
 test('a host act stays in front of a granted peer for a moment', () => {
@@ -183,7 +261,7 @@ test('a host act stays in front of a granted peer for a moment', () => {
       type: 'media',
       peerId: 'brave',
       key: KEY,
-      action: 'tick',
+      action: 'seek',
       position: 12,
       playing: true,
       roomTime: local,
@@ -191,14 +269,19 @@ test('a host act stays in front of a granted peer for a moment', () => {
     local + 100
   );
   assert.equal(blocked.ignored, 'host-priority');
+  assert.equal(host.publish().mediaDrops['host-priority'], 1);
+  assert.equal(host.publish().lastMediaDrop.reason, 'host-priority');
+  assert.equal(host.publish().lastMediaDrop.position, 12);
+  assert.equal(host.publish().lastMediaDrop.name, 'Bob');
+  assert.ok(host.publish().hostPriority.remainingMs > 0);
 
-  local += 2000;
+  local = 1000 + HOST_MEDIA_PRIORITY_MS + 1;
   const allowed = host.receive(
     encode({
       type: 'media',
       peerId: 'brave',
       key: KEY,
-      action: 'tick',
+      action: 'seek',
       position: 12,
       playing: true,
       roomTime: local,
@@ -207,6 +290,128 @@ test('a host act stays in front of a granted peer for a moment', () => {
   );
   assert.equal(allowed.ok, true);
   assert.equal(allowed.relayed, true);
+  assert.equal(host.publish().hostPriority.remainingMs, 0);
+});
+
+test('a host keeps its own act and the act behind a priority drop', () => {
+  let local = 1000;
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: () => true,
+  });
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+
+  host.sendHostMedia({ key: KEY, position: 12, playing: false, action: 'seek' }, local);
+  assert.equal(host.publish().lastLocalMediaAction.action, 'seek');
+  assert.equal(host.publish().lastLocalMediaAction.position, 12);
+
+  const blocked = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'seek',
+      position: 12,
+      playing: true,
+      roomTime: local,
+    }),
+    local + 100
+  );
+  assert.equal(blocked.ignored, 'host-priority');
+  const drop = host.publish().lastMediaDrop;
+  assert.equal(drop.hostAct.action, 'seek');
+  assert.equal(drop.hostAct.position, 12);
+  assert.equal(drop.hostAct.at, 1000);
+  assert.equal(host.publish().mediaDropHistory.length, 1);
+
+  local = 1500;
+  host.sendHostMedia({ key: KEY, position: 30, playing: false, action: 'pause' }, local);
+  assert.equal(host.publish().lastLocalMediaAction.action, 'pause');
+  assert.equal(host.publish().lastMediaDrop.hostAct.action, 'seek');
+});
+
+test('the host film title travels with its media anchor', () => {
+  const local = 1000;
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sent.push(JSON.parse(frame)),
+    overlay: false,
+    onMedia: () => true,
+  });
+
+  assert.equal(
+    host.sendHostMedia(
+      {
+        key: KEY,
+        title: 'I relapsed...',
+        music: false,
+        position: 12,
+        playing: false,
+        rate: 1,
+        at: local,
+      },
+      local
+    ),
+    true
+  );
+  const frame = sent.at(-1);
+  assert.equal(frame.title, 'I relapsed...');
+  assert.equal(frame.music, false);
+});
+
+test('a host report of a peer act does not open the host window', () => {
+  let local = 1000;
+  const relayed = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: () => {},
+    overlay: false,
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+  });
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'brave',
+    name: 'Bob',
+    hostId: 'host',
+    now: () => local,
+    send: (text) => host.receive(text, local),
+    overlay: false,
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  peer.receive(
+    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    local
+  );
+
+  // The peer pauses, and the host film tab reports the state it now holds.
+  // That report is not a local host act, so it must not block the peer.
+  peer.sendMedia({ key: KEY, position: 10, playing: false, action: 'pause' });
+  assert.equal(relayed.at(-1).action, 'pause');
+  local = 1050;
+  host.sendHostMedia({ key: KEY, position: 12.2, playing: false, rate: 1 }, local);
+
+  local = 1100;
+  peer.sendMedia({ key: KEY, position: 30, playing: false, action: 'seek' });
+  assert.equal(relayed.at(-1).action, 'seek');
+  assert.ok(Math.abs(relayed.at(-1).expected - 30) < 0.01);
 });
 
 test('a granted peer stays on the host roster when presence is quiet', () => {
@@ -515,6 +720,60 @@ test('a peer follows the host url and scroll, and reports a layout mismatch', ()
   assert.equal(client.publish().layoutMismatch, true);
 });
 
+test('a view only moves the page it names and a site the host allows', () => {
+  const scrolled = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'p2',
+    hostId: 'host',
+    now: () => 0,
+    send: () => {},
+    viewport: () => ({ url: 'http://x/a.html', scroll: 0, fingerprint }),
+    scrollTo: (ratio) => scrolled.push(ratio),
+  });
+  const frame = (url, scroll = 0.7) =>
+    encode({ type: 'view', url, scroll, fingerprint, roomTime: 1 });
+
+  // The host is on another page. Its scroll must not follow here.
+  const other = client.receive(frame('http://x/b.html'), 0);
+  assert.equal(other.ignored, 'other-page');
+  assert.deepEqual(scrolled, []);
+
+  // The matching page takes the scroll.
+  const same = client.receive(frame('http://x/a.html'), 0);
+  assert.equal(same.ok, true);
+  assert.deepEqual(scrolled, [0.7]);
+
+  // A site the host switched off is refused even on the same page.
+  client.receive(
+    encode({ type: 'scrollpolicy', sites: ['http://y'], roomTime: 1 }),
+    0
+  );
+  const off = client.receive(frame('http://x/a.html', 0.4), 0);
+  assert.equal(off.ignored, 'site-off');
+  assert.deepEqual(scrolled, [0.7]);
+});
+
+test('the host publishes scroll only for an allowed site and a late guest gets the rule', () => {
+  const view = { url: 'http://x/a.html', scroll: 0.2, fingerprint };
+  const { client, sent, at } = hostWithView(() => view);
+  at(1000);
+  assert.equal(sent.filter((message) => message.type === 'view').length, 1);
+
+  sent.length = 0;
+  client.setScrollSites([]);
+  at(1100);
+  assert.equal(sent.filter((message) => message.type === 'view').length, 0);
+
+  client.setScrollSites(['http://x']);
+  at(1200);
+  assert.equal(sent.filter((message) => message.type === 'view').length, 1);
+
+  client.receive(encode({ type: 'hello', peerId: 'p2', name: 'P', roomTime: 1200 }), 1200);
+  const snapshot = sent.filter((message) => message.type === 'snapshot').pop();
+  assert.deepEqual(snapshot.scrollSites, ['http://x']);
+});
+
 test('the published layout notice clears once the layouts agree again', () => {
   const doc = { location: { href: 'http://x/a.html', origin: 'http://x' } };
   let local = 1000;
@@ -639,6 +898,71 @@ test('a host resize is not a layout mismatch, so a granted click still lands', (
     2000
   );
   assert.equal(click.reasons.layout, undefined, 'the click was not dropped for the layout');
+});
+
+test('a site switched off accepts no relayed input', () => {
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => 1000,
+    send: () => {},
+    overlay: false,
+    scrollSites: ['https://other.test'],
+    document: { location: { href: 'https://example.com/a', origin: 'https://example.com' } },
+    input: { tabId: 'peer', origin: 'https://example.com' },
+  });
+  client.setGrant('peer', true);
+  const result = client.receive(
+    encode({
+      type: 'input',
+      peerId: 'peer',
+      seq: 1,
+      records: [{ kind: 'click', path: '#go' }],
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(result.reason, 'site');
+});
+
+test('a granted peer on a switched-off site sends no click', () => {
+  const listeners = new Map();
+  const doc = {
+    location: { href: 'https://example.com/a', origin: 'https://example.com' },
+    defaultView: { innerWidth: 1000, innerHeight: 500, addEventListener() {} },
+    addEventListener(type, fn) {
+      const list = listeners.get(type) || [];
+      list.push(fn);
+      listeners.set(type, list);
+    },
+    dispatch(type, event) {
+      for (const fn of listeners.get(type) || []) fn(event);
+    },
+  };
+  const sent = [];
+  const client = createRoomClient({
+    role: 'peer',
+    peerId: 'peer',
+    now: () => 0,
+    document: doc,
+    overlay: false,
+    scrollSites: ['https://other.test'],
+    input: { capture: true, tabId: 'peer', origin: 'https://example.com' },
+    send: (frame) => sent.push(decode(frame)),
+  });
+  const tile = { tagName: 'A', getAttribute: () => '', closest: () => null };
+
+  client.receive(encode({ type: 'control', peerId: 'peer', allowed: true }), 0);
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+  assert.equal(sent.filter((message) => message.type === 'input').length, 0);
+
+  client.receive(
+    encode({ type: 'scrollpolicy', sites: ['https://example.com'], roomTime: 0 }),
+    0
+  );
+  doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
+  assert.equal(sent.filter((message) => message.type === 'input').length, 1);
 });
 
 test('two peers in a room report their ids, so a count is never a guess', () => {

@@ -16,6 +16,14 @@ test('the app field names parse into one panel request', () => {
     parsePanelArgs(['--action=tab', '--tabId=42', '--shared=false']),
     { action: 'tab', values: { tabId: 42, shared: false }, guest: false }
   );
+  assert.deepEqual(
+    parsePanelArgs(['--action=scroll-site', '--site=https://example.com/watch', '--on=false']),
+    {
+      action: 'scroll-site',
+      values: { site: 'https://example.com/watch', on: false },
+      guest: false,
+    }
+  );
 });
 
 test('the old short names still normalize to the same fields', () => {
@@ -65,6 +73,9 @@ test('the panel draws the room before it reads the film', () => {
   assert.match(source, /withDeadline\(cachedStatus\(\), 1200\)/);
   assert.match(source, /requestId: filmRequestId/);
   assert.match(source, /1500/);
+  assert.match(source, /filmReadingReply = \{ ok: false, reason: 'send-failed' \}/);
+  assert.match(source, /reading\.ok && reading\.relay/);
+  assert.match(source, /reason: 'no-relay'/);
   assert.match(source, /function renderBuildWarning/);
   assert.match(source, /function renderCursorDrops/);
 });
@@ -75,7 +86,8 @@ test('the background reads one film owner and returns one answer', () => {
     'utf8'
   );
   assert.match(source, /function filmOwner\(/);
-  assert.match(source, /const owner = filmOwner\(filmKey\)/);
+  assert.match(source, /let owner = filmOwner\(filmKey\)/);
+  assert.match(source, /Promise\.race\(\[mediaRestored, mediaRestoreDeadline\]\)/);
   assert.match(source, /const \[id\] = owner/);
   assert.equal(
     (source.match(/type: 'brosr:relay-reading'/g) || []).length,
@@ -83,6 +95,16 @@ test('the background reads one film owner and returns one answer', () => {
     'the read goes to one owner, not every tab'
   );
   assert.match(source, /requestId/);
+});
+
+test('the host tab carries the readings the app log shows', () => {
+  const source = fs.readFileSync(path.join(here, '..', 'browser-entry.mjs'), 'utf8');
+  assert.match(source, /async function panelFilmReading/);
+  assert.match(source, /type: 'brosr:film-reading'/);
+  assert.match(source, /readingReply: film\.reply/);
+  assert.match(source, /mediaDropHistory: live\.mediaDropHistory/);
+  assert.match(source, /lastLocalMediaAction: live\.lastLocalMediaAction/);
+  assert.match(source, /diagnostics,/);
 });
 
 test('a refused panel command carries a machine-readable reason', () => {

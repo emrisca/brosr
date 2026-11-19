@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MEDIA_ECHO_MS,
+  RELAY_BUFFER_WAIT_MS,
   RELAY_SEEK_TIMEOUT_MS,
   RELAY_TICK_MS,
   RelayMediaAdapter,
@@ -8,8 +10,10 @@ import {
   filmUrl,
   freshState,
   isYouTubeHost,
+  mediaEchoMatches,
   mediaStateFromDocument,
   projectPosition,
+  remoteMediaEcho,
   viewerState,
 } from '../media-relay.mjs';
 
@@ -21,6 +25,7 @@ function fakeVideo({
   readyState = 4,
   playbackRate = 1,
   volume = 1,
+  buffered = null,
 } = {}) {
   return {
     src,
@@ -33,6 +38,11 @@ function fakeVideo({
     readyState,
     playbackRate,
     volume,
+    buffered: buffered || {
+      length: 1,
+      start: () => 0,
+      end: () => duration,
+    },
     plays: 0,
     pauses: 0,
     play() {
@@ -66,6 +76,47 @@ const ytKey = 'youtube:abc123';
 
 const adRoot = { classList: { contains: (name) => name === 'ad-showing' } };
 const cleanRoot = { classList: { contains: () => false } };
+
+function echoFrame(playing = true) {
+  return { key: ytKey, position: 130, playing, rate: 1, at: 10100 };
+}
+
+function echoPrevious(playing = true) {
+  return { key: ytKey, position: 100, playing, rate: 1, at: 10000 };
+}
+
+test('a remote seek keeps only the seek event home, not a pause after it', () => {
+  const echo = remoteMediaEcho(
+    { ok: true, action: 'seek' },
+    echoPrevious(),
+    echoFrame(),
+    10100
+  );
+  assert.deepEqual(echo.actions, ['seek']);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10150), true);
+  assert.equal(mediaEchoMatches(echo, 'pause', 10150), false);
+  assert.equal(mediaEchoMatches(echo, 'play', 10150), false);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10100 + MEDIA_ECHO_MS), false);
+});
+
+test('a buffer hold keeps its pause home without hiding a later act', () => {
+  const echo = remoteMediaEcho(
+    { ok: true, skipped: 'buffer' },
+    echoPrevious(),
+    echoFrame(),
+    10100
+  );
+  assert.deepEqual(echo.actions, ['pause']);
+  assert.equal(mediaEchoMatches(echo, 'pause', 10150), true);
+  assert.equal(mediaEchoMatches(echo, 'seek', 10150), false);
+});
+
+test('a routine tick opens no echo window', () => {
+  assert.equal(
+    remoteMediaEcho({ ok: true, action: 'tick' }, echoPrevious(), echoFrame(), 10100),
+    null
+  );
+});
 
 test('a playing room starts a paused film even when the seek cannot land', () => {
   const video = fakeVideo({ currentTime: 0, paused: true });
@@ -242,6 +293,130 @@ test('a tab that shows the film seeks when the room is far ahead', () => {
   const again = sync.handle({ key: ytKey, position: 130, playing: true, rate: 1, at: now });
   assert.equal(again.action, 'tick');
   assert.equal(video.currentTime, 100);
+});
+
+test('a seek outside the buffered range waits, then lands when data arrives', () => {
+  let end = 60;
+  const buffered = { length: 1, start: () => 0, end: () => end };
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered });
+  let now = 10000;
+  const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => now });
+
+  const first = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(first.skipped, 'buffer');
+  assert.equal(video.currentTime, 50);
+  assert.equal(video.paused, true, 'the film stops instead of running away from the target');
+  assert.equal(sync.stats.seeks, 0);
+  assert.equal(sync.stats.bufferWaits, 1);
+  assert.equal(sync.stats.bufferHolds, 1);
+
+  // A second tick keeps waiting, does not start the film again, and does not
+  // count a second wait.
+  now += 500;
+  const held = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(held.skipped, 'buffer');
+  assert.equal(video.currentTime, 50);
+  assert.equal(video.paused, true);
+  assert.equal(sync.stats.bufferWaits, 1);
+
+  // The player fetched the range, so the next tick can land the seek and
+  // resume the room's playback.
+  end = 200;
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+  assert.equal(sync.stats.seeks, 1);
+});
+
+test('a buffer wait reports recovery after the deadline without another frame', () => {
+  const video = fakeVideo({
+    currentTime: 50,
+    duration: 300,
+    paused: false,
+    buffered: { length: 1, start: () => 0, end: () => 60 },
+  });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(sync.bufferWaitActive(now), true);
+
+  // The report timer is what releases a room hold when the film tab receives
+  // no further frames. It must expire the wait and leave the film paused until
+  // the release frame carries the seek.
+  now += RELAY_BUFFER_WAIT_MS + 1;
+  assert.equal(sync.bufferWaitActive(now), false);
+  assert.equal(sync.waitingSince, null);
+  assert.equal(sync.bufferReady, true);
+  assert.equal(video.paused, true);
+
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+});
+
+test('the relay keeps recent seek, buffer and hold history', () => {
+  let end = 60;
+  const buffered = { length: 1, start: () => 0, end: () => end };
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  const waiting = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(waiting.skipped, 'buffer');
+  let history = sync.historyView();
+  assert.equal(history.seeks.length, 0);
+  assert.equal(history.buffers.length, 1);
+  assert.equal(history.buffers[0].target, 100);
+  assert.equal(history.buffers[0].outcome, null);
+
+  end = 200;
+  now += 1000;
+  const landed = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  assert.equal(landed.action, 'seek');
+  history = sync.historyView();
+  assert.deepEqual(history.seeks[0], { at: now, target: 100, kind: 'seek' });
+  assert.equal(history.buffers[0].outcome, 'ready');
+  assert.equal(history.buffers[0].durationMs, 1000);
+
+  now += 1000;
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now, hold: true });
+  history = sync.historyView();
+  assert.equal(history.holds.length, 1);
+  assert.equal(history.holds[0].outcome, null);
+
+  now += 2000;
+  sync.handle({ key: ytKey, position: 100, playing: false, rate: 1, at: now, hold: false });
+  history = sync.historyView();
+  assert.equal(history.holds[0].outcome, 'released');
+  assert.equal(history.holds[0].durationMs, 2000);
+});
+
+test('a buffer that never arrives still seeks after the wait deadline', () => {
+  const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered: { length: 1, start: () => 0, end: () => 60 } });
+  let now = 10000;
+  const sync = new RemoteMediaSync({ document: fakeDoc(video, cleanRoot), href: ytHref, hostname: ytHost, now: () => now });
+
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+  now += RELAY_BUFFER_WAIT_MS + 1;
+  const result = sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now });
+
+  assert.equal(result.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+  assert.equal(sync.stats.seeks, 1);
 });
 
 test('a small gap gets a rate nudge instead of a seek', () => {

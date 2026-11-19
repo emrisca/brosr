@@ -49,13 +49,17 @@ export function tailnetFromStatus(value) {
   return { tailnet: true, peers };
 }
 
-export function tailscaleStatus() {
-  for (const binary of tailscaleBinaries()) {
-    const result = spawnSync(binary, ['status', '--json'], {
+export function tailscaleStatus({ spawn = spawnSync, platform = process.platform } = {}) {
+  for (const binary of tailscaleBinaries(platform)) {
+    const result = spawn(binary, ['status', '--json'], {
       encoding: 'utf8',
       timeout: STATUS_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
+      // The macOS app bundle is one executable for the GUI and the CLI. A
+      // child of a windowed app has no TERM, so without this the binary can
+      // open its GUI and print no status document.
+      env: { ...process.env, TAILSCALE_BE_CLI: '1' },
     });
     if (result.error || result.status !== 0 || !result.stdout) continue;
     try {

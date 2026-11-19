@@ -53,5 +53,17 @@ test('a mirrored tab keeps its key through a navigation', () => {
   );
   assert.doesNotMatch(source, /if \(remoteTabs\.has\(tab\.id\)\) return;/);
   assert.match(source, /const arrived = remoteOrigins\.get\(tab\.id\);/);
-  assert.match(source, /remoteOrigins\.set\(tab\.id, key\);/);
+  assert.match(source, /async function mapRemoteKey\(key, tabId\)/);
+  assert.match(source, /remoteOrigins\.set\(tabId, key\);/);
+  assert.match(source, /await mapRemoteKey\(key, tab\.id\);/);
+});
+
+test('a same-URL open joins the request already in flight', () => {
+  const source = fs.readFileSync(
+    path.join(here, '..', '..', 'bridge', 'background.js'),
+    'utf8'
+  );
+  assert.match(source, /const openingByUrl = new Map\(\);/);
+  assert.match(source, /const pending = openingByUrl\.get\(message\.url\);/);
+  assert.match(source, /return \{ \.\.\.result, joined: true \};/);
 });

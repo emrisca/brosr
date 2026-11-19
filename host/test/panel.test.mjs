@@ -51,7 +51,24 @@ class FakeSocket extends EventTarget {
         state: {
           roomName: 'Movie night',
           hostId: 'host',
+          role: 'peer',
+          peerId: 'guest-1',
+          room: 'room-1',
           peers: [{ id: 'guest-1', name: 'Guest', self: true, granted: false }],
+          diagnostics: {
+            room: 'room-1',
+            roomName: 'Movie night',
+            role: 'peer',
+            peerId: 'guest-1',
+            name: 'Guest',
+            socket: 1,
+            peers: 1,
+            peerList: [{ id: 'guest-1', name: 'Guest', self: true, granted: false }],
+            media: null,
+            viewers: [],
+            reading: null,
+            readingReply: { ok: false, reason: 'no-media' },
+          },
         },
       },
     });
@@ -72,6 +89,8 @@ test('the guest panel reads join.json and sends its own token', async () => {
   assert.equal(state.roomName, 'Movie night');
   assert.equal(state.hostId, 'host');
   assert.equal(state.peers.length, 1);
+  assert.match(state.log, /^Brosr sync report/);
+  assert.match(state.log, /Reading: unavailable \(no-media\)/);
 });
 
 test('a machine with no join file cannot read guest controls', async () => {

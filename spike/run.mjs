@@ -178,7 +178,7 @@ function buildBridge() {
         data: fs.readFileSync(path.join(here, '..', 'bridge', 'background.js')),
       },
       // The manifest names a room panel, so the XPI has to carry it.
-      ...['room.html', 'room.css', 'room.js'].map((name) => ({
+      ...['room.html', 'room.css', 'sync-report.js', 'room.js'].map((name) => ({
         name: `panel/${name}`,
         data: fs.readFileSync(path.join(here, '..', 'bridge', 'panel', name)),
       })),

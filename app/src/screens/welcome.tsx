@@ -1,7 +1,7 @@
-import { ArrowRight, ChevronRight, Loader2, Radar, UserPlus } from 'lucide-react';
+import { ArrowRight, ChevronRight, Loader2, Radar, RotateCw, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { DiscoveredRoom } from '@/lib/host';
+import type { Browser, DiscoveredRoom } from '@/lib/host';
 
 type Props = {
   name: string;
@@ -10,6 +10,12 @@ type Props = {
   tailnet: boolean;
   joining: string;
   discoveryError: string;
+  browsers: Browser[];
+  browserId: string;
+  detectingBrowsers: boolean;
+  browserError: string;
+  onBrowser: (id: string) => void;
+  onRescan: () => void;
   onName: (value: string) => void;
   onNext: () => void;
   onJoin: () => void;
@@ -24,12 +30,20 @@ export function Welcome({
   tailnet,
   joining,
   discoveryError,
+  browsers,
+  browserId,
+  detectingBrowsers,
+  browserError,
+  onBrowser,
+  onRescan,
   onName,
   onNext,
   onJoin,
   onJoinRoom,
   onFriends,
 }: Props) {
+  const hasSupported = browsers.some((entry) => entry.supported);
+
   return (
     <div className="flex flex-col gap-2.5">
       <h1 className="text-xl font-medium tracking-tight">Start or join a room</h1>
@@ -110,14 +124,67 @@ export function Welcome({
         />
       </div>
 
-      {/* Two ways in, the same size. Hosting opens the browser steps and
-          joining takes the invite link. */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <label htmlFor="start-browser" className="text-xs text-muted-foreground">
+            Browser
+          </label>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onRescan}
+            disabled={detectingBrowsers}
+          >
+            {detectingBrowsers ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCw className="size-3.5" aria-hidden="true" />
+            )}
+            {detectingBrowsers ? 'Scanning' : 'Rescan'}
+          </Button>
+        </div>
+        <select
+          id="start-browser"
+          value={browserId}
+          onChange={(event) => onBrowser(event.target.value)}
+          disabled={detectingBrowsers || browsers.length === 0}
+          className="h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+        >
+          {!browserId ? (
+            <option value="">
+              {detectingBrowsers
+                ? 'Looking for browsers'
+                : hasSupported
+                  ? 'Choose a browser'
+                  : 'No supported browser'}
+            </option>
+          ) : null}
+          {browsers.map((entry) => (
+            <option key={entry.id} value={entry.id} disabled={!entry.supported}>
+              {entry.name}
+              {entry.supported ? '' : ` (${entry.reason || 'unsupported'})`}
+            </option>
+          ))}
+        </select>
+        {browserError ? (
+          <p className="text-xs text-destructive">{browserError}</p>
+        ) : !browserId ? (
+          <p className="text-xs text-muted-foreground">
+            {hasSupported
+              ? 'Choose a browser to host or join a room.'
+              : 'Install Firefox, Zen, Brave or Chromium, then rescan.'}
+          </p>
+        ) : null}
+      </div>
+
+      {/* Two ways in, the same size. The browser is chosen here for both, so
+          neither path asks on a later screen. */}
       <div className="grid grid-cols-2 gap-2">
-        <Button onClick={onNext} disabled={!name.trim()}>
+        <Button onClick={onNext} disabled={!name.trim() || !browserId}>
           Host a room
           <ArrowRight />
         </Button>
-        <Button variant="secondary" onClick={onJoin}>
+        <Button variant="secondary" onClick={onJoin} disabled={!browserId}>
           Join a room
         </Button>
       </div>

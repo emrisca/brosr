@@ -41,7 +41,7 @@ const CORE = [
 function buildXpi() {
   fs.mkdirSync(runtime, { recursive: true });
   const out = path.join(runtime, 'bridge-shortcut.xpi');
-  const panel = ['room.html', 'room.css', 'room.js'];
+  const panel = ['room.html', 'room.css', 'sync-report.js', 'room.js'];
   const icons = [16, 32, 48, 96, 128];
   fs.writeFileSync(
     out,

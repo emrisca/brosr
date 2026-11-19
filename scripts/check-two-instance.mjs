@@ -352,6 +352,9 @@ const CONTRACT = [
   'trustTarget',
   'media',
   'mediaEchoLocal',
+  'mediaDrops',
+  'mediaDropTicks',
+  'lastMediaDrop',
   'viewers',
 ];
 const HOST_ONLY = ['trust'];
@@ -380,6 +383,29 @@ function contractOf(state, keys) {
     }
     if (typeof state.mediaEchoLocal !== 'number') {
       wrong.push(`mediaEchoLocal=${typeof state.mediaEchoLocal}`);
+    }
+    if (
+      !state.mediaDrops ||
+      typeof state.mediaDrops !== 'object' ||
+      Array.isArray(state.mediaDrops)
+    ) {
+      wrong.push(`mediaDrops=${typeof state.mediaDrops}`);
+    }
+    if (
+      !state.mediaDropTicks ||
+      typeof state.mediaDropTicks !== 'object' ||
+      Array.isArray(state.mediaDropTicks)
+    ) {
+      wrong.push(`mediaDropTicks=${typeof state.mediaDropTicks}`);
+    }
+    if (
+      !(
+        state.lastMediaDrop === null ||
+        (typeof state.lastMediaDrop === 'object' &&
+          !Array.isArray(state.lastMediaDrop))
+      )
+    ) {
+      wrong.push(`lastMediaDrop=${JSON.stringify(state.lastMediaDrop)}`);
     }
     if (!Array.isArray(state.viewers)) wrong.push(`viewers=${typeof state.viewers}`);
   }

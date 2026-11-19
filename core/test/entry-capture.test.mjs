@@ -34,17 +34,12 @@ test('a granted peer sends an act and not its own clock', () => {
   // A peer's own sample inside the anchor window pulled the host playhead back
   // and beat the host's play and pause. Only a real act crosses the room.
   assert.match(source, /if \(!state\.action\) return reply\(\{ ok: true, skipped: 'tick' \}\)/);
-  assert.match(source, /Date\.now\(\) - remoteAppliedAt < 600/);
-  // The echo window opens on an act, not on a tick. A host pause also carries
-  // action: "tick", so the label cannot decide it. A changed playing flag is
-  // the act; a routine sample leaves the flag alone and must not keep a granted
-  // peer's own pause home.
-  assert.match(source, /previous\.playing !== Boolean\(message\.playing\)/);
-  assert.match(source, /playingChanged \|\| corrected/);
-  assert.doesNotMatch(source, /message\.action \|\| corrected/);
-  // A correction seek issues a seek of its own, and that seek would arrive at
-  // the host as a person's act. It opens the window too.
-  assert.match(source, /result\.action === 'seek' \|\| result\.action === 'seek-retry'/);
+  // The echo window names the act the frame caused. A routine tick opens no
+  // window, so a granted peer's own pause is not kept home by housekeeping.
+  assert.match(source, /const echo = remoteMediaEcho\(result, previous, message\)/);
+  assert.match(source, /if \(echo\) remoteEcho = echo/);
+  assert.match(source, /mediaEchoMatches\(remoteEcho, action\)/);
+  assert.doesNotMatch(source, /Date\.now\(\) - remoteAppliedAt < 600/);
 });
 
 test('the active tab names the site a pointer belongs to', () => {
@@ -102,8 +97,8 @@ test('a host greets a guest that joins a paused room', () => {
   assert.match(body, /relayedMedia\.state\(\)/);
   assert.match(
     body,
-    /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor, at: Date\.now\(\) \}\)/,
-    'the projected anchor is sent as it stands'
+    /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor, action: false, at: Date\.now\(\) \}\)/,
+    'the projected anchor is sent as it stands, without replaying an old act'
   );
   assert.match(body, /greeted\.delete\(id\)/, 'a rejoin is greeted again');
   // A guest usually opens the room first, so the greet can arrive before its
@@ -111,9 +106,36 @@ test('a host greets a guest that joins a paused room', () => {
   assert.match(body, /Date\.now\(\) - greetedAt < 2000/);
 });
 
+test('a replayed host anchor does not open the host priority window', () => {
+  const greet = source.slice(source.indexOf('const greeted = new Set()'));
+  const body = greet.slice(0, greet.indexOf('}, 500);'));
+  assert.match(body, /action: false/);
+});
+
+test('a film reading answers through sendResponse in both engines', () => {
+  // Chrome does not guarantee a promise reply from a message listener. The
+  // callback form works in Chrome and Firefox, so a host on Chrome is not left
+  // with an unexplained unavailable reading.
+  assert.match(source, /runtime\.onMessage\.addListener\(\(message, sender, sendResponse\)/);
+  const read = source.slice(source.indexOf("if (message.type === 'brosr:relay-reading')"));
+  const body = read.slice(0, read.indexOf("if (message.type !== 'brosr:media-apply')"));
+  assert.match(body, /if \(typeof sendResponse === 'function'\)/);
+  assert.match(body, /sendResponse\(reading\)/);
+  assert.match(body, /return undefined;/);
+  assert.match(body, /history: remote\.historyView\(\)/);
+});
+
 test('a click flushes at once, so a link cannot unload the page first', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
   assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
+});
+
+test('a guest keeps the film title carried by the room frame', () => {
+  assert.match(
+    source,
+    /roomMedia = \{[\s\S]*?title: String\(message\.title \|\| ''\)\.slice\(0, 120\)/
+  );
+  assert.match(source, /music: Boolean\(message\.music\)/);
 });
 
 test('a film report refreshes presence while its room tab is hidden', () => {
@@ -126,6 +148,49 @@ test('a film report refreshes presence while its room tab is hidden', () => {
     body,
     /state && typeof state === 'object' && state\.key\)[\s\S]*?client\.presence\(\)/
   );
+});
+
+test('a hidden film tab reports when the room drives it', () => {
+  // A hidden tab throttles its report timer, but the room still sends applies.
+  // The frame that owns the player answers one with its current state, so the
+  // host's local position does not go stale while the app is in front.
+  const apply = source.slice(source.indexOf("if (message.type !== 'brosr:media-apply')"));
+  const body = apply.slice(0, apply.indexOf('let relayKey'));
+  assert.match(body, /document\.visibilityState === 'hidden'/);
+  assert.match(body, /queueMicrotask\(reportMedia\)/);
+  assert.match(body, /lastHiddenReportAt/);
+});
+
+test('a film waiting for a buffer reports the wait and suppresses its own pause', () => {
+  // The relay pauses the film so it does not run away from an unfetched seek
+  // target. That pause is internal, and the next room tick must not start the
+  // film again. The wait also travels as buffering, so same fate can hold the
+  // room instead of letting the guest fall behind.
+  const apply = source.slice(source.indexOf('const result = remote.handle(message);'));
+  const body = apply.slice(0, apply.indexOf('const action = message.action'));
+  assert.match(body, /remoteMediaEcho\(result, previous, message\)/);
+  assert.match(body, /if \(echo\) remoteEcho = echo/);
+  const report = source.slice(source.indexOf('function reportMedia'));
+  const reportBody = report.slice(0, report.indexOf('setInterval(reportMedia'));
+  assert.match(reportBody, /remote\.bufferWaitActive\(\)[\s\S]*?state\.buffering = true/);
+});
+
+test('a local act held by the echo guard names the drop', () => {
+  const act = source.slice(source.indexOf('const act = (action) =>'));
+  const body = act.slice(0, act.indexOf('for (const [type, action]'));
+  assert.match(body, /relay\.localDrops\.echo/);
+  assert.match(body, /relay\.lastLocalDrop = \{/);
+  assert.match(body, /publishRelay\(\)/);
+});
+
+test('a local media act keeps its kind for the host', () => {
+  // The host applies a pause at its own playhead and a seek at the peer's.
+  // A boolean action lost that difference and let a peer's lag move the host.
+  assert.match(source, /state\.action = typeof userAction === 'string' \? userAction : Boolean\(userAction\)/);
+  assert.match(source, /\['play', 'play'\]/);
+  assert.match(source, /\['pause', 'pause'\]/);
+  assert.match(source, /\['seeked', 'seek'\]/);
+  assert.match(source, /\['ratechange', 'rate'\]/);
 });
 
 test('a film report names the instant its position was read', () => {

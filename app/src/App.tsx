@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Minus, Users, X } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UpdateDialog } from '@/components/update-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Browsers } from '@/screens/browsers';
 import { Prepare } from '@/screens/prepare';
 import { FriendsDialog } from '@/screens/friends';
 import { JoinDialog } from '@/screens/join';
@@ -30,7 +29,7 @@ import {
 } from '@/lib/host';
 import { checkForUpdate, skip, skipped, type Update } from '@/lib/update';
 
-type Step = 'welcome' | 'browsers' | 'prepare' | 'room' | 'peer';
+type Step = 'welcome' | 'prepare' | 'room' | 'peer';
 
 const NAME_KEY = 'brosr-name';
 const ROOM_NAME_KEY = 'brosr-room-name';
@@ -54,6 +53,9 @@ export default function App() {
     }
   });
   const [browser, setBrowser] = useState<Browser | null>(null);
+  const [browsers, setBrowsers] = useState<Browser[]>([]);
+  const [browsersLoading, setBrowsersLoading] = useState(true);
+  const [browserError, setBrowserError] = useState('');
   const [run, setRun] = useState<Run | null>(null);
   const [guest, setGuest] = useState<Joined | null>(null);
   const [rooms, setRooms] = useState<DiscoveredRoom[]>([]);
@@ -107,6 +109,31 @@ export default function App() {
       live = false;
     };
   }, []);
+
+  // The first screen owns the browser choice. Hosting, a discovered room and a
+  // pasted invite all use this one selection, so no later screen asks again.
+  const scanBrowsers = useCallback(async () => {
+    setBrowsersLoading(true);
+    setBrowserError('');
+    try {
+      const found = await detect();
+      setBrowsers(found.browsers);
+      setBrowser((current) => {
+        const ready =
+          current &&
+          found.browsers.some((entry) => entry.id === current.id && entry.supported);
+        return ready ? current : found.browsers.find((entry) => entry.supported) || null;
+      });
+    } catch (cause) {
+      setBrowserError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBrowsersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    scanBrowsers();
+  }, [scanBrowsers]);
 
   useEffect(() => {
     try {
@@ -214,15 +241,22 @@ export default function App() {
     setJoiningRoom(room.room);
     setJoinError('');
     try {
-      const found = await detect();
-      const chosen = found.browsers.find((entry) => entry.supported);
-      if (!chosen) throw new Error('No browser on this machine can join a room.');
-      enterPeer(await joinRoom(room.url, chosen.id, name));
+      if (!browser || !browser.supported) throw new Error('Choose a browser first.');
+      enterPeer(await joinRoom(room.url, browser.id, name));
     } catch (cause) {
       setJoinError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setJoiningRoom('');
     }
+  }
+
+  function hostRoom() {
+    if (!browser || !browser.supported) {
+      setJoinError('Choose a browser first.');
+      return;
+    }
+    setJoinError('');
+    setStep('prepare');
   }
 
   // The window has no title bar, so the strip at the top is the handle. A
@@ -318,20 +352,19 @@ export default function App() {
                 tailnet={tailnet}
                 joining={joiningRoom}
                 discoveryError={discoveryError || joinError}
+                browsers={browsers}
+                browserId={browser?.id ?? ''}
+                detectingBrowsers={browsersLoading}
+                browserError={browserError}
+                onBrowser={(id) =>
+                  setBrowser(browsers.find((entry) => entry.id === id) || null)
+                }
+                onRescan={scanBrowsers}
                 onName={setName}
-                onNext={() => setStep('browsers')}
+                onNext={hostRoom}
                 onJoin={() => setJoinOpen(true)}
                 onJoinRoom={joinDiscovered}
                 onFriends={() => setFriendsOpen(true)}
-              />
-            ) : null}
-
-            {step === 'browsers' ? (
-              <Browsers
-                selected={browser}
-                onSelect={setBrowser}
-                onContinue={() => setStep('prepare')}
-                onBack={() => setStep('welcome')}
               />
             ) : null}
 
@@ -345,7 +378,7 @@ export default function App() {
                   setRun(next);
                   setStep('room');
                 }}
-                onBack={() => setStep('browsers')}
+                onBack={() => setStep('welcome')}
               />
             ) : null}
 
@@ -354,7 +387,7 @@ export default function App() {
                 run={run}
                 onLeave={() => {
                   setRun(null);
-                  setStep('browsers');
+                  setStep('welcome');
                 }}
               />
             ) : null}
@@ -386,6 +419,8 @@ export default function App() {
         open={joinOpen}
         onOpenChange={setJoinOpen}
         name={name}
+        browserId={browser?.id}
+        browserName={browser?.name}
         onJoined={enterPeer}
       />
       <FriendsDialog

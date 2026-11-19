@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Loader2, RefreshCw, Save, Shield, Users } from 'lucide-react';
+import { Check, Loader2, RefreshCw, Save, ScrollText, Shield, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -174,6 +174,13 @@ export function RoomControls({ open, onOpenChange }: Props) {
     state?.cursorSites === null || state?.cursorSites === undefined
       ? true
       : state.cursorSites.includes(site);
+  const scrollSites = [
+    ...new Set([...(state?.scrollSites ?? []), ...(state?.scrollSeen ?? [])]),
+  ].sort((a, b) => siteLabel(a).localeCompare(siteLabel(b)));
+  const scrollOn = (site: string) =>
+    state?.scrollSites === null || state?.scrollSites === undefined
+      ? true
+      : state.scrollSites.includes(site);
   const disabled = Boolean(busy);
 
   return (
@@ -276,6 +283,33 @@ export function RoomControls({ open, onOpenChange }: Props) {
               <Separator />
 
               <section className="flex flex-col gap-2">
+                <p
+                  id="session-log-label"
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+                >
+                  <ScrollText className="size-3.5" aria-hidden="true" />
+                  Session log
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  The host and peer readings from this room, updated in place.
+                </p>
+                {state.log ? (
+                  <pre
+                    aria-labelledby="session-log-label"
+                    className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+                  >
+                    {state.log}
+                  </pre>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    The room has not sent a session log yet.
+                  </p>
+                )}
+              </section>
+
+              <Separator />
+
+              <section className="flex flex-col gap-2">
                 <p className="text-xs font-medium text-muted-foreground">Room</p>
                 <div className="flex items-center gap-2">
                   <Input
@@ -356,6 +390,39 @@ export function RoomControls({ open, onOpenChange }: Props) {
                     ))}
                   </div>
                 ) : null}
+              </section>
+
+              <Separator />
+
+              <section className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-muted-foreground">Mirror sites</p>
+                <p className="text-xs text-muted-foreground">
+                  Choose where the room follows scroll and accepts clicks and typing. A site
+                  joins the list after someone visits it.
+                </p>
+                {scrollSites.length ? (
+                  <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+                    {scrollSites.map((site) => (
+                      <label
+                        key={site}
+                        className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border p-2 hover:bg-accent/40"
+                      >
+                        <span className="min-w-0 truncate text-sm" title={site}>
+                          {siteLabel(site)}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={scrollOn(site)}
+                          disabled={disabled}
+                          onChange={() => act('scroll-site', { site, on: !scrollOn(site) })}
+                          className="size-4 shrink-0 accent-primary"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No sites yet.</p>
+                )}
               </section>
 
               <Separator />

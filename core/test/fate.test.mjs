@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRoomClient, STUTTER_MAX_MS } from '../sync.mjs';
 import { encode } from '../protocol.mjs';
-import { RELAY_HOLD_MAX_MS, RemoteMediaSync } from '../media-relay.mjs';
+import { RELAY_BUFFER_WAIT_MS, RELAY_HOLD_MAX_MS, RemoteMediaSync } from '../media-relay.mjs';
 
 const KEY = 'http://127.0.0.1:8787/media/clip.webm';
 
@@ -152,6 +152,8 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(ignored.ignored, 'hold');
   assert.equal(video.paused, true);
+  assert.equal(guest.publish().mediaDropTicks.hold, 1);
+  assert.equal(guest.publish().lastMediaDrop, null, 'a tick is not a dropped act');
 
   guest.receive(
     encode({
@@ -181,6 +183,87 @@ test('a host stutter holds a guest and a routine tick cannot resume it', () => {
   );
   assert.equal(applied.ok, true);
   assert.equal(video.paused, false);
+});
+
+test('a source seek during a hold moves the release point instead of being dropped', () => {
+  let local = 1000;
+  const holds = [];
+  const relayed = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    sameFate: true,
+    now: () => local,
+    overlay: false,
+    send: () => {},
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+    onHold: (hold) => holds.push(hold),
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
+  host.setGrant('brave', true);
+  host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'brave',
+      key: KEY,
+      position: 10,
+      playing: true,
+      active: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(host.publish().stutter.active, true);
+
+  local += 500;
+  const absorbed = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'brave',
+      key: KEY,
+      action: 'seek',
+      position: 30,
+      playing: true,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(absorbed.held, true);
+  assert.equal(absorbed.action, 'seek');
+  assert.equal(relayed.length, 0, 'the film stays held until release');
+  assert.equal(host.publish().mediaDrops.hold, undefined);
+  assert.equal(host.publish().mediaDropTicks.hold, undefined);
+  assert.equal(host.publish().lastMediaAction.text, 'Bob jumped to 0:30');
+  assert.equal(host.publish().lastMediaAction.position, 30);
+  assert.equal(host.publish().holds.length, 1);
+  assert.equal(host.publish().holds[0].peerId, 'brave');
+  assert.equal(host.publish().holds[0].position, 30);
+  assert.equal(host.publish().lastHoldEvent.active, true);
+  assert.equal(host.publish().lastHoldEvent.position, 30);
+
+  local += 500;
+  host.receive(
+    encode({
+      type: 'stutter',
+      peerId: 'brave',
+      key: KEY,
+      position: 30,
+      playing: true,
+      active: false,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(holds.at(-1).active, false);
+  assert.equal(holds.at(-1).position, 30, 'the release lands on the absorbed seek');
+  assert.equal(host.publish().holds.length, 0);
+  assert.equal(host.publish().lastHoldEvent.active, false);
+  assert.equal(host.publish().lastHoldEvent.position, 30);
 });
 
 test('a hold with no recovery report releases itself', () => {
@@ -230,6 +313,73 @@ test('a held film stays paused until the release carries the resume point', () =
 
   sync.handle({ key: KEY, position: 10, playing: true, hold: false, at: now });
   assert.equal(sync.held, false);
+  assert.equal(video.paused, false);
+});
+
+test('a room hold does not discard the buffer wait that caused it', () => {
+  let now = 10000;
+  const video = fakeVideo();
+  video.currentTime = 10;
+  video.paused = false;
+  video.buffered = { length: 1, start: () => 0, end: () => 60 };
+  const sync = new RemoteMediaSync({
+    document: { querySelector: () => video },
+    href: KEY,
+    hostname: '127.0.0.1',
+    now: () => now,
+  });
+
+  const waiting = sync.handle({ key: KEY, position: 100, playing: true, at: now });
+  assert.equal(waiting.skipped, 'buffer');
+  assert.equal(video.paused, true);
+  assert.equal(sync.waitingSince, now);
+
+  // Same fate answers the buffering report with a hold. The hold is not a
+  // reason to forget the seek target, because the release must not start the
+  // film at the old point and immediately hold it again.
+  sync.handle({ key: KEY, position: 10, playing: true, hold: true, at: now });
+  assert.equal(sync.held, true);
+  assert.equal(sync.waitingSince, now);
+
+  now += 500;
+  const released = sync.handle({ key: KEY, position: 100, playing: true, hold: false, at: now });
+  assert.equal(released.skipped, 'buffer');
+  assert.equal(video.paused, true);
+
+  video.buffered = { length: 1, start: () => 0, end: () => 200 };
+  const landed = sync.handle({ key: KEY, position: 100, playing: true, hold: false, at: now });
+  assert.equal(landed.action, 'seek');
+  assert.equal(video.currentTime, 100);
+  assert.equal(video.paused, false);
+});
+
+test('a hold that outlasts the buffer deadline lands the seek on release', () => {
+  let now = 10000;
+  const video = fakeVideo();
+  video.currentTime = 10;
+  video.paused = false;
+  video.buffered = { length: 1, start: () => 0, end: () => 60 };
+  const sync = new RemoteMediaSync({
+    document: { querySelector: () => video },
+    href: KEY,
+    hostname: '127.0.0.1',
+    now: () => now,
+  });
+
+  sync.handle({ key: KEY, position: 100, playing: true, at: now });
+  sync.handle({ key: KEY, position: 10, playing: true, hold: true, at: now });
+  now += RELAY_BUFFER_WAIT_MS + 1;
+
+  // The room is still holding, and the film tab stops reporting buffering so
+  // the host can release. The seek waits for that release.
+  const stillHeld = sync.handle({ key: KEY, position: 10, playing: true, hold: true, at: now });
+  assert.equal(stillHeld.action, 'hold');
+  assert.equal(sync.waitingSince, null);
+  assert.equal(sync.bufferReady, true);
+
+  const released = sync.handle({ key: KEY, position: 100, playing: true, hold: false, at: now });
+  assert.equal(released.action, 'seek');
+  assert.equal(video.currentTime, 100);
   assert.equal(video.paused, false);
 });
 

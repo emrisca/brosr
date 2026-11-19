@@ -2,6 +2,7 @@
 // loopback panel peer, sends one app message, waits for the host tab's answer,
 // and closes. The host tab checks the token before it changes anything.
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { formatAddress } from '../core/friends.mjs';
 import { PANEL_APP, PANEL_PEER } from '../core/panel.mjs';
 import { decode, encode } from '../core/protocol.mjs';
@@ -9,6 +10,28 @@ import { openFrame, roomKey, sealFrame } from '../core/seal.mjs';
 import { readJoin, readRun } from './room.mjs';
 
 const TIMEOUT_MS = 8000;
+const require = createRequire(import.meta.url);
+const { buildSyncReport } = require('../bridge/panel/sync-report.js');
+
+// The room tab sends the current room and film readings. The app shows the
+// same report in Room controls, so the host turns that state into one text log
+// before it crosses the loopback socket.
+function withRoomLog(state) {
+  if (!state || !state.diagnostics) return state;
+  const data = {
+    ...state.diagnostics,
+    role: state.diagnostics.role || state.role,
+    peerId: state.diagnostics.peerId || state.peerId,
+  };
+  return {
+    ...state,
+    log: buildSyncReport(
+      { room: data.room, roomName: data.roomName, role: data.role, data },
+      data.reading || null,
+      { now: Date.now(), surface: 'host app', readingReply: data.readingReply || null }
+    ),
+  };
+}
 
 export async function panelCommand({ action = 'status', ...params } = {}, { guest = false } = {}) {
   // The host tab owns the full control state. A guest tab owns a read-only
@@ -91,7 +114,7 @@ export async function panelCommand({ action = 'status', ...params } = {}, { gues
         return finish(error);
       }
       if (!data.state || typeof data.state !== 'object') return finish(new Error('The room sent no control state.'));
-      finish(null, data.state);
+      finish(null, withRoomLog(data.state));
     });
     socket.addEventListener('error', () => finish(new Error('Could not reach the room control channel.')));
     socket.addEventListener('close', () => {

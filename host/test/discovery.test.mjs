@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { discoverRooms, tailnetFromStatus, tailscaleBinaries } from '../discovery.mjs';
+import {
+  discoverRooms,
+  tailnetFromStatus,
+  tailscaleBinaries,
+  tailscaleStatus,
+} from '../discovery.mjs';
 
 const status = {
   Self: { HostName: 'here' },
@@ -46,6 +51,27 @@ test('a mac checks the Apple silicon Homebrew tailscale path', () => {
   const homebrew = binaries.indexOf('/opt/homebrew/bin/tailscale');
   assert.ok(homebrew >= 0, 'the Apple silicon Homebrew path is missing');
   assert.ok(homebrew < binaries.indexOf('/usr/local/bin/tailscale'));
+});
+
+test('a mac app bundle CLI is forced into CLI mode', () => {
+  const calls = [];
+  const spawn = (binary, args, options) => {
+    calls.push({ binary, args, options });
+    if (binary === '/Applications/Tailscale.app/Contents/MacOS/Tailscale') {
+      return { status: 0, stdout: JSON.stringify(status), error: null };
+    }
+    return { status: null, stdout: '', error: new Error('not found') };
+  };
+
+  const parsed = tailscaleStatus({ spawn, platform: 'darwin' });
+  assert.equal(parsed.tailnet, true);
+  assert.equal(parsed.peers.length, 2);
+  const bundle = calls.find(
+    (call) => call.binary === '/Applications/Tailscale.app/Contents/MacOS/Tailscale'
+  );
+  assert.ok(bundle, 'the app bundle CLI was not tried');
+  assert.equal(bundle.args.join(' '), 'status --json');
+  assert.equal(bundle.options.env.TAILSCALE_BE_CLI, '1');
 });
 
 test('discovery reads live rooms, rejects public links and removes duplicates', async () => {

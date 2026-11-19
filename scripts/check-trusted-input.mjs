@@ -34,6 +34,7 @@ import { findZen } from '../zen/profile.mjs';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PANEL_HTML = path.join(root, 'bridge', 'panel', 'room.html');
 const PANEL_JS = path.join(root, 'bridge', 'panel', 'room.js');
+const PANEL_REPORT = path.join(root, 'bridge', 'panel', 'sync-report.js');
 const PANEL_CSS = path.join(root, 'bridge', 'panel', 'room.css');
 const HELPER = path.join(root, 'host', 'trust.mjs');
 const TOKEN = 'check-trusted-token';
@@ -283,6 +284,10 @@ function serve() {
     }
     if (url.pathname === '/panel.html') {
       send('text/html; charset=utf-8', panelPage(origin.value));
+      return;
+    }
+    if (url.pathname === '/sync-report.js') {
+      send('text/javascript; charset=utf-8', fs.readFileSync(PANEL_REPORT));
       return;
     }
     if (url.pathname === '/room.js') {

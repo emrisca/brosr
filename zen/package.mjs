@@ -35,7 +35,7 @@ const CORE = [
   'youtube.mjs',
   'media-relay.mjs',
 ];
-const PANEL = ['room.html', 'room.css', 'room.js'];
+const PANEL = ['room.html', 'room.css', 'sync-report.js', 'room.js'];
 const ICONS = [16, 32, 48, 96, 128];
 const ACTIONS = ['action-16.png', 'action-32.png', 'action-48.png'];
 

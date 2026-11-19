@@ -29,3 +29,25 @@ test('the app argument builder keeps the schema key names', () => {
   assert.match(host, /export type PanelValues/);
   assert.match(host, /`--\$\{key\}=\$\{String\(value\)\}`/);
 });
+
+test('the first screen picks the browser for both paths', () => {
+  const welcome = fs.readFileSync(path.join(app, 'screens', 'welcome.tsx'), 'utf8');
+  const join = fs.readFileSync(path.join(app, 'screens', 'join.tsx'), 'utf8');
+  const screen = fs.readFileSync(path.join(app, 'App.tsx'), 'utf8');
+  const link = fs.readFileSync(path.join(app, 'lib', 'host.ts'), 'utf8');
+  const cli = fs.readFileSync(path.join(here, '..', 'cli.mjs'), 'utf8');
+
+  // The choice lives on the first screen. Discovery and a pasted link both use
+  // it instead of detecting a second time and taking the first build.
+  assert.match(welcome, /id="start-browser"/);
+  assert.match(welcome, /browsers\.map/);
+  assert.match(screen, /joinRoom\(room\.url, browser\.id, name\)/);
+  assert.doesNotMatch(screen, /step === 'browsers'/);
+  assert.doesNotMatch(join, /id="join-browser"/);
+  assert.match(join, /browserId/);
+
+  // The backend receives that id, so a discovery join can open Zen when Zen
+  // is chosen even when Firefox comes first in the scan.
+  assert.match(link, /--browser=\$\{browser\}/);
+  assert.match(cli, /browser: arg\('browser'\) \|\| undefined/);
+});
