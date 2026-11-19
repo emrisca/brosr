@@ -88,6 +88,18 @@ test('the host room tab reads its own film without the page helper', () => {
   assert.doesNotMatch(body, /pageHref\(\)/);
 });
 
+test('a film tab reports the room rate instead of its own nudge', () => {
+  // A tab that follows the room runs a temporary rate correction. Reporting
+  // the element rate sent that correction back out, and every hop divided the
+  // room rate by another 1.05, so the film sank into slow motion.
+  const body = source.slice(
+    source.indexOf('function reportMedia('),
+    source.indexOf('setInterval(reportMedia')
+  );
+  assert.match(body, /rate: remote\.reportedRate\(\)/);
+  assert.doesNotMatch(body, /mediaStateFromDocument\(document, pageHref\(\), location\.hostname\)/);
+});
+
 test('a host greets a guest that joins a paused room', () => {
   // The host sent its anchor only when the state changed. A guest that joined a
   // paused room received no frame at all, so its film tab applied nothing and

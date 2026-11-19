@@ -432,6 +432,28 @@ test('a small gap gets a rate nudge instead of a seek', () => {
   assert.equal(sync.stats.seeks, 0);
 });
 
+test('a following tab reports the room rate, not the nudge it is running', () => {
+  const video = fakeVideo({ currentTime: 100 });
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => 10000,
+  });
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: 10000 });
+  video.currentTime = 100.5;
+  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: 10000 });
+
+  assert.ok(Math.abs(video.playbackRate - 1 / 1.05) < 1e-9, 'the element runs the nudge');
+  assert.equal(sync.reportedRate(), 1, 'the report names the rate the room asked for');
+
+  const state = mediaStateFromDocument(fakeDoc(video, cleanRoot), ytHref, ytHost, {
+    rate: sync.reportedRate(),
+  });
+  assert.equal(state.rate, 1, 'the nudge never travels back out as the room rate');
+  assert.equal(video.playbackRate, 1 / 1.05, 'the element keeps its own correction');
+});
+
 test('a paused room stops a moving video before a drift seek', () => {
   const video = fakeVideo({ currentTime: 100, paused: false });
   const sync = new RemoteMediaSync({

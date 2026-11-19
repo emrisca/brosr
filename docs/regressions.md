@@ -88,3 +88,4 @@ crosses that boundary does not count.
 5. Every policy returns allow plus a reason.
 6. Every fix gets a failing test at the boundary that failed.
 | A peer with control opens a new tab and a copy opens by itself on the host and every other peer | The replay repeated the new-tab default of every `_blank` link, so an outside site the peer opened became a tab here, while that peer browser already published it as an offer | `core/test/input.test.mjs` |
+| A granted peer jumps around the film and playback sinks into slow motion | The rate a following tab reported came from its own nudged element, so each hop divided the room rate by 1.05 again and the rate decayed for the rest of the session | `core/test/media-relay.test.mjs`, `core/test/entry-capture.test.mjs` |

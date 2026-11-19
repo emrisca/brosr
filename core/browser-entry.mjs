@@ -411,7 +411,12 @@ async function startPageMedia() {
     document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
   });
   function reportMedia(userAction = false) {
-    const state = mediaStateFromDocument(document, pageHref(), location.hostname);
+    // A tab that follows the room runs a temporary rate correction. The report
+    // names the rate the room asked for, or each hop divides that correction
+    // again and the film sinks into slow motion for the rest of the session.
+    const state = mediaStateFromDocument(document, pageHref(), location.hostname, {
+      rate: remote.reportedRate(),
+    });
     if (!state) return;
     // The position belongs to this instant, so the report names it. The room
     // sends the report a moment later, and a frame that stamped the send would

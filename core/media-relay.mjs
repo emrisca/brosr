@@ -149,7 +149,8 @@ export function mediaTitle(doc) {
 export function mediaStateFromDocument(
   doc = typeof document === 'undefined' ? null : document,
   href = '',
-  hostname = ''
+  hostname = '',
+  { rate = null } = {}
 ) {
   if (!doc || typeof doc.querySelector !== 'function') return null;
   const video = doc.querySelector(VIDEO_SELECTOR);
@@ -163,7 +164,13 @@ export function mediaStateFromDocument(
     position: Number(video.currentTime || 0),
     duration: Number(video.duration || 0),
     playing: !video.paused && !video.ended,
-    rate: Number(video.playbackRate || 1),
+    // A tab that follows the room runs a temporary nudge. The report names the
+    // room rate when the caller knows it, or every hop divides that nudge
+    // again and the film sinks into slow motion for the rest of the session.
+    rate:
+      Number.isFinite(Number(rate)) && Number(rate) > 0
+        ? Number(rate)
+        : Number(video.playbackRate || 1),
     volume: Number(video.volume ?? 1),
     buffering: Number(video.readyState ?? 0) < 2,
     ad: yt ? adPlayingFrom(doc.querySelector(AD_ROOT)) : false,
@@ -454,6 +461,9 @@ export class RemoteMediaSync {
     // A tab that has never applied a frame has no position of its own. Its
     // first frame seeds the player, so it seeks rather than nudges.
     this.primed = false;
+    // The rate the room asked for. A nudge is this tab's own correction, so it
+    // never becomes the rate this tab reports back to the room.
+    this.roomRate = null;
     // A room hold pauses the film until the source that stuttered is ready.
     // Without this flag a routine host tick would start it again underneath
     // the hold.
@@ -483,6 +493,13 @@ export class RemoteMediaSync {
     list.push(event);
     if (list.length > RELAY_HISTORY_LIMIT) list.shift();
     return event;
+  }
+
+  // The room rate this tab follows, or null before the first frame. A report
+  // built from the element would carry a nudge back out, and each hop would
+  // divide it again, which is the slow motion that grew with the session.
+  reportedRate() {
+    return this.roomRate;
   }
 
   historyView() {
@@ -587,6 +604,10 @@ export class RemoteMediaSync {
     const yt = isYouTubeHost(this.pageHostname());
     const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
+    // The rate the room asked this tab to follow. Everything below corrects
+    // against that rate and never against the corrected element.
+    const roomRate = Number(frame.rate || 1);
+    if (Number.isFinite(roomRate) && roomRate > 0) this.roomRate = roomRate;
     // A hold is not a playhead correction. It pauses this tab and keeps it
     // paused until the room sends the release that carries the source's
     // position. A normal tick during that window must not resume the film.
@@ -762,12 +783,11 @@ export class RemoteMediaSync {
       return { ok: true, action: 'seek', drift: Math.round(drift * 1000) / 1000 };
     }
 
-    const rate = Number(frame.rate || 1);
     if (!paused && Math.abs(drift) > RELAY_NUDGE_SECONDS) {
-      const nudge = drift < 0 ? rate * RELAY_NUDGE_RATE : rate / RELAY_NUDGE_RATE;
+      const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
       if (Math.abs(Number(video.playbackRate || 1) - nudge) > 0.001) video.playbackRate = nudge;
-    } else if (Math.abs(Number(video.playbackRate || 1) - rate) > 0.001) {
-      video.playbackRate = rate;
+    } else if (Math.abs(Number(video.playbackRate || 1) - roomRate) > 0.001) {
+      video.playbackRate = roomRate;
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need
