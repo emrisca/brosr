@@ -268,3 +268,56 @@ test('a granted click follows a link, because a dispatched click cannot', () => 
   replayInput([{ kind: 'click', path: '#tile' }], { root });
   assert.deepEqual(navigations, []);
 });
+
+test('a replayed click opens a copy only for a page of this room', () => {
+  const opened = [];
+  const navigations = [];
+  function link(href) {
+    const node = {
+      tagName: 'A',
+      href,
+      target: '_blank',
+      ownerDocument: null,
+      closest: (selector) => (selector === 'a[href]' ? node : null),
+      getAttribute: () => null,
+      hasAttribute: () => false,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
+      dispatchEvent: () => true,
+    };
+    return node;
+  }
+  const tile = link('https://room.test/canvas/');
+  const outside = link('https://www.youtube.com/');
+  const root = {
+    activeElement: null,
+    location: { origin: 'https://room.test', assign: (url) => navigations.push(url) },
+    defaultView: {
+      Event: class {},
+      MouseEvent: class {
+        constructor(type) {
+          this.type = type;
+        }
+      },
+      KeyboardEvent: class {},
+      WheelEvent: class {},
+    },
+    querySelectorAll: (path) => {
+      if (path === '#tile') return [tile];
+      if (path === '#outside') return [outside];
+      return [];
+    },
+    dispatchEvent: () => true,
+  };
+
+  const result = replayInput(
+    [
+      { kind: 'click', path: '#tile' },
+      { kind: 'click', path: '#outside' },
+    ],
+    { root, openTab: (href) => opened.push(href) }
+  );
+
+  assert.equal(result.applied, 2, 'both clicks still reach the page');
+  assert.deepEqual(opened, ['https://room.test/canvas/'], 'only the room tile opens a copy');
+  assert.deepEqual(navigations, [], 'a new-tab link never replaces this page');
+});

@@ -22,7 +22,8 @@ to the people testing it.
 **Layer 1 detail.** A shared tab is an offer, not an instruction. The host and any granted peer
 publish the tabs they open, and the landing page lists them under that person's name. A peer
 opens a copy by clicking a row, and closing that copy leaves the sync without closing anyone
-else's tab. A joined row says Synced and offers Stop, which detaches the copy and leaves the
+else's tab. A new tab that a peer with control opens on another site reaches the room as an
+offer in the same way, and no other browser opens a copy of it by itself. A joined row says Synced and offers Stop, which detaches the copy and leaves the
 tab open. A row whose tab has a player says whether it is playing or paused. A peer with
 control drives playback from its own copy, and the room follows it. A copy this browser stopped stays in
 the room panel's stopped list, the panel header shows how many are waiting, and Resume puts that

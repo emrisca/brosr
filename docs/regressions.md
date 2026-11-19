@@ -87,3 +87,4 @@ crosses that boundary does not count.
 4. Build identity travels with the room.
 5. Every policy returns allow plus a reason.
 6. Every fix gets a failing test at the boundary that failed.
+| A peer with control opens a new tab and a copy opens by itself on the host and every other peer | The replay repeated the new-tab default of every `_blank` link, so an outside site the peer opened became a tab here, while that peer browser already published it as an offer | `core/test/input.test.mjs` |

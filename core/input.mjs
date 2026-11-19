@@ -223,11 +223,21 @@ function dispatch(root, element, event) {
 }
 
 // A real click follows a link. A dispatched click does not, because a browser
-// never runs an untrusted event's default action. A tile that opens a page is
-// a link, so the room repeats the one default it needs after the page has seen
-// the click. A tile names a new tab. Replaying that click cannot open one from
-// the page, because a page without a gesture is refused, so the receiver asks
-// its browser through the hook the entry passes in.
+// never runs an untrusted event's default action. A room tile that opens a page
+// is a link, so the room repeats the one default it needs after the page has
+// seen the click. A room tile names a new tab. Replaying that click cannot open
+// one from the page, because a page without a gesture is refused, so the
+// receiver asks its browser through the hook the entry passes in.
+// Only a page of this room is repeated that way. A link to another site is the
+// sender's own visit, and their browser publishes that tab as an offer, so a
+// copy that opened here would be one nobody asked for.
+function sameOrigin(href, location) {
+  const page = location ? String(location.origin || location.href || '') : '';
+  const here = normalizeOrigin(page);
+  if (!here) return false;
+  return normalizeOrigin(href) === here;
+}
+
 function activateLink(target, root, record = {}, openTab = null) {
   if (record.button) return false;
   const link =
@@ -237,14 +247,17 @@ function activateLink(target, root, record = {}, openTab = null) {
   const href = String(link.href || '');
   if (!href || /^\s*javascript:/i.test(href)) return false;
   const targetName = String(link.target || '').toLowerCase();
+  const doc = root && root.location ? root : link.ownerDocument;
   if (targetName && targetName !== '_self') {
     // A named frame or window has no meaning on this page, so only a new tab
     // is repeated. The room tab itself must keep its socket, which is why the
     // page is not assigned here.
     if (targetName !== '_blank' || !openTab) return false;
+    // A peer's tab on an outside site reaches everyone as an offer, so the
+    // click that created it is not repeated here as an unasked copy.
+    if (!sameOrigin(href, doc && doc.location)) return false;
     return openTab(href) !== false;
   }
-  const doc = root && root.location ? root : link.ownerDocument;
   const location = doc && doc.location;
   if (!location || typeof location.assign !== 'function') return false;
   location.assign(href);
