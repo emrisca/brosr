@@ -97,8 +97,8 @@ test('a host greets a guest that joins a paused room', () => {
   assert.match(body, /relayedMedia\.state\(\)/);
   assert.match(
     body,
-    /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor, at: Date\.now\(\) \}\)/,
-    'the projected anchor is sent as it stands'
+    /client\.sendHostMedia\(\{ \.\.\.relayedMedia\.latest, \.\.\.anchor, action: false, at: Date\.now\(\) \}\)/,
+    'the projected anchor is sent as it stands, without replaying an old act'
   );
   assert.match(body, /greeted\.delete\(id\)/, 'a rejoin is greeted again');
   // A guest usually opens the room first, so the greet can arrive before its
@@ -106,9 +106,35 @@ test('a host greets a guest that joins a paused room', () => {
   assert.match(body, /Date\.now\(\) - greetedAt < 2000/);
 });
 
+test('a replayed host anchor does not open the host priority window', () => {
+  const greet = source.slice(source.indexOf('const greeted = new Set()'));
+  const body = greet.slice(0, greet.indexOf('}, 500);'));
+  assert.match(body, /action: false/);
+});
+
+test('a film reading answers through sendResponse in both engines', () => {
+  // Chrome does not guarantee a promise reply from a message listener. The
+  // callback form works in Chrome and Firefox, so a host on Chrome is not left
+  // with an unexplained unavailable reading.
+  assert.match(source, /runtime\.onMessage\.addListener\(\(message, sender, sendResponse\)/);
+  const read = source.slice(source.indexOf("if (message.type === 'brosr:relay-reading')"));
+  const body = read.slice(0, read.indexOf("if (message.type !== 'brosr:media-apply')"));
+  assert.match(body, /if \(typeof sendResponse === 'function'\)/);
+  assert.match(body, /sendResponse\(reading\)/);
+  assert.match(body, /return undefined;/);
+});
+
 test('a click flushes at once, so a link cannot unload the page first', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
   assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
+});
+
+test('a guest keeps the film title carried by the room frame', () => {
+  assert.match(
+    source,
+    /roomMedia = \{[\s\S]*?title: String\(message\.title \|\| ''\)\.slice\(0, 120\)/
+  );
+  assert.match(source, /music: Boolean\(message\.music\)/);
 });
 
 test('a film report refreshes presence while its room tab is hidden', () => {

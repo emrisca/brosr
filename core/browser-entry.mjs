@@ -298,7 +298,7 @@ async function startPageMedia() {
   // with the action it was told to perform. Only that action is an echo; a
   // person's pause after a remote seek is a new act and must travel.
   let remoteEcho = null;
-  runtime.onMessage.addListener((message) => {
+  runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
       placeCursor(message.position);
@@ -328,9 +328,7 @@ async function startPageMedia() {
       // stay silent, or Chrome returns that empty answer before the top frame
       // can report the film it holds.
       if (!video) return undefined;
-      // A bare object is not an answer in Gecko, so this page returns a
-      // promise like the room tab does through sendResponse.
-      return Promise.resolve({
+      const reading = {
         ok: true,
         requestId: message.requestId || null,
         // The panel needs the relay's own counts, not only the room's. A film
@@ -340,7 +338,15 @@ async function startPageMedia() {
         position: Number(video.currentTime || 0),
         duration: Number(video.duration || 0),
         paused: Boolean(video.paused),
-      });
+      };
+      // Chrome does not guarantee that a listener may return a promise. The
+      // callback form works in both Chrome and Firefox, so the reading uses it
+      // instead of looking like a silent timeout on the host.
+      if (typeof sendResponse === 'function') {
+        sendResponse(reading);
+        return undefined;
+      }
+      return Promise.resolve(reading);
     }
     if (message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
@@ -875,6 +881,8 @@ export async function start() {
       const at = Number(message.at) || Date.now();
       roomMedia = {
         key: message.key,
+        title: String(message.title || '').slice(0, 120),
+        music: Boolean(message.music),
         position,
         duration: 0,
         playing: Boolean(message.playing),
@@ -1187,8 +1195,10 @@ export async function start() {
     if (!anchor) return;
     greetedAt = Date.now();
     // The projection already names this instant, so the report is sent as it
-    // stands rather than carried forward a second time.
-    client.sendHostMedia({ ...relayedMedia.latest, ...anchor, at: Date.now() });
+    // stands rather than carried forward a second time. The greeting repeats
+    // an anchor, so it must not replay an old host action and reopen the
+    // host-priority window on every repeat.
+    client.sendHostMedia({ ...relayedMedia.latest, ...anchor, action: false, at: Date.now() });
   }, 500);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees

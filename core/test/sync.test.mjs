@@ -271,6 +271,9 @@ test('a host act stays in front of a granted peer for a moment', () => {
   assert.equal(blocked.ignored, 'host-priority');
   assert.equal(host.publish().mediaDrops['host-priority'], 1);
   assert.equal(host.publish().lastMediaDrop.reason, 'host-priority');
+  assert.equal(host.publish().lastMediaDrop.position, 12);
+  assert.equal(host.publish().lastMediaDrop.name, 'Bob');
+  assert.ok(host.publish().hostPriority.remainingMs > 0);
 
   local = 1000 + HOST_MEDIA_PRIORITY_MS + 1;
   const allowed = host.receive(
@@ -287,6 +290,40 @@ test('a host act stays in front of a granted peer for a moment', () => {
   );
   assert.equal(allowed.ok, true);
   assert.equal(allowed.relayed, true);
+  assert.equal(host.publish().hostPriority.remainingMs, 0);
+});
+
+test('the host film title travels with its media anchor', () => {
+  const local = 1000;
+  const sent = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sent.push(JSON.parse(frame)),
+    overlay: false,
+    onMedia: () => true,
+  });
+
+  assert.equal(
+    host.sendHostMedia(
+      {
+        key: KEY,
+        title: 'I relapsed...',
+        music: false,
+        position: 12,
+        playing: false,
+        rate: 1,
+        at: local,
+      },
+      local
+    ),
+    true
+  );
+  const frame = sent.at(-1);
+  assert.equal(frame.title, 'I relapsed...');
+  assert.equal(frame.music, false);
 });
 
 test('a host report of a peer act does not open the host window', () => {

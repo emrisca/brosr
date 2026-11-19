@@ -73,6 +73,7 @@ test('the panel draws the room before it reads the film', () => {
   assert.match(source, /withDeadline\(cachedStatus\(\), 1200\)/);
   assert.match(source, /requestId: filmRequestId/);
   assert.match(source, /1500/);
+  assert.match(source, /filmReadingReply = \{ ok: false, reason: 'send-failed' \}/);
   assert.match(source, /function renderBuildWarning/);
   assert.match(source, /function renderCursorDrops/);
 });

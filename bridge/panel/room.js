@@ -1257,6 +1257,7 @@ async function readFilm(reply) {
     filmReading = reading && reading.ok ? reading : null;
   } catch {
     filmReading = null;
+    filmReadingReply = { ok: false, reason: 'send-failed' };
   }
 }
 

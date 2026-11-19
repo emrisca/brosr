@@ -132,6 +132,12 @@
     const peerCount = Number.isFinite(data.peers)
       ? Math.max(data.peers, peers.length)
       : peers.length;
+    const nameFor = (id) => {
+      const peer = peers.find((item) => String(item.id) === String(id));
+      return peer
+        ? `${peer.name || peer.id}${peer.self ? ' (you)' : ''}`
+        : String(id || 'unknown');
+    };
     const media = data.media || null;
     const ownBuild = data.build && (data.build.version || data.build);
     const hostBuild = data.hostBuild && (data.hostBuild.version || data.hostBuild);
@@ -260,6 +266,60 @@
 
     add('Matched copy', offset(data.align && data.align.offsetMs));
 
+    const holds = Array.isArray(data.holds) ? data.holds.filter(Boolean) : [];
+    if (holds.length) {
+      add(
+        'Holds',
+        holds
+          .map((hold) => {
+            const age = Number(hold.ageMs);
+            const since = Number.isFinite(age) && age >= 0 ? ` for ${(age / 1000).toFixed(1)} s` : '';
+            return `${nameFor(hold.peerId)}${since} at ${clock(hold.position)}, ${
+              hold.playing ? 'playing' : 'paused'
+            }`;
+          })
+          .join('; ')
+      );
+    }
+    if (data.lastHoldEvent) {
+      const last = data.lastHoldEvent;
+      const at = stamp(last.eventAt);
+      add(
+        'Last hold',
+        `${last.active ? 'started' : 'released'} by ${nameFor(last.peerId)}` +
+          (at ? ` at ${at}` : '') +
+          ` (${clock(last.position)}, ${last.playing ? 'playing' : 'paused'})`
+      );
+    }
+    if (data.hostPriority && present(data.hostPriority.lastActAt)) {
+      const at = stamp(data.hostPriority.lastActAt);
+      const remaining = Math.max(0, Math.round(Number(data.hostPriority.remainingMs) || 0));
+      add(
+        'Host priority',
+        `${remaining > 0 ? `${remaining} ms left` : 'clear'}${
+          at ? `, last host act at ${at}` : ''
+        }`
+      );
+    }
+    if (data.lastMediaFrame) {
+      const last = data.lastMediaFrame;
+      const age = Number(last.ageMs);
+      add(
+        'Last media frame',
+        `${clock(last.position)}, ${last.playing ? 'playing' : 'paused'}` +
+          (Number.isFinite(age) ? `, ${(age / 1000).toFixed(2)} s ago` : '')
+      );
+    }
+    if (data.lastSeek) {
+      const last = data.lastSeek;
+      let text = present(last.target) ? clock(last.target) : '';
+      const at = stamp(last.at);
+      if (at) text += `${text ? ' ' : ''}at ${at}`;
+      const waiting = stamp(last.waitingSince);
+      if (waiting) text += `${text ? ', ' : ''}waiting since ${waiting}`;
+      if (text) add('Last seek', text);
+    }
+
     if (data.lastMediaAction) {
       const last = data.lastMediaAction;
       const at = stamp(last.at);
@@ -278,9 +338,22 @@
     const dropParts = Object.entries(roomDrops)
       .filter(([, count]) => Number(count) > 0)
       .map(([reason, count]) => `${reason}=${Number(count)}`);
-    const localEchoes = Number(localDrops.echo) || 0;
-    if (localEchoes) dropParts.push(`film-tab echo=${localEchoes}`);
     if (dropParts.length) add('Dropped media acts', dropParts.join(', '));
+
+    // A film tab sees the player answer a correction the room just made. That
+    // answer is an echo, not a person's command. Counting it as a dropped act
+    // made a healthy echo guard look like it had swallowed 53 seeks.
+    const localEchoes = Number(localDrops.echo) || 0;
+    if (localEchoes) {
+      const lastEcho = relay && relay.lastLocalDrop ? relay.lastLocalDrop : null;
+      const at = lastEcho ? stamp(lastEcho.at) : '';
+      add(
+        'Suppressed film-tab echoes',
+        `${localEchoes}${lastEcho && lastEcho.action ? `, last ${lastEcho.action}` : ''}${
+          at ? ` at ${at}` : ''
+        }`
+      );
+    }
 
     const tickDrops =
       data.mediaDropTicks && typeof data.mediaDropTicks === 'object'
@@ -291,25 +364,18 @@
       .map(([reason, count]) => `${reason}=${Number(count)}`);
     if (tickParts.length) add('Dropped media ticks', tickParts.join(', '));
 
-    const roomDrop = data.lastMediaDrop ? { ...data.lastMediaDrop, source: 'room' } : null;
-    const localDrop =
-      relay && relay.lastLocalDrop
-        ? { ...relay.lastLocalDrop, source: 'film tab' }
-        : null;
-    const lastDrop =
-      roomDrop && localDrop
-        ? (Number(roomDrop.at) || 0) >= (Number(localDrop.at) || 0)
-          ? roomDrop
-          : localDrop
-        : roomDrop || localDrop;
+    // A suppressed echo is not a dropped command, so the last drop names only
+    // the room path. The echo count above keeps the film-tab detail visible.
+    const lastDrop = data.lastMediaDrop ? { ...data.lastMediaDrop, source: 'room' } : null;
     if (lastDrop) {
       const at = stamp(lastDrop.at);
       const peer = lastDrop.peerId ? `, ${lastDrop.peerId}` : '';
       add(
-        'Last media drop',
-        `${lastDrop.action || 'act'} from ${lastDrop.source} (${lastDrop.reason || 'unknown'}${peer})` +
-          (at ? ` at ${at}` : '')
+        'Last media drop',          `${lastDrop.action || 'act'} from ${lastDrop.source} (${lastDrop.reason || 'unknown'}${peer})` +
+          (at ? ` at ${at}` : '') +
+          (present(lastDrop.position) ? ` (target ${clock(lastDrop.position)})` : '')
       );
+
     }
 
     const control = [];
@@ -361,12 +427,6 @@
     add('Media debug', json(data.debug));
 
     if (Array.isArray(data.viewers) && data.viewers.length) {
-      const nameFor = (id) => {
-        const peer = peers.find((item) => String(item.id) === String(id));
-        return peer
-          ? `${peer.name || peer.id}${peer.self ? ' (you)' : ''}`
-          : String(id || 'unknown');
-      };
       lines.push('Viewers:');
       for (const entry of data.viewers) {
         if (!entry) continue;
@@ -429,6 +489,11 @@
         mediaDrops: data.mediaDrops || null,
         mediaDropTicks: data.mediaDropTicks || null,
         lastMediaDrop: data.lastMediaDrop || null,
+        holds: holds.length ? holds : null,
+        lastHoldEvent: data.lastHoldEvent || null,
+        hostPriority: data.hostPriority || null,
+        lastMediaFrame: data.lastMediaFrame || null,
+        lastSeek: data.lastSeek || null,
         counters: {
           seeks: data.seeks,
           nudges: data.nudges,

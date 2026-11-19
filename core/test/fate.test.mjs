@@ -239,6 +239,12 @@ test('a source seek during a hold moves the release point instead of being dropp
   assert.equal(host.publish().mediaDrops.hold, undefined);
   assert.equal(host.publish().mediaDropTicks.hold, undefined);
   assert.equal(host.publish().lastMediaAction.text, 'Bob jumped to 0:30');
+  assert.equal(host.publish().lastMediaAction.position, 30);
+  assert.equal(host.publish().holds.length, 1);
+  assert.equal(host.publish().holds[0].peerId, 'brave');
+  assert.equal(host.publish().holds[0].position, 30);
+  assert.equal(host.publish().lastHoldEvent.active, true);
+  assert.equal(host.publish().lastHoldEvent.position, 30);
 
   local += 500;
   host.receive(
@@ -255,6 +261,9 @@ test('a source seek during a hold moves the release point instead of being dropp
   );
   assert.equal(holds.at(-1).active, false);
   assert.equal(holds.at(-1).position, 30, 'the release lands on the absorbed seek');
+  assert.equal(host.publish().holds.length, 0);
+  assert.equal(host.publish().lastHoldEvent.active, false);
+  assert.equal(host.publish().lastHoldEvent.position, 30);
 });
 
 test('a hold with no recovery report releases itself', () => {

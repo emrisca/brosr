@@ -79,8 +79,40 @@ const reply = {
       reason: 'host-priority',
       action: 'seek',
       peerId: 'guest-1',
+      name: 'Bob',
+      position: 62.4,
+      playing: false,
       at: NOW - 500,
     },
+    holds: [
+      {
+        peerId: 'guest-1',
+        key: 'youtube:abc',
+        position: 62.4,
+        playing: false,
+        at: NOW - 2000,
+        ageMs: 2000,
+      },
+    ],
+    lastHoldEvent: {
+      peerId: 'guest-1',
+      key: 'youtube:abc',
+      active: false,
+      position: 62.4,
+      playing: false,
+      at: NOW - 2000,
+      eventAt: NOW - 1000,
+    },
+    hostPriority: { lastActAt: NOW - 1000, remainingMs: 0 },
+    lastMediaFrame: {
+      key: 'youtube:abc',
+      position: 62.4,
+      playing: false,
+      rate: 1,
+      at: NOW - 1000,
+      ageMs: 1000,
+    },
+    lastSeek: { at: NOW - 1000, target: 61.9, waitingSince: null },
     seeks: 2,
     nudges: 4,
     corrections: 1,
@@ -147,13 +179,34 @@ test('the sync report carries the room, both sides and the film reading', () => 
     /Reading: 42 frames · 30 applied · 9 skipped · 3 holds · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
   );
   assert.match(text, /Last media action: Bob paused the video at 2026-11-18T19:04:11\.000Z/);
-  assert.match(text, /Dropped media acts: host-priority=2, hold=1, film-tab echo=2/);
+  assert.match(text, /Dropped media acts: host-priority=2, hold=1/);
+  assert.doesNotMatch(text, /Dropped media acts:.*film-tab echo/);
+  assert.match(
+    text,
+    /Suppressed film-tab echoes: 2, last pause at 2026-11-18T19:04:11\.750Z/
+  );
   assert.match(text, /Dropped media ticks: hold=12/);
   assert.match(
     text,
-    /Last media drop: pause from film tab \(echo\) at 2026-11-18T19:04:11\.750Z/
+    /Last media drop: seek from room \(host-priority, guest-1\) at 2026-11-18T19:04:11\.500Z \(target 1:02\.4\)/
   );
+  assert.match(
+    text,
+    /Holds: Bob for 2\.0 s at 1:02\.4, paused/
+  );
+  assert.match(
+    text,
+    /Last hold: released by Bob at 2026-11-18T19:04:11\.000Z \(1:02\.4, paused\)/
+  );
+  assert.match(
+    text,
+    /Host priority: clear, last host act at 2026-11-18T19:04:11\.000Z/
+  );
+  assert.match(text, /Last media frame: 1:02\.4, paused, 1\.00 s ago/);
+  assert.match(text, /Last seek: 1:01\.9 at 2026-11-18T19:04:11\.000Z/);
   assert.match(text, /"mediaDrops":\{"host-priority":2,"hold":1\}/);
+  assert.match(text, /"holds":\[\{"peerId":"guest-1"/);
+  assert.match(text, /"hostPriority":\{"lastActAt":\d+,"remainingMs":0\}/);
   assert.match(text, /"mediaDropTicks":\{"hold":12\}/);
   assert.match(text, /"lastLocalDrop":\{"reason":"echo"/);
   assert.match(text, /Build warning: Bob runs 0\.3\.9; this room runs 0\.4\.0\./);

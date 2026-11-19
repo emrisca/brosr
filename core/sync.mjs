@@ -176,6 +176,7 @@ export function createRoomClient({
   // to pause every player; the last one to clear releases the room.
   const stutters = new Map();
   let lastHold = null;
+  let lastHoldEvent = null;
   let ownBuffering = false;
   let ownBufferingSince = null;
   let ownStutterKey = '';
@@ -678,6 +679,8 @@ export function createRoomClient({
       type: 'media',
       peerId,
       key: state.key,
+      title: String(state.title || '').slice(0, 120),
+      music: Boolean(state.music),
       action: 'tick',
       position,
       playing,
@@ -702,6 +705,7 @@ export function createRoomClient({
     const hold = activeHold();
     if (hold) {
       lastHold = hold;
+      lastHoldEvent = { ...hold, active: true, eventAt: now() };
       try {
         onHold({ ...hold, active: true });
       } catch {
@@ -711,6 +715,7 @@ export function createRoomClient({
     }
     if (!lastHold) return;
     const released = { ...lastHold, active: false };
+    lastHoldEvent = { ...released, eventAt: now() };
     lastHold = null;
     try {
       onHold(released);
@@ -1186,6 +1191,11 @@ export function createRoomClient({
       reason,
       action,
       peerId: message.peerId || null,
+      name: (state.peers.get(message.peerId) || {}).name || message.name || null,
+      position: Number.isFinite(Number(message.position))
+        ? Math.round(Number(message.position) * 1000) / 1000
+        : null,
+      playing: Boolean(message.playing),
     };
   }
 
@@ -1217,11 +1227,22 @@ export function createRoomClient({
             : Math.max(0, Number(message.position || 0));
         hold.position = target;
         hold.playing = Boolean(message.playing);
+        if (lastHoldEvent && lastHoldEvent.active && lastHoldEvent.peerId === hold.peerId) {
+          lastHoldEvent = {
+            ...lastHoldEvent,
+            position: target,
+            playing: Boolean(message.playing),
+            eventAt: local,
+          };
+        }
         const actor =
           (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
         stats.lastMediaAction = {
           name: actor,
+          peerId: message.peerId || null,
           action: 'seek',
+          position: target,
+          rate: Number(message.rate || 1),
           text: actionText({ name: actor, action: 'seek', position: target }),
           at: Math.round(local),
         };
@@ -1296,7 +1317,10 @@ export function createRoomClient({
     if (action) {
       stats.lastMediaAction = {
         name: actor,
+        peerId: message.peerId || null,
         action,
+        position: expected,
+        rate: Number(message.rate || 1),
         text: actionText({ name: actor, action, position: expected, rate: message.rate }),
         at: Math.round(local),
       };
@@ -1914,6 +1938,8 @@ export function createRoomClient({
           type: 'media',
           peerId,
           key: nowState.key,
+          title: String(nowState.title || '').slice(0, 120),
+          music: Boolean(nowState.music),
           action: 'tick',
           position: nowState.position,
           playing: nowState.playing,
@@ -1990,6 +2016,35 @@ export function createRoomClient({
         active: Boolean(activeHold()),
         peerId: activeHold() ? activeHold().peerId : null,
         holds: stutters.size,
+      },
+      holds: [...stutters.values()].map((hold) => {
+        const at = Number(hold.at || 0);
+        return {
+          peerId: hold.peerId,
+          key: hold.key,
+          position: Number(hold.position || 0),
+          playing: Boolean(hold.playing),
+          at,
+          ageMs: Math.max(0, Math.round(now() - at)),
+        };
+      }),
+      lastHoldEvent: lastHoldEvent ? { ...lastHoldEvent } : null,
+      hostPriority: {
+        lastActAt: Number.isFinite(lastHostActAt) ? Math.round(lastHostActAt) : null,
+        remainingMs: Number.isFinite(lastHostActAt)
+          ? Math.max(0, Math.round(HOST_MEDIA_PRIORITY_MS - (now() - lastHostActAt)))
+          : 0,
+      },
+      lastMediaFrame: lastMediaFrame
+        ? {
+            ...lastMediaFrame,
+            ageMs: Math.max(0, Math.round(now() - Number(lastMediaFrame.at || now()))),
+          }
+        : null,
+      lastSeek: {
+        at: Number.isFinite(lastSeekAt) ? Math.round(lastSeekAt) : null,
+        target: Number.isFinite(lastSeekTarget) ? lastSeekTarget : null,
+        waitingSince: Number.isFinite(waitingSince) ? Math.round(waitingSince) : null,
       },
       colour: currentColour,
       cursor: currentCursor,
