@@ -6,7 +6,7 @@
 //   node scripts/check-room-apps-layout.mjs
 //   BROSR_CHECK_BROWSER=/path/to/chrome node scripts/check-room-apps-layout.mjs
 //   BROSR_SHOTS=/tmp/shots node scripts/check-room-apps-layout.mjs
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -243,6 +243,8 @@ const fail = (message) => {
   console.error(`  FAIL ${message}`);
 };
 const pass = (message) => console.log(`  ok ${message}`);
+
+let laneRetry = false;
 
 try {
   if (!base) {
@@ -516,8 +518,17 @@ try {
   }
   console.log('PASS: notes and chess keep their rows, their targets and their words');
 } catch (error) {
-  console.error(`FAIL: ${error.message}`);
-  process.exitCode = 1;
+  const message = String((error && error.message) || error);
+  // A fresh Chrome can come up with a renderer that never answers, and the
+  // lane then fails before it reads a box. One relaunch gives the lane a new
+  // browser without weakening a check.
+  if (!process.env.BROSR_LANE_RETRY && message.includes('Page.navigate')) {
+    laneRetry = true;
+    console.error(`FAIL, relaunching once: ${message}`);
+  } else {
+    console.error(`FAIL: ${message}`);
+    process.exitCode = 1;
+  }
 } finally {
   if (tab) tab.ws.close();
   if (chrome) {
@@ -527,4 +538,13 @@ try {
   }
   if (relay) relay.kill('SIGTERM');
   await rm(profile, { recursive: true, force: true });
+}
+
+if (laneRetry) {
+  console.error('the browser stopped answering, running the lane again in a fresh one');
+  const again = spawnSync(process.execPath, process.argv.slice(1), {
+    stdio: 'inherit',
+    env: { ...process.env, BROSR_LANE_RETRY: '1' },
+  });
+  process.exit(again.status === null ? 1 : again.status);
 }

@@ -6,7 +6,7 @@
 //
 //   node scripts/check-chess-play.mjs
 //   BROSR_CHECK_BROWSER=/path/to/chrome node scripts/check-chess-play.mjs
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -224,6 +224,8 @@ async function drag(tab, from, to) {
   await sleep(200);
 }
 
+let laneRetry = false;
+
 try {
   if (!base) {
     const port = await freePort(9650);
@@ -394,8 +396,17 @@ try {
   }
   console.log('PASS: chess drags, taps and seats behave');
 } catch (error) {
-  console.error(`FAIL: ${error.message}`);
-  process.exitCode = 1;
+  const message = String((error && error.message) || error);
+  // A fresh Chrome can come up with a renderer that never answers, and the
+  // lane then fails before it reads a box. One relaunch gives the lane a new
+  // browser without weakening a check.
+  if (!process.env.BROSR_LANE_RETRY && message.includes('Page.navigate')) {
+    laneRetry = true;
+    console.error(`FAIL, relaunching once: ${message}`);
+  } else {
+    console.error(`FAIL: ${message}`);
+    process.exitCode = 1;
+  }
 } finally {
   for (const tab of tabs) tab.ws.close();
   if (chrome) {
@@ -405,4 +416,13 @@ try {
   }
   if (relay) relay.kill('SIGTERM');
   await rm(profile, { recursive: true, force: true });
+}
+
+if (laneRetry) {
+  console.error('the browser stopped answering, running the lane again in a fresh one');
+  const again = spawnSync(process.execPath, process.argv.slice(1), {
+    stdio: 'inherit',
+    env: { ...process.env, BROSR_LANE_RETRY: '1' },
+  });
+  process.exit(again.status === null ? 1 : again.status);
 }
