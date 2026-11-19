@@ -34,6 +34,24 @@ test('each peer gets its own command, journal and id', () => {
   }
 });
 
+test('a probe interval reaches every peer and stays out when unset', () => {
+  const probed = planPeers({ ...base, peers: 'mac1,mac2', probe: 60 });
+  for (const item of probed) {
+    assert.ok(item.argv.includes('--probe=60'), `${item.id} carries the probe interval`);
+  }
+
+  const bare = planPeers({ ...base, peers: 'mac1' });
+  assert.equal(
+    bare[0].argv.some((value) => value.startsWith('--probe=')),
+    false,
+    'no probe flag when the caller asks for none'
+  );
+  assert.equal(bare[0].argv.includes('--probe=0'), false, 'a zero is not forwarded');
+
+  assert.throws(() => planPeers({ ...base, peers: 'mac1', probe: -1 }), /whole number/);
+  assert.throws(() => planPeers({ ...base, peers: 'mac1', probe: 1.5 }), /whole number/);
+});
+
 test('a peer list needs ids, no repeats and a positive duration', () => {
   assert.throws(() => planPeers({ ...base, peers: '' }), /at least one id/);
   assert.throws(() => planPeers({ ...base, peers: 'mac1, mac1' }), /twice/);

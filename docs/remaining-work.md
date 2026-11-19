@@ -134,9 +134,10 @@ loopback lane only, and both of those share one clock.
       seek per ten minutes.
 - [ ] One deliberate 600 ms delay, to prove it causes one seek rather than a loop.
 - [ ] Cinecat cross-machine again, with the fix and a fresh room.
-- [ ] Movy playback. On 18 November the title page `/movie/1561726` named the film, rendered
-      one top-page `<video>` with a blob source and no iframe, and showed a custom seek bar. No
-      film has played on two browsers yet.
+- [x] Movy playback. On 18 November the title page `/movie/1561726` named the film and rendered
+      one top-page `<video>` with a blob source and no iframe. Two headless Zen browsers on one
+      Mac, joined through a loopback relay, held pause within 0.058 s, seek at 0 s and playback
+      at 0.02 s p95 with 92 applies. The key was the page URL. No cross-machine window yet.
 - [ ] Cinejoy playback. The link is recorded, nothing was probed past it.
 - [ ] Miruro. The embed URL is the same for every episode, so it needs a title and episode
       handoff before it can join the list.
@@ -310,7 +311,9 @@ One person drives, and the marks are fixed so a later reader can compare windows
 | 00:58 | Media annexe: open the clip on the host page, pause at 30 s, seek to 50 s |
 
 Do not do anything else on that page. A second tab on the same room makes the presence numbers
-about the tab and not the room.
+about the tab and not the room. The media annexe stays a page action. `lan-peers.mjs` runs Node
+peers with no video element, and a second host tab would fight the room for the host role, so the
+runner cannot drive a film.
 
 ### 6. Read the relay table once a minute
 

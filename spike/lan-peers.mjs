@@ -7,7 +7,7 @@
 //
 // Usage:
 //   node lan-peers.mjs --relay=192.168.8.161 --room=lan1 --peers=mac1,mac2 --seconds=4200 \
-//     --out-prefix=.runtime/lan1
+//     --probe=60 --out-prefix=.runtime/lan1
 //
 // Each peer writes <out-prefix>-<peer>.json. Every child line goes to stdout with its peer id.
 
@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 // The plan is pure, so a test can check the commands without starting a peer.
-export function planPeers({ peers, room, relay, port = 8787, seconds, outPrefix }) {
+export function planPeers({ peers, room, relay, port = 8787, probe = 0, seconds, outPrefix }) {
   const ids = String(peers || '')
     .split(',')
     .map((id) => id.trim())
@@ -27,6 +27,12 @@ export function planPeers({ peers, room, relay, port = 8787, seconds, outPrefix 
   if (new Set(ids).size !== ids.length) throw new Error('--peers names an id twice');
   const count = Number(seconds);
   if (!Number.isFinite(count) || count <= 0) throw new Error('--seconds must be a positive number');
+  // The relay witness is optional. A zero keeps the flag out of the command,
+  // so a run without it behaves exactly as before.
+  const probeEvery = Number(probe || 0);
+  if (!Number.isInteger(probeEvery) || probeEvery < 0) {
+    throw new Error('--probe must be a whole number of seconds');
+  }
   if (!outPrefix) throw new Error('--out-prefix needs a path');
 
   return ids.map((id) => ({
@@ -39,6 +45,7 @@ export function planPeers({ peers, room, relay, port = 8787, seconds, outPrefix 
       `--room=${room}`,
       `--peer=${id}`,
       `--seconds=${count}`,
+      ...(probeEvery > 0 ? [`--probe=${probeEvery}`] : []),
       `--out=${outPrefix}-${id}.json`,
     ],
   }));
@@ -55,11 +62,12 @@ function main() {
   const port = Number(args.get('port') || 8787);
   const room = args.get('room') || 'lan1';
   const seconds = args.get('seconds') || 60;
+  const probe = args.get('probe') || 0;
   const outPrefix = args.get('out-prefix') || path.join('.runtime', `peers-${room}`);
 
   let plan;
   try {
-    plan = planPeers({ peers: args.get('peers'), room, relay, port, seconds, outPrefix });
+    plan = planPeers({ peers: args.get('peers'), room, relay, port, probe, seconds, outPrefix });
   } catch (error) {
     process.stderr.write(`lan-peers: ${error.message}\n`);
     process.exit(1);

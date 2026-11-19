@@ -352,8 +352,9 @@ The window ran from 23:05:08 to 23:05:53 UTC.
 
 This checks the relay table, the peer journal and the presence path over a real socket. It is not
 an hour, it is not a LAN, and it has no browser page or host, so it says nothing about the page's
-own presence sample or the clock. M1 stays open. One runner gap showed up: `lan-peers.mjs` does
-not forward `--probe`, so the relay witness needs one peer started by hand, as above.
+own presence sample or the clock. M1 stays open. `lan-peers.mjs` now forwards `--probe`, so a
+later run can ask every peer for the relay witness. This rehearsal ran before that change, which
+is why `mac4` carries the probe row.
 
 ## What it does not prove
 

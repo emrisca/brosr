@@ -8,6 +8,10 @@
 // Everything stays on loopback: its own relay, two temp profiles and three free
 // ports. It never touches the app browser on 9333. The clip is
 // spike/.runtime/clip.webm, which the relay already serves at /media/.
+//
+// MEDIA_URL opens another page instead of that clip, so a live site gets the same
+// checks. MEDIA_ROOM keeps that run out of the default room. Both browsers open
+// the same address, which is what gives the room one media key.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -21,7 +25,7 @@ import { findZen, writeProfile } from '../zen/profile.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIP = path.join(root, 'spike', '.runtime', 'clip.webm');
-const ROOM = 'medialoop';
+const ROOM = process.env.MEDIA_ROOM || 'medialoop';
 const DRIFT_LIMIT = 1;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (...args) => console.log(...args);
@@ -91,6 +95,25 @@ function page(bidi, context) {
     context,
     async eval(expression) {
       return evaluate(bidi, context, expression);
+    },
+    // A trusted press at one viewport point. A site's own player can refuse a
+    // script play until a real gesture reaches the page.
+    async click(x, y) {
+      await bidi.cmd('input.performActions', {
+        context,
+        actions: [
+          {
+            type: 'pointer',
+            id: 'mouse',
+            parameters: { pointerType: 'mouse' },
+            actions: [
+              { type: 'pointerMove', x, y, origin: 'viewport' },
+              { type: 'pointerDown', button: 0 },
+              { type: 'pointerUp', button: 0 },
+            ],
+          },
+        ],
+      });
     },
     async sample() {
       const raw = await evaluate(bidi, context, SAMPLE);
@@ -198,6 +221,9 @@ async function main() {
     guestBidi = await connect(guestPort);
 
     const origin = `http://127.0.0.1:${relayPort}`;
+    // A live page keeps its own URL. The clip fixture is the default, because
+    // it needs no network and its duration is known.
+    const target = process.env.MEDIA_URL || `${origin}/clip.html`;
     const roomUrl = (role, peer, name) =>
       `${origin}/room-b.html?role=${role}&room=${ROOM}&peer=${peer}&name=${name}&relay=${relayPort}`;
 
@@ -220,8 +246,8 @@ async function main() {
     // clip.html is a plain page on purpose. The bridge treats a page with no
     // room parameters and no room name as a film tab, and the media fixture
     // names itself a room page, so it would open a socket of its own.
-    const host = await open(hostBidi, `${origin}/clip.html`);
-    const guest = await open(guestBidi, `${origin}/clip.html`);
+    const host = await open(hostBidi, target);
+    const guest = await open(guestBidi, target);
     for (const [name, peer] of [['host', host], ['guest', guest]]) {
       await until(
         async () => {
@@ -253,6 +279,23 @@ async function main() {
       host: await hostRoom.sample().then((s) => ({ peers: s.room.peers, role: s.room.role })),
       guest: await guestRoom.sample().then((s) => ({ peers: s.room.peers, role: s.room.role })),
     };
+
+    // A live player often waits for a gesture, and a script play alone is
+    // refused. One trusted press at the film's centre is how a person starts
+    // it. The clip fixture does not need this, so it stays opt in.
+    if (process.env.MEDIA_CLICK === '1') {
+      for (const peer of [host, guest]) {
+        const point = JSON.parse(
+          await peer.eval(
+            "JSON.stringify((() => { const v = document.querySelector('video'); const r = v.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })())"
+          )
+        );
+        await peer.click(point.x, point.y);
+        log(`[media] clicked the film at ${point.x},${point.y}`);
+        await sleep(1200);
+      }
+      await sleep(2000);
+    }
 
     // One read of the host, one of the guest, then the host again. Two BiDi
     // sessions cannot be read at the same instant, so the host position is
