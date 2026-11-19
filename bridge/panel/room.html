@@ -15,6 +15,7 @@
 
       <div class="room-meta">
         <span class="count" id="count" aria-label="Peers in this room"></span>
+        <span class="stopped-badge" id="stopped-count" hidden></span>
         <span class="role" id="role"></span>
         <span class="seal" id="seal" hidden></span>
       </div>
@@ -132,6 +133,12 @@
 
           <p class="watch-action" id="watch-action" hidden></p>
           <ul class="watch-viewers" id="watch-viewers"></ul>
+        </section>
+
+        <section class="card" id="stopped-section" aria-labelledby="stopped-label" hidden>
+          <p class="section-title" id="stopped-label">Stopped tabs</p>
+          <p class="note">A stopped copy keeps its tab. Resume puts it back in the room.</p>
+          <ul class="tab-list" id="stopped-list"></ul>
         </section>
 
       </div>

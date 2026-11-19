@@ -41,11 +41,22 @@ test('the replay is not gated on a film anchor', () => {
   assert.ok(replay < anchor, 'the replay ask sits below the anchor early return');
 });
 
-test('a shared or mirrored tab announces its close to the room', () => {
-  assert.match(background, /const shared = announced\.has\(id\) \|\| remoteOrigins\.has\(id\);/);
+test('a published tab withdraws its offer when it closes, a copy only leaves', () => {
+  assert.match(background, /const shared = announced\.has\(id\) && remoteKey === undefined;/);
+  assert.match(background, /if \(remoteKey !== undefined && !shared && !remotelyClosed\) \{/);
+  assert.match(background, /notifyLeft\(remoteKey\)/);
   assert.match(background, /if \(shared && !remotelyClosed\)/);
   assert.match(background, /announceClose\(key\)/);
   assert.match(background, /if \(message\.type === 'brosr:tab-close-local'\)/);
+});
+
+test('a received tab is an offer that only a click can open', () => {
+  // The old path opened a copy as soon as the frame arrived. Nothing opens
+  // now until the landing page sends the key the reader clicked.
+  assert.match(source, /sharedTabs = rememberSharedTab\(sharedTabs, offer\);/);
+  assert.match(source, /if \(!joinedTabs\.has\(offer\.key\)\) return;/);
+  assert.match(source, /if \(message\.type === 'join-tab'\)/);
+  assert.doesNotMatch(source, /tabOpen\(message\.data\)/);
 });
 
 test('the replay only sends tabs that already went out', () => {
@@ -55,6 +66,8 @@ test('the replay only sends tabs that already went out', () => {
     /if \(!\(await mayShare\(\)\)\) return \{ ok: false, reason: 'no-control' \}/
   );
   assert.match(background, /for \(const \[raw, url\] of announced\)/);
+  // A copy this browser opened is not one of this person's offers.
+  assert.match(background, /if \(remoteOrigins\.has\(id\)\) continue;/);
   assert.match(background, /if \(!tab \|\| tab\.url !== url \|\| !shareable\(tab\.url\)\) continue;/);
-  assert.match(background, /await announce\(tab\.url, key\)/);
+  assert.match(background, /await announce\(tab\.url, id, tab\.title, mediaTabs\.get\(id\)\)/);
 });

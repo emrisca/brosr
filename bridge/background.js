@@ -122,15 +122,23 @@ api.tabs.query({}).then((tabs) => {
 }).catch(() => {});
 
 api.tabs.onRemoved.addListener((id) => {
-  // A tab this browser shared, or its copy of a tab another browser shared,
-  // belongs to the room. Closing either one is a room close.
-  const shared = announced.has(id) || remoteOrigins.has(id);
-  const key = remoteOrigins.get(id) ?? id;
+  // A tab this browser published is the room's offer. Closing it withdraws
+  // that offer. A copy that arrived from the room is not the offer, so closing
+  // it only leaves the sync and returns the row to Open.
+  const remoteKey = remoteOrigins.get(id);
+  const shared = announced.has(id) && remoteKey === undefined;
+  const key = remoteKey ?? id;
   const remotelyClosed = closing.delete(id);
+  for (const [key, entry] of [...stoppedTabs]) {
+    if (entry.tabId === id) stoppedTabs.delete(key);
+  }
   announced.delete(id);
   remoteTabs.delete(id);
   remoteOrigins.delete(id);
   mediaTabs.delete(id);
+  // A closed tab frees its id, so a later tab must not inherit the stop.
+  detachedTabs.delete(id);
+  publishedPlaying.delete(String(remoteKey ?? id));
   save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
   for (const [key, tabId] of [...remoteKeys]) {
@@ -144,9 +152,13 @@ api.tabs.onRemoved.addListener((id) => {
       save({ roomTabId: null, roomRole: null });
     }
   });
-  // A close from someone with control closes the same tab everywhere. A close
-  // this browser just applied from the room is already accounted for, so it
-  // does not echo back.
+  // A copy closing is a peer leaving that tab, not the publisher closing it.
+  if (remoteKey !== undefined && !shared && !remotelyClosed) {
+    notifyLeft(remoteKey).catch(() => {});
+  }
+  // A published tab closing closes the same tab everywhere. A close this
+  // browser just applied from the room is already accounted for, so it does
+  // not echo back.
   if (shared && !remotelyClosed) {
     mayShare()
       .then((allowed) => {
@@ -234,6 +246,12 @@ const remoteKeys = new Map();
 // navigation, so the other browser moves the same tab instead of opening a
 // second one.
 const remoteOrigins = new Map();
+// A copy this person stopped syncing. It stays open, and a later navigation
+// must not publish it back to the room.
+const detachedTabs = new Set();
+// The panel lists these, so a stop is not a one-way door. The entry keeps the
+// offer key and the tab it names until the tab closes or someone resumes it.
+const stoppedTabs = new Map();
 
 state()
   .then((saved) => {
@@ -257,8 +275,8 @@ const mediaBook = () =>
   Object.fromEntries(
     [...mediaTabs].map(([id, entry]) => [String(id), { key: entry.key, at: entry.at }])
   );
-async function rememberMediaTab(id, key) {
-  const next = { key: String(key || ''), at: Date.now() };
+async function rememberMediaTab(id, key, playing) {
+  const next = { key: String(key || ''), playing: Boolean(playing), at: Date.now() };
   const prev = mediaTabs.get(id);
   mediaTabs.set(id, next);
   if (!prev || prev.key !== next.key) await save({ mediaTabKeys: mediaBook() });
@@ -274,9 +292,25 @@ const mediaRestored = state()
     }
   })
   .catch(() => {});
+// A state read can stall while the worker wakes. A film read has a live map to
+// fall back on, so its restore wait needs a deadline.
+const mediaRestoreDeadline = new Promise((resolve) => setTimeout(resolve, 250));
 // A host tab can reach the open path from several frames at once. One slot per
 // host tab keeps that burst to a single local tab.
 const opening = new Set();
+// A mirrored click and a shared-tab announcement can name the same URL at the
+// same instant under different keys. The URL map lets the second request join
+// the first open instead of racing it and creating another tab.
+const openingByUrl = new Map();
+
+async function mapRemoteKey(key, tabId) {
+  if (key === undefined || key === null || key === '' || !validId(tabId)) return;
+  const id = String(key);
+  if (remoteKeys.get(id) === tabId && remoteOrigins.get(tabId) === key) return;
+  remoteKeys.set(id, tabId);
+  remoteOrigins.set(tabId, key);
+  await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+}
 // The film this browser plays last. A paused background tab does not replace
 // the film someone is watching, so only a playing tab takes the focus.
 let mediaFocus = '';
@@ -294,14 +328,56 @@ function filmOwner(key) {
   if (focused) return focused;
   return candidates.sort((a, b) => (Number(b[1].at) || 0) - (Number(a[1].at) || 0))[0];
 }
-async function announce(url, key) {
+async function announce(url, key, title, media) {
   if (!shareable(url)) return false;
   const id = await roomTab();
   if (!validId(id)) return false;
   const message = { type: 'brosr:tabs-announce', url };
   if (key !== undefined && key !== null) message.key = key;
+  if (title) message.title = String(title).slice(0, 140);
+  // A tab with a player travels with its state, so the row says whether the
+  // tab plays from the first frame and not only after a later report.
+  if (media && typeof media.playing === 'boolean') message.playing = media.playing;
   try {
     await api.tabs.sendMessage(id, message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A copy this browser opened is gone. The room tab owns the list, so it hears
+// the key and puts that row back to Open.
+async function notifyLeft(key) {
+  const id = await roomTab();
+  if (!validId(id)) return false;
+  try {
+    await api.tabs.sendMessage(id, { type: 'brosr:tab-left', key: String(key) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A shared tab started or stopped playing. The frame is small, because the
+// offer already carries the URL and the title. One frame per change, not one
+// per four-a-second report.
+const publishedPlaying = new Map();
+async function notifyMedia(key, playing) {
+  if (key === undefined || key === null || key === '') return false;
+  const id = String(key);
+  const next = playing === true;
+  if (publishedPlaying.get(id) === next) return false;
+  publishedPlaying.set(id, next);
+  const room = await roomTab();
+  if (!validId(room)) return false;
+  try {
+    await api.tabs.sendMessage(room, {
+      type: 'brosr:tabs-announce',
+      action: 'media',
+      key: id,
+      playing: next,
+    });
     return true;
   } catch {
     return false;
@@ -348,12 +424,8 @@ async function shareTab(tab) {
     // names itself.
     const arrived = remoteOrigins.get(tab.id);
     const key = arrived === undefined || arrived === null ? tab.id : arrived;
-    if (remoteKeys.get(String(key)) !== tab.id) {
-      remoteKeys.set(String(key), tab.id);
-      remoteOrigins.set(tab.id, key);
-      await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
-    }
-    return await announce(tab.url, key);
+    await mapRemoteKey(key, tab.id);
+    return await announce(tab.url, key, tab.title, mediaTabs.get(tab.id));
   } finally {
     announcing.delete(tab.id);
   }
@@ -362,6 +434,12 @@ async function shareTab(tab) {
 async function considerTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return;
   if (!(await mayShare())) return;
+  // A copy that arrived from the room is this browser's copy, not this
+  // person's tab. Navigating it never moves the publisher's offer.
+  if (remoteOrigins.has(tab.id)) return;
+  // A copy this person stopped syncing stays private, even after a navigation
+  // puts it on a shareable page.
+  if (detachedTabs.has(tab.id)) return;
   const seen = await state();
   if (tab.id === seen.roomTabId || isRoomPage(tab.url)) return;
   // A mirrored tab is this browser's copy of another tab. Its navigation is
@@ -577,6 +655,22 @@ async function handle(message, sender) {
     const role = roomRole || seen.roomRole || '';
     const canShare = role === 'host' || prefs.granted === true;
     const all = await api.tabs.query({}).catch(() => []);
+    // A stopped copy still exists, so the panel can offer it back. A tab that
+    // closed drops out here, which keeps the list honest between updates.
+    const stopped = [];
+    for (const [key, entry] of [...stoppedTabs]) {
+      const tab = all.find((item) => item.id === entry.tabId);
+      if (!tab || !detachedTabs.has(entry.tabId)) {
+        stoppedTabs.delete(key);
+        continue;
+      }
+      stopped.push({
+        key,
+        tabId: entry.tabId,
+        url: tab.url || entry.url,
+        title: tab.title || entry.title,
+      });
+    }
     const tabs = all
       .filter((tab) => validId(tab.id) && shareable(tab.url))
       .slice(0, 40)
@@ -603,6 +697,7 @@ async function handle(message, sender) {
       notices: prefs.notices,
       granted: prefs.granted,
       tabs,
+      stopped,
     };
   }
   if (message.type === 'brosr:tabs-auto') {
@@ -664,18 +759,78 @@ async function handle(message, sender) {
     let sent = 0;
     for (const [raw, url] of announced) {
       const id = Number(raw);
+      // A copy this browser opened is not an offer of its own.
+      if (remoteOrigins.has(id)) continue;
       const tab = shown.get(id);
       // A tab that navigated or closed keeps no replay. The tab events keep the
       // record current, so a mismatch here means the record is stale.
       if (!tab || tab.url !== url || !shareable(tab.url)) continue;
-      const arrived = remoteOrigins.get(id);
-      const key = arrived === undefined || arrived === null ? id : arrived;
-      if (await announce(tab.url, key)) sent += 1;
+      if (await announce(tab.url, id, tab.title, mediaTabs.get(id))) sent += 1;
     }
     return { ok: true, sent };
   }
   // A frame arrived from the room. The tab opens in the background, and it is
   // marked so this browser never announces it back.
+  // Stop syncing a copy without closing it. The tab keeps its page and its
+  // place in this browser, and nothing about it goes back to the room.
+  if (message.type === 'brosr:tab-leave-local') {
+    const key = String(message.key || '');
+    if (!key) return { ok: false, reason: 'key' };
+    const id = remoteKeys.get(key);
+    remoteKeys.delete(key);
+    // The room tab already forgot the row, so a second leave still answers.
+    if (!validId(id)) {
+      await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+      return { ok: true, tabId: null };
+    }
+    const tab = await api.tabs.get(id).catch(() => null);
+    stoppedTabs.set(key, {
+      tabId: id,
+      url: tab && tab.url ? String(tab.url) : '',
+      title: tab && tab.title ? String(tab.title).slice(0, 140) : '',
+      at: Date.now(),
+    });
+    remoteOrigins.delete(id);
+    remoteTabs.delete(id);
+    detachedTabs.add(id);
+    // A stopped tab no longer names a film. Its player goes quiet for the room.
+    mediaTabs.delete(id);
+    await save({
+      remoteKeyTabs: Object.fromEntries(remoteKeys),
+      mediaTabKeys: mediaBook(),
+    });
+    return { ok: true, tabId: id };
+  }
+  // A stopped copy can join the room again. The tab never closed, so it takes
+  // its key back and the room tab puts it in the joined list once more.
+  if (message.type === 'brosr:tab-resume') {
+    const key = String(message.key || '');
+    if (!key) return { ok: false, reason: 'key' };
+    const entry = stoppedTabs.get(key);
+    if (!entry) return { ok: false, reason: 'no-stopped' };
+    const tab = await api.tabs.get(entry.tabId).catch(() => null);
+    if (!tab) {
+      stoppedTabs.delete(key);
+      detachedTabs.delete(entry.tabId);
+      return { ok: false, reason: 'no-tab' };
+    }
+    stoppedTabs.delete(key);
+    detachedTabs.delete(entry.tabId);
+    remoteKeys.set(key, entry.tabId);
+    remoteOrigins.set(entry.tabId, key);
+    await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+    const room = await roomTab();
+    let joined = false;
+    if (validId(room) && typeof api.tabs.sendMessage === 'function') {
+      try {
+        await api.tabs.sendMessage(room, { type: 'brosr:tabs-resumed', key });
+        joined = true;
+      } catch {
+        joined = false;
+      }
+    }
+    return { ok: true, tabId: entry.tabId, joined };
+  }
   if (message.type === 'brosr:tab-close-local') {
     const key = String(message.key || '');
     if (!key) return { ok: false, reason: 'key' };
@@ -693,10 +848,26 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tab-open-local') {
     if (!shareable(message.url)) return { ok: false, reason: 'url' };
     const key = message.key === undefined || message.key === null ? null : String(message.key);
+    // A click on the landing page brings the copy forward. An automatic open
+    // keeps the tab in the background, so a person is not pulled away from
+    // whatever they were reading.
+    const foreground = message.foreground === true;
     const slot = key === null ? `url:${message.url}` : `key:${key}`;
     if (opening.has(slot)) return { ok: true, opening: true };
+    // A shared announcement and a mirrored click can name the same URL at the
+    // same instant. Their slots differ, so the second request waits for the
+    // open already in flight and then maps its key to that one tab.
+    const pending = openingByUrl.get(message.url);
+    if (pending) {
+      const result = await pending;
+      if (result && result.ok && validId(result.tabId)) {
+        await mapRemoteKey(key, result.tabId);
+        if (foreground) api.tabs.update(result.tabId, { active: true }).catch(() => {});
+        return { ...result, joined: true };
+      }
+    }
     opening.add(slot);
-    try {
+    const work = (async () => {
       const known = key === null ? null : remoteKeys.get(key);
       // The same host tab moved to another page. Its copy here moves too, so a
       // click on a video or a search result does not spawn a second tab. A
@@ -705,21 +876,24 @@ async function handle(message, sender) {
       if (validId(known) && typeof api.tabs.update === 'function') {
         const copy = await api.tabs.get(known).catch(() => null);
         if (copy && copy.url === message.url) {
-          if (key !== null) remoteOrigins.set(known, key);
+          await mapRemoteKey(key, known);
+          if (foreground) api.tabs.update(known, { active: true }).catch(() => {});
           return { ok: true, tabId: known, updated: false };
         }
         if (copy) {
           try {
-            await api.tabs.update(known, { url: message.url });
-            if (key !== null) remoteOrigins.set(known, key);
+            const target = { url: message.url };
+            if (foreground) target.active = true;
+            await api.tabs.update(known, target);
+            await mapRemoteKey(key, known);
             return { ok: true, tabId: known, updated: true };
           } catch {
             // The copy is gone, so the next step opens a fresh one.
-            remoteKeys.delete(key);
+            if (key !== null) remoteKeys.delete(key);
             remoteTabs.delete(known);
           }
         } else {
-          remoteKeys.delete(key);
+          if (key !== null) remoteKeys.delete(key);
           remoteTabs.delete(known);
         }
       }
@@ -729,25 +903,27 @@ async function handle(message, sender) {
       const all = await api.tabs.query({}).catch(() => []);
       const shown = all.find((tab) => validId(tab.id) && tab.url === message.url);
       if (shown) {
-        if (key !== null) remoteOrigins.set(shown.id, key);
+        await mapRemoteKey(key, shown.id);
+        if (foreground) api.tabs.update(shown.id, { active: true }).catch(() => {});
         return { ok: true, tabId: shown.id, existing: true };
       }
       try {
-        const tab = await api.tabs.create({ url: message.url, active: false });
+        const tab = await api.tabs.create({ url: message.url, active: foreground });
         if (tab && validId(tab.id)) {
           remoteTabs.add(tab.id);
-          if (key !== null) {
-            remoteKeys.set(key, tab.id);
-            remoteOrigins.set(tab.id, key);
-            await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
-          }
+          await mapRemoteKey(key, tab.id);
         }
         return { ok: true, tabId: tab && tab.id, updated: false };
       } catch (error) {
         return { ok: false, reason: 'create', error: text(error) };
       }
+    })();
+    openingByUrl.set(message.url, work);
+    try {
+      return await work;
     } finally {
       opening.delete(slot);
+      if (openingByUrl.get(message.url) === work) openingByUrl.delete(message.url);
     }
   }
   if (message.type === 'brosr:tab-status') {
@@ -779,16 +955,23 @@ async function handle(message, sender) {
       save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'room-tab' };
     }
-    await rememberMediaTab(from, message.key);
+    await rememberMediaTab(from, message.key, false);
     if (sender.tab.active) mediaFocusTab = from;
     return { ok: true, tabs: mediaTabs.size };
   }
   if (message.type === 'brosr:media-out') {
     const from = sender && sender.tab ? sender.tab.id : null;
     if (!validId(from)) return { ok: false, reason: 'no-tab' };
+    // A stopped copy keeps its player silent for the room.
+    if (detachedTabs.has(from)) return { ok: false, reason: 'detached' };
     const media = message.state;
     if (!media || typeof media !== 'object' || !media.key) return { ok: false, reason: 'state' };
-    await rememberMediaTab(from, media.key);
+    await rememberMediaTab(from, media.key, media.playing);
+    // A tab this browser shared says whether it plays now, so its row updates
+    // in place instead of waiting for the next URL change.
+    if (announced.has(from)) {
+      await notifyMedia(remoteOrigins.get(from) ?? from, media.playing === true);
+    }
     await loadPrefs();
     if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     // A tab that is not playing must not take the room away from the film the
@@ -813,11 +996,15 @@ async function handle(message, sender) {
   if (message.type === 'brosr:film-reading') {
     const filmKey = String(message.key || '');
     if (!filmKey) return { ok: false, reason: 'key' };
-    // A restarted worker fills this map from its book after a message can
-    // already arrive, so the read waits for that fill instead of answering
-    // no-tab for a film tab this browser shows.
-    await mediaRestored;
-    const owner = filmOwner(filmKey);
+    // A live tab is already in the map. A restarted worker fills it from its
+    // book after a message can arrive, so an empty map waits for that fill.
+    // The restore can stall while the worker wakes, so it gets a short head
+    // start and no more; the live map is enough to answer.
+    let owner = filmOwner(filmKey);
+    if (!owner) {
+      await Promise.race([mediaRestored, mediaRestoreDeadline]);
+      owner = filmOwner(filmKey);
+    }
     if (!owner) {
       return {
         ok: false,

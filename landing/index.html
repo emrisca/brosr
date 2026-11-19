@@ -28,6 +28,18 @@
   </header>
 
   <main class="page">
+    <section class="live" id="live-tabs" aria-labelledby="live-title" hidden>
+      <div class="live-head">
+        <div class="live-heading">
+          <h2 class="live-title" id="live-title">Live tabs</h2>
+          <p class="live-note">Tabs the host and people with control have open. Open one to sync it with them, and close it to leave the sync.</p>
+        </div>
+        <p class="live-count" id="live-count" aria-live="polite"></p>
+      </div>
+      <div class="live-groups" id="live-groups"></div>
+      <p class="live-empty" id="live-empty">Nobody has shared a tab yet. This section fills when a person with control opens one.</p>
+    </section>
+
     <section class="bento" id="tiles" aria-label="Room apps">
       <a class="tile tile-youtube" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="youtube-title">
         <div class="tile-head">
@@ -525,6 +537,198 @@
 
       read();
       setInterval(read, 2000);
+    })();
+    // A tab in the room is an offer. This section lists what the host and
+    // people with control published, one group per person. A row opens a copy
+    // only on a click, and closing that copy leaves the sync. The core posts
+    // the list on this window and leaves it on the document, so a reload
+    // starts with the last state.
+    (function () {
+      var section = document.getElementById('live-tabs');
+      var groupsBox = document.getElementById('live-groups');
+      var empty = document.getElementById('live-empty');
+      var count = document.getElementById('live-count');
+      if (!section || !groupsBox || !empty || !count) return;
+      var pending = null;
+      var current = null;
+      var shown = '';
+
+      function hostOf(href) {
+        try {
+          return new URL(href).hostname.replace(/^www\./, '');
+        } catch (err) {
+          return '';
+        }
+      }
+
+      function roleName(role) {
+        return role === 'host' ? 'Host' : 'Control';
+      }
+
+      // A tab with a player says whether it plays. A tab without one keeps no
+      // badge, because a guess would read as a measurement.
+      function playBadge(tab) {
+        if (typeof tab.playing !== 'boolean') return null;
+        var badge = document.createElement('span');
+        badge.className = tab.playing ? 'live-play is-playing' : 'live-play is-paused';
+        badge.textContent = tab.playing ? 'Playing' : 'Paused';
+        return badge;
+      }
+
+      function row(tab, state, mine) {
+        var item = document.createElement('li');
+        item.className = 'live-row';
+        var text = document.createElement('span');
+        text.className = 'live-tab';
+        var title = document.createElement('span');
+        title.className = 'live-tab-title';
+        title.textContent = tab.title || hostOf(tab.url) || 'Shared tab';
+        title.title = tab.title || tab.url;
+        var meta = document.createElement('span');
+        meta.className = 'live-tab-host';
+        var host = document.createElement('span');
+        host.className = 'live-tab-host-name';
+        host.textContent = hostOf(tab.url);
+        meta.append(host);
+        var play = playBadge(tab);
+        if (play) meta.append(play);
+        text.append(title, meta);
+        item.append(text);
+
+        // The publisher already has this tab, so its own row only reports.
+        if (mine) {
+          var mark = document.createElement('span');
+          mark.className = 'live-state is-mine';
+          mark.textContent = 'Sharing';
+          item.append(mark);
+          return item;
+        }
+
+        var joined = (state.joined || []).indexOf(tab.key) !== -1;
+        var waiting = pending === tab.key;
+
+        // A joined row carries two things: the state, and a way out of it. Stop
+        // is a button because it changes what this browser syncs.
+        if (joined) {
+          var synced = document.createElement('span');
+          synced.className = 'live-state';
+          synced.textContent = 'Synced';
+          var stop = document.createElement('button');
+          stop.type = 'button';
+          stop.className = 'live-stop';
+          stop.dataset.key = tab.key;
+          stop.textContent = 'Stop';
+          stop.title = 'Stop syncing and leave the tab open';
+          stop.addEventListener('click', function () {
+            stopTab(tab.key);
+          });
+          item.append(synced, stop);
+          return item;
+        }
+
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'live-action';
+        button.dataset.key = tab.key;
+        button.setAttribute('aria-pressed', 'false');
+        if (waiting) button.disabled = true;
+        button.textContent = waiting ? 'Opening' : 'Open';
+        button.addEventListener('click', function () {
+          pending = tab.key;
+          button.textContent = 'Opening';
+          button.disabled = true;
+          window.postMessage(
+            { source: 'brosr-app', type: 'join-tab', key: tab.key },
+            location.origin
+          );
+          // A create that never answers must not leave the row disabled.
+          setTimeout(function () {
+            if (pending !== tab.key) return;
+            pending = null;
+            shown = '';
+            if (current) render(current);
+          }, 4000);
+        });
+        item.append(button);
+        return item;
+      }
+
+      // Stop leaves the tab open. The row goes back to Open at once, and the
+      // core drops the copy from this browser without closing it.
+      function stopTab(key) {
+        if (!current) return;
+        var rest = (current.joined || []).filter(function (entry) {
+          return entry !== key;
+        });
+        current = Object.assign({}, current, { joined: rest });
+        render(current);
+        window.postMessage(
+          { source: 'brosr-app', type: 'leave-tab', key: key },
+          location.origin
+        );
+      }
+
+      function group(entry, state) {
+        var box = document.createElement('section');
+        box.className = 'live-group';
+        var head = document.createElement('header');
+        head.className = 'live-owner';
+        var who = document.createElement('span');
+        who.className = 'live-owner-name';
+        who.textContent = entry.owner || 'Guest';
+        var role = document.createElement('span');
+        role.className = 'live-role';
+        role.textContent = roleName(entry.role);
+        head.append(who, role);
+        var list = document.createElement('ul');
+        list.className = 'live-list';
+        var mine = Boolean(state.peerId && entry.ownerId === state.peerId);
+        (entry.tabs || []).forEach(function (tab) {
+          list.append(row(tab, state, mine));
+        });
+        box.append(head, list);
+        return box;
+      }
+
+      function render(state) {
+        if (!state || !Array.isArray(state.groups)) return;
+        var json = JSON.stringify(state);
+        if (json === shown) return;
+        shown = json;
+        current = state;
+        if (pending && (state.joined || []).indexOf(pending) !== -1) pending = null;
+        section.hidden = false;
+        groupsBox.textContent = '';
+        var total = 0;
+        state.groups.forEach(function (entry) {
+          total += (entry.tabs || []).length;
+          groupsBox.append(group(entry, state));
+        });
+        empty.hidden = total !== 0;
+        count.textContent = total === 0 ? '' : total === 1 ? '1 tab' : total + ' tabs';
+      }
+
+      function read() {
+        var state = null;
+        try {
+          var raw = document.documentElement.dataset.brosrTabs;
+          if (raw) state = JSON.parse(raw);
+        } catch (err) {
+          state = null;
+        }
+        if (state) render(state);
+      }
+
+      window.addEventListener('message', function (event) {
+        if (event.source !== window) return;
+        var message = event.data;
+        if (!message || message.source !== 'brosr-tabs' || message.type !== 'state') return;
+        render(message.state);
+      });
+
+      read();
+      setInterval(read, 1000);
+      window.postMessage({ source: 'brosr-app', type: 'tabs-state' }, location.origin);
     })();
   </script>
 </body>

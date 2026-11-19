@@ -972,23 +972,6 @@ function renderCursorDrops(data) {
   node.hidden = false;
 }
 
-function renderTrust(data) {
-  const box = $('trust-target');
-  const note = $('trust-note');
-  if (!box) return;
-  const hasTrust = Boolean(data && data.trust);
-  const url = data && typeof data.trustTarget === 'string' ? data.trustTarget : '';
-  box.disabled = !hasTrust;
-  box.checked = hasTrust && Boolean(url);
-  if (note) {
-    note.textContent = !hasTrust
-      ? 'This room has no trusted channel.'
-      : url
-        ? `Typing goes to ${pageLabel(url)}.`
-        : 'Typing goes to this room tab.';
-  }
-}
-
 function render(reply) {
   lastReply = reply;
   delete document.body.dataset.state;
@@ -996,18 +979,11 @@ function render(reply) {
   const roomLabel = data.roomName || reply.roomName || reply.room || 'room';
   $('room').textContent = roomLabel;
   $('role').textContent = reply.role || '';
-  // The background page learns the role from the room tab hello. When the tab
-  // list lands first, this fills the gap on the next status pass.
-  if (tabState && !tabState.role && reply.role) {
-    tabState.role = reply.role;
-    renderTabs();
-  }
   $('dot').dataset.state = data.socket === 1 ? 'live' : 'down';
   if (data.socket === 1) setStatus('');
   else setStatus('Reconnecting...', 'error');
   // Host controls live in the Brosr app now.
   renderSeal(data.seal);
-  renderTrust(data);
   const invite = inviteLink(data.inviteUrl || data.location, roomLabel);
   if ($('invite-box')) $('invite-box').hidden = !invite;
   if (invite && $('invite')) $('invite').value = invite;
@@ -1089,7 +1065,6 @@ function render(reply) {
     data.socket === 1 ? (reconnects ? `Live, ${reconnects} reconnects` : 'Live') : 'Reconnecting';
   $('playback').textContent =
     typeof data.playing === 'boolean' ? (data.playing ? 'Playing' : 'Paused') : '-';
-
 }
 
 // A room tab can reload, or a sidebar can lose its channel for a moment. The
@@ -1122,7 +1097,6 @@ function missing(reason) {
   $('room').textContent = 'Room';
   renderSettings(null);
   renderSeal(null);
-  renderTrust(null);
   $('playback').textContent = '-';
   $('relay').textContent = '-';
   renderWatch(null);
@@ -1240,9 +1214,16 @@ async function readFilm(reply) {
       1500
     );
     filmReadingReply = reading || { ok: false, reason: 'timeout' };
-    filmReading = reading && reading.ok ? reading : null;
+    // A reply can be ok but carry no relay block, for example from a tab that
+    // answers for a player the relay does not own. Name that case instead of
+    // showing the same unexplained "unavailable" as a timeout.
+    if (reading && reading.ok && !reading.relay) {
+      filmReadingReply = { ...reading, reason: 'no-relay' };
+    }
+    filmReading = reading && reading.ok && reading.relay ? reading : null;
   } catch {
     filmReading = null;
+    filmReadingReply = { ok: false, reason: 'send-failed' };
   }
 }
 
@@ -1377,8 +1358,7 @@ menu.addEventListener('keydown', (event) => {
   items[next].focus();
 });
 
-// Tab sharing is host led. The panel only says what this browser sends, and the
-// background page opens what the host announces.
+// A stopped row names the site the copy sits on.
 function hostOf(url) {
   try {
     return new URL(String(url)).hostname.replace(/^www\./, '');
@@ -1387,74 +1367,75 @@ function hostOf(url) {
   }
 }
 
-// A target reads as the page it is, not only as the site it sits on.
-function pageLabel(url) {
-  try {
-    const parsed = new URL(String(url));
-    return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`;
-  } catch {
-    return String(url || '');
+// A copy this browser stopped still has its tab. The panel lists it so one
+// click puts it back in the room without opening a second one.
+function renderStopped() {
+  const stopped = tabState && Array.isArray(tabState.stopped) ? tabState.stopped : [];
+  // The header says how many copies wait below, so a person on the Cursor
+  // pane still sees that one is stopped.
+  const badge = $('stopped-count');
+  if (badge) {
+    badge.hidden = !stopped.length;
+    badge.textContent = stopped.length ? `${stopped.length} stopped` : '';
+    badge.title = stopped.length
+      ? `${stopped.length} stopped ${stopped.length === 1 ? 'copy' : 'copies'}`
+      : '';
   }
-}
-
-function renderTabs() {
-  const list = $('tabs-list');
-  const auto = $('tabs-auto');
-  const note = $('tabs-note');
-  if (!list || !auto || !note) return;
-  const state = tabState;
-  // Control is what allows a tab to go out. A granted peer holds it just as
-  // the host does, so a ticked tab works for either one.
-  const canShare = Boolean(state && state.canShare);
-  const guest = Boolean(state && !state.canShare);
-  auto.disabled = !canShare;
-  auto.checked = Boolean(state && state.auto);
-  auto.title = canShare ? 'Send every new tab to the room.' : 'Ask the host for control first.';
-  const noticeBox = $('notice-media');
-  if (noticeBox) {
-    noticeBox.checked = !state || state.notices !== false;
-    noticeBox.disabled = !state;
-  }
-  note.hidden = !guest;
-  note.textContent = guest ? 'Ask the host for control, then tick a tab.' : '';
-  renderSync();
+  const section = $('stopped-section');
+  const list = $('stopped-list');
+  if (!section || !list) return;
+  section.hidden = !stopped.length;
   list.replaceChildren();
-  // A browser without control never shares, so its own tabs are not a choice
-  // and the list stays empty. Showing them would suggest a control it does not
-  // hold.
-  if (!canShare) return;
-  const tabs = (state && Array.isArray(state.tabs) ? state.tabs : []).filter((tab) => !tab.room);
-  if (!tabs.length) {
-    const empty = document.createElement('li');
-    empty.className = 'tabs-empty';
-    empty.textContent = state ? 'No other tab to share yet.' : 'Reading tabs...';
-    list.append(empty);
-    return;
-  }
-  for (const tab of tabs) {
+  for (const entry of stopped) {
     const row = document.createElement('li');
-    const label = document.createElement('label');
-    label.className = 'tab-row';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = Boolean(tab.shared);
-    box.disabled = !canShare;
-    box.setAttribute('aria-label', `Share ${tab.title || 'this tab'}`);
+    const line = document.createElement('div');
+    line.className = 'tab-row stopped-row';
     const text = document.createElement('span');
     text.className = 'tab-text';
     const title = document.createElement('span');
     title.className = 'tab-title';
-    title.textContent = tab.title || tab.url || 'Tab';
-    title.title = tab.url || '';
+    title.textContent = entry.title || entry.url || 'Tab';
+    title.title = entry.url || '';
     const hostName = document.createElement('span');
     hostName.className = 'tab-host';
-    hostName.textContent = hostOf(tab.url);
+    hostName.textContent = hostOf(entry.url);
     text.append(title, hostName);
-    label.append(box, text);
-    box.addEventListener('change', () => setShared(tab, box));
-    row.append(label);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tab-resume';
+    button.textContent = 'Resume';
+    button.setAttribute('aria-label', `Resume syncing ${entry.title || 'this tab'}`);
+    button.addEventListener('click', () => resumeTab(entry, button));
+    line.append(text, button);
+    row.append(line);
     list.append(row);
   }
+}
+
+// The tab never closed, so a resume asks the background for its key back. The
+// room tab adds the key to its joined list and the same copy follows again.
+async function resumeTab(entry, button) {
+  button.disabled = true;
+  try {
+    const reply = await tabMessage({ type: 'brosr:tab-resume', key: entry.key });
+    if (reply && reply.ok) {
+      notice(
+        reply.joined
+          ? 'That tab follows the room again.'
+          : 'That tab is back in the room. Open the room tab to join it.'
+      );
+      await loadTabs();
+      return;
+    }
+    notice(
+      reply && reply.reason === 'no-tab' ? 'That tab is gone.' : 'That tab did not come back.',
+      true
+    );
+  } catch {
+    notice('The background page did not answer.', true);
+  }
+  button.disabled = false;
+  await loadTabs();
 }
 
 // A worker that is still starting can hold a message channel open. A short
@@ -1467,164 +1448,21 @@ function tabMessage(payload) {
 }
 
 async function loadTabs() {
-  if (!api || !api.runtime || !$('tabs-list')) return;
+  if (!api || !api.runtime || !$('stopped-list')) return;
   try {
     const reply = await tabMessage({ type: 'brosr:tabs-list' });
     if (reply && reply.ok) {
-      tabState = {
-        role: reply.role || '',
-        canShare: Boolean(reply.canShare || reply.role === 'host'),
-        auto: Boolean(reply.auto),
-        sync: reply.sync !== false,
-        notices: reply.notices !== false,
-        tabs: Array.isArray(reply.tabs) ? reply.tabs : [],
-      };
-      renderTabs();
+      tabState = { stopped: Array.isArray(reply.stopped) ? reply.stopped : [] };
+      renderStopped();
       return;
     }
   } catch {
     // A worker restart drops one read. The next open fills the list.
   }
   if (!tabState) {
-    tabState = { role: '', auto: false, tabs: [] };
-    renderTabs();
+    tabState = { stopped: [] };
+    renderStopped();
   }
-}
-
-// The box moves at once and rolls back when the background page refuses, so a
-// guest never sees a tab marked shared that the room never received.
-async function setShared(tab, box) {
-  const wanted = box.checked;
-  box.disabled = true;
-  try {
-    const reply = await tabMessage({
-      type: 'brosr:tab-share',
-      tabId: tab.id,
-      shared: wanted,
-    });
-    if (reply && reply.ok) {
-      notice(wanted ? 'Sharing that tab.' : 'That tab stays private.');
-      await loadTabs();
-      return;
-    }
-    box.checked = !wanted;
-    notice('Ask the host for control first.', true);
-  } catch {
-    box.checked = !wanted;
-    notice('The background page did not answer.', true);
-  }
-  box.disabled = false;
-}
-
-// Playback sync is a switch, not a property of a room. The panel says which
-// way it points and the background drops the frames either way.
-function renderSync() {
-  const box = $('sync-media');
-  const note = $('playback-note');
-  if (!box) return;
-  box.checked = !tabState || tabState.sync !== false;
-  box.disabled = !tabState;
-  if (note) {
-    note.textContent = box.checked
-      ? 'This browser follows the room playhead.'
-      : 'This browser plays on its own.';
-  }
-}
-
-const syncBox = $('sync-media');
-if (syncBox) {
-  syncBox.addEventListener('change', async (event) => {
-    const box = event.currentTarget;
-    const wanted = box.checked;
-    box.disabled = true;
-    try {
-      const reply = await tabMessage({ type: 'brosr:sync-toggle', on: wanted });
-      if (reply && reply.ok) {
-        notice(wanted ? 'Playback follows the room.' : 'Playback stays on this browser.');
-        await loadTabs();
-        return;
-      }
-      box.checked = !wanted;
-      notice('The browser did not answer.', true);
-    } catch {
-      box.checked = !wanted;
-      notice('The background page did not answer.', true);
-    }
-    box.disabled = false;
-  });
-}
-
-const noticeToggle = $('notice-media');
-if (noticeToggle) {
-  noticeToggle.addEventListener('change', async (event) => {
-    const box = event.currentTarget;
-    const wanted = box.checked;
-    box.disabled = true;
-    try {
-      const reply = await tabMessage({ type: 'brosr:notice-toggle', on: wanted });
-      if (reply && reply.ok) {
-        notice(wanted ? 'Action notices are on.' : 'Action notices are off.');
-        await loadTabs();
-        return;
-      }
-      box.checked = !wanted;
-      notice('The browser did not answer.', true);
-    } catch {
-      box.checked = !wanted;
-      notice('The background page did not answer.', true);
-    }
-    box.disabled = false;
-  });
-}
-
-// Trusted typing follows one tab at a time. The switch sends that tab's URL to
-// the room tab, and the helper resolves it on this browser. A room opened
-// without a trusted channel answers no-trust and the switch rolls back.
-const trustBox = $('trust-target');
-if (trustBox) {
-  trustBox.addEventListener('change', async (event) => {
-    const box = event.currentTarget;
-    const wanted = box.checked;
-    const tab = await targetTab();
-    if (!tab) {
-      box.checked = !wanted;
-      return notice('Open a room tab first.', true);
-    }
-    let url = null;
-    if (wanted) {
-      const [active] = await api.tabs.query({ active: true, currentWindow: true });
-      const open = (await api.tabs.query({ currentWindow: true })).filter(usable);
-      const page =
-        usable(active) && /^https?:/.test(active.url || '') && !isRoomPage(active.url || '')
-          ? active
-          : open.find((item) => /^https?:/.test(item.url || '') && !isRoomPage(item.url || ''));
-      if (!page) {
-        box.checked = false;
-        return notice('Open the page you want to type into, then tick this.', true);
-      }
-      url = page.url;
-    }
-    box.disabled = true;
-    try {
-      const reply = await api.tabs.sendMessage(tab.id, { type: 'brosr:trust-target', url });
-      if (reply && reply.ok) {
-        notice(url ? `Typing goes to ${pageLabel(url)}.` : 'Typing goes to the room tab.');
-        await refresh();
-        return;
-      }
-      box.checked = !wanted;
-      notice(
-        reply && reply.reason === 'no-trust'
-          ? 'Start the room with trusted input first.'
-          : 'The room tab did not answer.',
-        true
-      );
-    } catch {
-      box.checked = !wanted;
-      notice('The room tab did not answer.', true);
-    }
-    box.disabled = false;
-  });
 }
 
 // The room and cursor controls share one menu. Tabs keep the shared surface
@@ -1680,7 +1518,7 @@ renderPanelSites();
 renderSkeleton();
 // One pass before the read, so the section states what it is doing instead of
 // sitting blank while a cold worker starts.
-renderTabs();
+renderStopped();
 renderSettings(null);
 loadTabs();
 $('refresh').addEventListener('click', refresh);
@@ -1811,13 +1649,6 @@ setInterval(async () => {
             .map((node) => node.textContent)
             .join(', '),
         control: false,
-        tabs: tabState
-          ? {
-              role: tabState.role,
-              auto: tabState.auto,
-              count: tabState.tabs.filter((tab) => !tab.room).length,
-            }
-          : null,
         notice: $('notice').textContent,
         status: $('status').textContent,
         peers: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent),

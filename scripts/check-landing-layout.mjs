@@ -143,7 +143,7 @@ const SNAPSHOT = `(() => {
       gapAboveOpen: open && head ? round(open.getBoundingClientRect().top - head.getBoundingClientRect().bottom) : null,
     };
   });
-  const labels = [...document.querySelectorAll('.tile-name, .tile-note, .site-name, .site-host, .site-group-title, .site-filter-label, .site-filter-count, .site-empty')].map((node) => ({
+  const labels = [...document.querySelectorAll('.tile-name, .tile-note, .site-name, .site-host, .site-group-title, .site-filter-label, .site-filter-count, .site-empty, .live-title, .live-note, .live-count, .live-owner-name, .live-role, .live-tab-title, .live-tab-host, .live-empty, .live-action, .live-state, .live-stop, .live-play')].map((node) => ({
     cls: node.className,
     text: node.textContent.trim().slice(0, 40),
     size: round(parseFloat(getComputedStyle(node).fontSize)),
@@ -506,6 +506,195 @@ try {
       );
     } else {
       pass(`Escape clears the field and restores all ${filter.total} rows`);
+    }
+  }
+
+  // 11. Live tabs are offers, not instructions. The core sends one group per
+  // person with the host first, and the page must keep that order. Every row
+  // starts at Open until someone joins it, a click joins one row, and Stop
+  // puts that row back without closing anything. A hidden section with two
+  // offers is a page a peer cannot use.
+  const LIVE = `(async () => {
+    const fixture = {
+      role: 'peer',
+      peerId: 'peer-2',
+      hostId: 'host-1',
+      joined: [],
+      groups: [
+        {
+          ownerId: 'host-1',
+          owner: 'Ana',
+          role: 'host',
+          tabs: [{ key: '1', url: 'https://www.youtube.com/watch?v=1', title: 'A long film', playing: true }],
+        },
+        {
+          ownerId: 'peer-3',
+          owner: 'Bo',
+          role: 'control',
+          tabs: [{ key: '2', url: 'https://example.com/notes', title: 'Notes for the room', playing: false }],
+        },
+      ],
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    // The lane stands in for the core. It records what the page asked for and
+    // answers with the state that request would produce.
+    const sent = [];
+    const push = (state) => {
+      document.documentElement.dataset.brosrTabs = JSON.stringify(state);
+      window.postMessage({ source: 'brosr-tabs', type: 'state', state: state }, location.origin);
+    };
+    window.addEventListener('message', (event) => {
+      if (event.source !== window) return;
+      const message = event.data;
+      if (!message || message.source !== 'brosr-app') return;
+      if (message.type === 'join-tab') {
+        sent.push({ type: 'join-tab', key: message.key });
+        push(Object.assign({}, fixture, { joined: [message.key] }));
+      }
+      if (message.type === 'leave-tab') {
+        sent.push({ type: 'leave-tab', key: message.key });
+        push(Object.assign({}, fixture, { joined: [] }));
+      }
+    });
+    document.documentElement.dataset.brosrTabs = JSON.stringify(fixture);
+    for (let i = 0; i < 30; i += 1) {
+      if (document.querySelectorAll('.live-row').length === 2) break;
+      await wait(100);
+    }
+    const section = document.querySelector('.live');
+    const groups = [...document.querySelectorAll('.live-group')];
+    const rows = () => [...document.querySelectorAll('.live-row')];
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { left: rect.left, right: rect.right };
+    };
+    const sectionBox = section ? box(section) : null;
+    const pageBox = box(document.querySelector('.page'));
+    // A joined row reports through a state pill and a Stop button, so the lane
+    // reads both shapes instead of assuming one button per row.
+    const actionText = (row) => {
+      const button = row.querySelector('.live-action');
+      if (button) return button.textContent.trim();
+      const state = row.querySelector('.live-state');
+      return state ? state.textContent.trim() : '';
+    };
+    const startRows = rows();
+    const buttons = startRows.map((row) => row.querySelector('.live-action'));
+    const titles = startRows.map((row) => row.querySelector('.live-tab-title').textContent.trim());
+    const plays = startRows.map((row) => {
+      const play = row.querySelector('.live-play');
+      return play ? play.textContent.trim() : '';
+    });
+    const labels = startRows.map(actionText);
+    const pressed = buttons.map((button) => (button ? button.getAttribute('aria-pressed') : null));
+    // A row is a choice. The click reaches the core, and the answer turns that
+    // one row into Synced with a Stop beside it.
+    const open = startRows[0] ? startRows[0].querySelector('.live-action') : null;
+    if (open) open.click();
+    await wait(80);
+    for (let i = 0; i < 40; i += 1) {
+      if (rows()[0] && actionText(rows()[0]) === 'Synced') break;
+      await wait(50);
+    }
+    const afterJoin = rows().map(actionText);
+    const stopButton = rows()[0] ? rows()[0].querySelector('.live-stop') : null;
+    const stopHeight = stopButton ? stopButton.getBoundingClientRect().height : 0;
+    const stopLabel = stopButton ? stopButton.textContent.trim() : '';
+    if (stopButton) stopButton.click();
+    // The row repaints at once, and the message the click queued arrives on a
+    // later task. The lane waits for that task, not only for the paint.
+    await wait(120);
+    for (let i = 0; i < 40; i += 1) {
+      if (rows()[0] && actionText(rows()[0]) === 'Open') break;
+      await wait(50);
+    }
+    const afterStop = rows().map(actionText);
+    return {
+      hidden: !section || section.hidden,
+      rows: rows().length,
+      owners: groups.map((group) => group.querySelector('.live-owner-name').textContent.trim()),
+      roles: groups.map((group) => group.querySelector('.live-role').textContent.trim()),
+      titles: titles,
+      plays: plays,
+      labels: labels,
+      pressed: pressed,
+      afterJoin: afterJoin,
+      afterStop: afterStop,
+      stop: stopLabel,
+      stopHeight: stopHeight,
+      stopped: rows().every((row) => !row.querySelector('.live-stop')),
+      sent: sent,
+      empty: document.querySelector('.live-empty').getClientRects().length > 0,
+      count: document.querySelector('.live-count').textContent.trim(),
+      overflow:
+        sectionBox === null
+          ? null
+          : Math.max(0, ...rows().map((row) => box(row).right - sectionBox.right)),
+      insidePage:
+        sectionBox === null
+          ? false
+          : sectionBox.left >= pageBox.left - 0.5 && sectionBox.right <= pageBox.right + 0.5,
+    };
+  })()`;
+  const live = await tab.eval(LIVE);
+  if (live.hidden) {
+    fail('the Live tabs section stays hidden with two offers');
+  } else {
+    if (live.owners.join(',') !== 'Ana,Bo') {
+      fail(`the Live tabs section groups as ${live.owners.join(', ') || 'nothing'} and not the host first`);
+    } else {
+      pass(`Live tabs puts ${live.owners[0]} (${live.roles[0]}) first and ${live.owners[1]} second`);
+    }
+    if (live.rows !== 2 || live.titles[0] !== 'A long film' || live.titles[1] !== 'Notes for the room') {
+      fail(`Live tabs draws ${live.rows} rows as ${live.titles.join(', ') || 'nothing'}`);
+    } else {
+      pass('Live tabs draws one row per offer under its owner');
+    }
+    if (live.labels.join(',') !== 'Open,Open' || live.pressed.join(',') !== 'false,false') {
+      fail(`Live tabs starts with ${live.labels.join(', ') || 'no rows'} and pressed ${live.pressed.join(', ')}`);
+    } else {
+      pass('every Live tab starts at Open and none is pressed');
+    }
+    if (live.empty || live.count !== '2 tabs') {
+      fail(`Live tabs shows the empty state ${live.empty ? 'on' : 'off'} beside the count "${live.count}"`);
+    } else {
+      pass('Live tabs counts 2 tabs and hides the empty state');
+    }
+    if (live.plays.join(',') !== 'Playing,Paused') {
+      fail(`Live tabs shows ${live.plays.join(', ') || 'no playback state'} on two offers`);
+    } else {
+      pass('Live tabs shows Playing and Paused on the offers that report one');
+    }
+    if (!live.sent.some((entry) => entry.type === 'join-tab' && entry.key === '1')) {
+      fail('a click on a Live tab row sends no join');
+    } else if (live.afterJoin.join(',') !== 'Synced,Open') {
+      fail(`a joined row reads ${live.afterJoin.join(', ') || 'nothing'} beside ${live.afterJoin[1] || 'nothing'}`);
+    } else {
+      pass('a click joins one row as Synced and leaves the other at Open');
+    }
+    if (!live.sent.some((entry) => entry.type === 'leave-tab' && entry.key === '1')) {
+      fail('Stop sends no leave to the core');
+    } else if (live.stop !== 'Stop' || live.afterStop.join(',') !== 'Open,Open') {
+      fail(`Stop reads ${live.stop || 'nothing'} and the rows after it read ${live.afterStop.join(', ')}`);
+    } else {
+      pass('Stop asks the core to leave and puts the row back to Open');
+    }
+    if (!live.stopped) {
+      fail('a stopped row keeps its Stop control');
+    } else if (live.stopHeight < 28) {
+      fail(`the Stop control is ${round(live.stopHeight)} px tall`);
+    } else {
+      pass(`the Stop control is ${round(live.stopHeight)} px tall`);
+    }
+    if (live.overflow > 0.5) {
+      fail(`a Live tab row runs ${live.overflow} px past its section`);
+    } else {
+      pass('Live tab rows stay inside the section');
+    }
+    if (!live.insidePage) {
+      fail('the Live tabs section reaches outside the page column');
+    } else {
+      pass('the Live tabs section sits inside the page column');
     }
   }
 

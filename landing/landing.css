@@ -136,7 +136,7 @@ a {
   justify-content: space-between;
   gap: 16px;
   width: 100%;
-  max-width: 1180px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 24px 32px;
 }
@@ -195,7 +195,7 @@ a {
   z-index: 1;
   flex: 1;
   width: 100%;
-  max-width: 1180px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 8px 32px 48px;
 }
@@ -388,6 +388,286 @@ a {
 .tile-canvas:hover .tile-open svg,
 .tile-notes:hover .tile-open svg {
   transform: translate(2px, -2px);
+}
+
+/* Live tabs: one column per person with control. The section sits above the
+   bento because the choice comes before the apps. */
+.live {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background:
+    radial-gradient(80% 120% at 100% 0%, color-mix(in oklch, var(--brand) 4%, transparent), transparent 64%),
+    var(--card);
+  box-shadow: var(--shadow);
+}
+
+.live[hidden] {
+  display: none;
+}
+
+.live-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.live-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.live-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.live-note {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.live-count {
+  flex: none;
+  margin: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.live-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+.live-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-soft);
+}
+
+.live-owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.live-owner-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-role {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.live-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.live-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.live-tab {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.live-tab-title {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-tab-host {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.live-tab-host-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-play {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.live-play.is-playing {
+  border-color: transparent;
+  background: color-mix(in oklch, var(--brand) 10%, transparent);
+  color: var(--fg);
+}
+
+.live-play.is-paused {
+  border-color: transparent;
+  background: none;
+}
+
+.live-action {
+  flex: none;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.live-action:hover {
+  background: var(--brand-soft);
+}
+
+.live-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.live-action.is-synced {
+  border-color: transparent;
+  background: var(--brand);
+  color: var(--bg);
+}
+
+.live-action:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+/* A joined row reports its state and offers one way out. The state is not a
+   button, because pressing it would repeat what already happened. */
+.live-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: var(--bg);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.live-state.is-mine {
+  background: none;
+  color: var(--muted);
+}
+
+.live-stop {
+  flex: none;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.live-stop:hover {
+  background: var(--brand-soft);
+  color: var(--fg);
+}
+
+.live-stop:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.live-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.live-empty[hidden] {
+  display: none;
 }
 
 .site-list {
@@ -681,6 +961,14 @@ a {
     padding: 16px 20px;
   }
 
+  .live {
+    padding: 10px;
+  }
+
+  .live-head {
+    flex-wrap: wrap;
+  }
+
   .room-state {
     max-width: 100%;
   }
@@ -753,6 +1041,8 @@ a {
   .site,
   .tile-open svg,
   .site-arrow,
+  .live-action,
+  .live-stop,
   .cursor {
     transition: none;
   }

@@ -12,6 +12,7 @@ script and a Node test drive the same modules.
 | `media.mjs` | `HTMLMediaElement` adapter keyed by a source URL |
 | `youtube.mjs` | YouTube IFrame player adapter, with an element view for the room |
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
+| `live-tabs.mjs` | Shared tab offers: validation, owner and host role, dedupe, forget on close, playback state, grouping per person |
 | `overlay.mjs` | Cursor overlay inside one closed shadow root |
 | `input.mjs` | Batcher, grants, origin allowlist, sensitive fields, targeting, replay |
 | `trust.mjs` | Record to BiDi action mapping and the page-side trusted client |
@@ -57,7 +58,7 @@ Each one cost a spike run to learn.
 5. An input frame names its sender. The receiver looks up the grant by peer, and it refuses a
    frame without `peerId`.
 
-`npm test` runs 252 tests with the Node test runner and no dependencies. The wire test also runs
+`npm test` runs the suite with the Node test runner and no dependencies. The wire test also runs
 against the axum relay when `RELAY_BIN` names its binary.
 
 A room whose invite carries a key seals every frame it sends, and it drops an unsealed frame

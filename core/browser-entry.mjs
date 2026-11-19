@@ -5,7 +5,15 @@
 
 import { createRoomClient, PEER_IDLE_MS, PRESENCE_TICK_MS } from './sync.mjs';
 import { PROTOCOL_VERSION } from './protocol.mjs';
-import { TAB_APP, tabClose, tabOpen } from './tabs.mjs';
+import { TAB_APP, tabClose } from './tabs.mjs';
+import {
+  forgetSharedTab,
+  groupSharedTabs,
+  noteSharedMedia,
+  rememberSharedTab,
+  sharedTab,
+  tabMedia,
+} from './live-tabs.mjs';
 import { PANEL_APP } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
@@ -15,7 +23,9 @@ import {
   filmUrl,
   framePageHref,
   freshState,
+  mediaEchoMatches,
   mediaStateFromDocument,
+  remoteMediaEcho,
   viewerState,
 } from './media-relay.mjs';
 import { openFrame, sealFrame, roomKey } from './seal.mjs';
@@ -168,7 +178,17 @@ async function startPageMedia() {
     hostname: location.hostname,
     pageHref,
   });
-  const relay = { key: '', position: 0, playing: false, ad: false, sends: 0, applies: 0, last: null };
+  const relay = {
+    key: '',
+    position: 0,
+    playing: false,
+    ad: false,
+    sends: 0,
+    applies: 0,
+    last: null,
+    localDrops: {},
+    lastLocalDrop: null,
+  };
   const publishRelay = () => {
     document.documentElement.dataset.brosrRelay = JSON.stringify(relay);
   };
@@ -283,10 +303,13 @@ async function startPageMedia() {
   const notice = new ActionNotice({ document });
   let lastApplied = null;
   // A frame this tab applies moves its own player, and that player answers
-  // with play, pause and seek events. Those are not this person's acts, so the
-  // window keeps them from travelling back as a fresh command.
-  let remoteAppliedAt = 0;
-  runtime.onMessage.addListener((message) => {
+  // with the action it was told to perform. Only that action is an echo; a
+  // person's pause after a remote seek is a new act and must travel.
+  let remoteEcho = null;
+  // A hidden tab throttles its own report timer. The room still sends applies,
+  // so the frame that owns the player answers one with its current state.
+  let lastHiddenReportAt = 0;
+  runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
       placeCursor(message.position);
@@ -316,16 +339,25 @@ async function startPageMedia() {
       // stay silent, or Chrome returns that empty answer before the top frame
       // can report the film it holds.
       if (!video) return undefined;
-      // A bare object is not an answer in Gecko, so this page returns a
-      // promise like the room tab does through sendResponse.
-      return Promise.resolve({
+      const reading = {
         ok: true,
         requestId: message.requestId || null,
-        relay: { ...relay },
+        // The panel needs the relay's own counts, not only the room's. A film
+        // tab can wait on a buffer and retry a stuck seek without either one
+        // showing up in the room counters.
+        relay: { ...relay, stats: { ...remote.stats }, history: remote.historyView() },
         position: Number(video.currentTime || 0),
         duration: Number(video.duration || 0),
         paused: Boolean(video.paused),
-      });
+      };
+      // Chrome does not guarantee that a listener may return a promise. The
+      // callback form works in both Chrome and Firefox, so the reading uses it
+      // instead of looking like a silent timeout on the host.
+      if (typeof sendResponse === 'function') {
+        sendResponse(reading);
+        return undefined;
+      }
+      return Promise.resolve(reading);
     }
     if (message.type !== 'brosr:media-apply') return undefined;
     relay.applies += 1;
@@ -333,24 +365,12 @@ async function startPageMedia() {
     const result = remote.handle(message);
     relay.last = result;
     publishRelay();
-    // Only a frame that carries an act, or a correction this tab had to issue,
-    // starts the echo window. A routine tick arrives four times a second, and a
-    // window that every tick refreshed never opened: a granted peer's own pause
-    // or seek was always inside it and never left the browser. A correction is
-    // the other case, because the seek would report itself as a person's act
-    // and pull the host's film back to this tab's own idea of the position.
-    const corrected = Boolean(result) && (result.action === 'seek' || result.action === 'seek-retry');
-    // A routine host tick keeps the local player in the state it already had,
-    // so it must not open the window. A host pause or play also travels labelled
-    // tick, so compare the applied playing flag instead of the label. The change
-    // is an act, and the player's own event is the echo to keep home.
-    const playingChanged =
-      !previous ||
-      previous.key !== message.key ||
-      previous.playing !== Boolean(message.playing);
-    if (result && result.ok && !result.skipped && (playingChanged || corrected)) {
-      remoteAppliedAt = Date.now();
-    }
+    // A buffer hold or a room hold pauses the film from inside the relay. That
+    // pause is not a person's act. A seek correction is the same: the seeked
+    // event belongs to the correction. Keep only those actions home, so a real
+    // pause or seek made just after the correction still reaches the room.
+    const echo = remoteMediaEcho(result, previous, message);
+    if (echo) remoteEcho = echo;
     if (!result || !result.ok || result.skipped) {
       lastApplied = null;
       return undefined;
@@ -371,6 +391,13 @@ async function startPageMedia() {
       rate: Number(message.rate || 1),
       at: Date.now(),
     };
+    // A hidden tab throttles its report timer to once a minute. The room still
+    // sends applies, so answer one with the state the player now holds. This
+    // keeps the host's local position fresh while the app is in front.
+    if (document.visibilityState === 'hidden' && Date.now() - lastHiddenReportAt >= 1000) {
+      lastHiddenReportAt = Date.now();
+      queueMicrotask(reportMedia);
+    }
     return undefined;
   });
 
@@ -390,11 +417,18 @@ async function startPageMedia() {
     // sends the report a moment later, and a frame that stamped the send would
     // put every guest the age of the report past the film.
     state.at = Date.now();
+    // A film paused for an unbuffered seek is not a starved element, but the
+    // room should see the wait. Same fate can then hold every player instead
+    // of letting this one run away from its target. The check also expires the
+    // wait, so a room hold releases when the range arrives or the deadline
+    // passes even while no frame reaches this tab.
+    if (remote.bufferWaitActive()) state.buffering = true;
     // A person's play, pause, seek or rate change is an act. The four-a-second
     // tick only reads the clock, and a granted peer that sent its own lag as
     // an anchor pulled the host's playhead back and beat the host's own play
-    // and pause. An act crosses the room, a tick stays home.
-    state.action = Boolean(userAction);
+    // and pause. An act crosses the room, a tick stays home. The action keeps
+    // its name so the host can apply a pause at the host's own playhead.
+    state.action = typeof userAction === 'string' ? userAction : Boolean(userAction);
     if (state.key !== relayKey) {
       relayKey = state.key;
       send({ type: 'brosr:media-hello', key: state.key }).catch(() => {});
@@ -412,13 +446,24 @@ async function startPageMedia() {
   // A play, pause, seek or rate change is a whole act. It goes out at once,
   // while the interval above catches the rest of the clock. An act this tab
   // just applied from the room is skipped, or two browsers answer each
-  // other's corrections forever.
-  const act = () => {
-    if (Date.now() - remoteAppliedAt < 600) return;
-    reportMedia(true);
+  // other's corrections forever. A different act is this person's, even when
+  // it comes just after a correction.
+  const act = (action) => {
+    if (mediaEchoMatches(remoteEcho, action)) {
+      relay.localDrops.echo = (relay.localDrops.echo || 0) + 1;
+      relay.lastLocalDrop = { at: Date.now(), action, reason: 'echo' };
+      publishRelay();
+      return;
+    }
+    reportMedia(action);
   };
-  for (const type of ['play', 'pause', 'seeked', 'ratechange']) {
-    document.addEventListener(type, act, true);
+  for (const [type, action] of [
+    ['play', 'play'],
+    ['pause', 'pause'],
+    ['seeked', 'seek'],
+    ['ratechange', 'rate'],
+  ]) {
+    document.addEventListener(type, () => act(action), true);
   }
 
   return { started: true, role: 'media', room: null, peerId: null };
@@ -493,6 +538,28 @@ export async function start() {
   const hostId = config.hostId || 'host';
   const name = config.name || peerId;
   const roomName = cleanRoomName(config.roomName || 'Room');
+  // A tab in the room is an offer, never an instruction. The host and granted
+  // peers publish what they have open, and a peer opens a copy only when it
+  // clicks a row. The key names the publisher's tab, so one row follows it.
+  let sharedTabs = [];
+  const joinedKey = `brosr-joined-tabs:${room}`;
+  const joinedTabs = new Set((() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(joinedKey) || '[]');
+      return Array.isArray(saved)
+        ? saved.filter((key) => typeof key === 'string' && key !== '')
+        : [];
+    } catch {
+      return [];
+    }
+  })());
+  const saveJoinedTabs = () => {
+    try {
+      sessionStorage.setItem(joinedKey, JSON.stringify([...joinedTabs]));
+    } catch {
+      // Storage can be off. The set still works for this page.
+    }
+  };
   // A measurement written for this room is local to this browser. A null or
   // malformed value means no offset, which is the same room as before.
   const savedAlign = (() => {
@@ -532,6 +599,16 @@ export async function start() {
     }
   })());
   let cursorSites = savedSites;
+  // Scroll follows its own list, so switching pointers off on a site does not
+  // also stop the room from following the host's reading place there.
+  const savedScrollSites = cleanCursorSites((() => {
+    try {
+      return JSON.parse(readSetting('brosr-scroll-sites') || 'null');
+    } catch {
+      return null;
+    }
+  })());
+  let scrollSites = savedScrollSites;
   // Sites the host removed from the panel list. The list belongs to the host,
   // so only the room tab of the host browser ever writes this.
   const savedForgot = cleanCursorSites((() => {
@@ -685,8 +762,14 @@ export async function start() {
     sharePointer,
     sameFate,
     cursorSites,
+    scrollSites,
     cursorForgot,
     showNames,
+    onScrollPolicy: (sites) => {
+      const list = Array.isArray(sites) ? sites : null;
+      scrollSites = list;
+      writeSetting('brosr-scroll-sites', JSON.stringify(list));
+    },
     // A learned list is written here and sent to the rest of this browser, so
     // every tab follows the host without holding a socket.
     onPolicy: (sites) => {
@@ -742,16 +825,39 @@ export async function start() {
         // it, and copying an announcement back to its own sender opens the film
         // again on the machine that asked for it.
         if (message.from === peerId) return;
-        const close = tabClose(message.data);
-        if (close && api && api.runtime && api.runtime.sendMessage) {
-          api.runtime
-            .sendMessage({ type: 'brosr:tab-close-local', key: close.key })
-            .catch(() => {});
+        // A publisher reports that a tab started or stopped playing. The row
+        // updates in place, and no tab opens from this frame.
+        const media = tabMedia(message.data);
+        if (media) {
+          sharedTabs = noteSharedMedia(sharedTabs, media);
+          publishSharedTabs();
+          return;
         }
-        const open = tabOpen(message.data);
-        if (open && api && api.runtime && api.runtime.sendMessage) {
+        // A close withdraws the offer and closes a copy this browser opened.
+        // It never closes a tab the publisher did not share.
+        const close = tabClose(message.data);
+        if (close) {
+          sharedTabs = forgetSharedTab(sharedTabs, close.key);
+          joinedTabs.delete(close.key);
+          saveJoinedTabs();
+          publishSharedTabs();
+          if (api && api.runtime && api.runtime.sendMessage) {
+            api.runtime
+              .sendMessage({ type: 'brosr:tab-close-local', key: close.key })
+              .catch(() => {});
+          }
+          return;
+        }
+        const offer = sharedTab(message.data, { from: message.from, hostId });
+        if (!offer) return;
+        sharedTabs = rememberSharedTab(sharedTabs, offer);
+        publishSharedTabs();
+        // A peer still opens nothing by itself. Only a key this browser already
+        // joined follows the publisher to a new page in the same tab.
+        if (!joinedTabs.has(offer.key)) return;
+        if (api && api.runtime && api.runtime.sendMessage) {
           api.runtime
-            .sendMessage({ type: 'brosr:tab-open-local', url: open.url, key: open.key })
+            .sendMessage({ type: 'brosr:tab-open-local', url: offer.url, key: offer.key })
             .catch(() => {});
         }
         return;
@@ -838,6 +944,8 @@ export async function start() {
       const at = Number(message.at) || Date.now();
       roomMedia = {
         key: message.key,
+        title: String(message.title || '').slice(0, 120),
+        music: Boolean(message.music),
         position,
         duration: 0,
         playing: Boolean(message.playing),
@@ -889,23 +997,44 @@ export async function start() {
   // The app control panel asks for one snapshot and sends one change at a
   // time. The room tab already owns the roster, grants and media view, so this
   // handler turns those into JSON instead of adding a second state store.
+  // The session log needs the film tab's own counters. The host tab can ask
+  // the background page for the one tab that owns the film, then carry the
+  // answer to the app beside the room snapshot.
+  async function panelFilmReading(media) {
+    if (!media || !media.key) {
+      return { reading: null, reply: { ok: false, reason: 'no-media' } };
+    }
+    if (!api || !api.runtime || !api.runtime.sendMessage) {
+      return { reading: null, reply: { ok: false, reason: 'no-bridge' } };
+    }
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      const answer = await Promise.race([
+        api.runtime.sendMessage({ type: 'brosr:film-reading', key: media.key, requestId }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1600)),
+      ]);
+      if (!answer) return { reading: null, reply: { ok: false, reason: 'timeout' } };
+      if (answer.ok && !answer.relay) {
+        return { reading: null, reply: { ...answer, reason: 'no-relay' } };
+      }
+      return { reading: answer.ok && answer.relay ? answer : null, reply: answer };
+    } catch {
+      return { reading: null, reply: { ok: false, reason: 'send-failed' } };
+    }
+  }
+
   async function panelSnapshot() {
     const live = status();
-    let browser = null;
-    // Only the host has controls to feed from the tab list. A guest asks for
-    // the people view, so it never waits on the background page for it.
-    if (role === 'host' && api && api.runtime && api.runtime.sendMessage) {
-      try {
-        // The tab list is useful but not required to control the room. A
-        // background page that is still starting must not hold the snapshot.
-        browser = await Promise.race([
-          api.runtime.sendMessage({ type: 'brosr:tabs-list' }),
-          new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
-        ]);
-      } catch {
-        // The background page may still be starting.
-      }
-    }
+    // The tab list feeds the controls. The film reading feeds the log. They
+    // run together, so a slow player never delays a control change.
+    const listing =
+      role === 'host' && api && api.runtime && api.runtime.sendMessage
+        ? Promise.race([
+            api.runtime.sendMessage({ type: 'brosr:tabs-list' }),
+            new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]).catch(() => null)
+        : Promise.resolve(null);
+    const [browser, film] = await Promise.all([listing, panelFilmReading(live.media)]);
     const self = {
       id: peerId,
       name,
@@ -920,11 +1049,74 @@ export async function start() {
         (peer) => peer && peer.id !== peerId && !peer.self
       ),
     ];
+    // A copied report read on its own must name its own author. The app log
+    // uses the same rule, but it keeps the host's own control state honest.
+    const logPeers = [
+      { ...self, granted: Boolean(live.granted) },
+      ...(Array.isArray(live.peerList) ? live.peerList : []).filter(
+        (peer) => peer && peer.id !== peerId && !peer.self
+      ),
+    ];
+    const diagnostics = {
+      room,
+      roomName: live.roomName || roomName,
+      role,
+      peerId,
+      name,
+      build: live.build || bridgeBuild,
+      hostBuild: live.hostBuild || null,
+      socket: live.socket,
+      reconnects: live.reconnects,
+      playing: live.playing,
+      peers: live.peers,
+      peerList: logPeers,
+      media: live.media || null,
+      viewers: panelViewers(),
+      align: live.align,
+      latency: live.latency,
+      clockOffset: live.clockOffset,
+      driftRate: live.driftRate,
+      sampleCount: live.sampleCount,
+      seal: live.seal,
+      lastMediaFrame: live.lastMediaFrame,
+      lastMediaAction: live.lastMediaAction,
+      lastLocalMediaAction: live.lastLocalMediaAction,
+      mediaDrops: live.mediaDrops,
+      mediaDropTicks: live.mediaDropTicks,
+      lastMediaDrop: live.lastMediaDrop,
+      mediaDropHistory: live.mediaDropHistory,
+      holds: live.holds,
+      lastHoldEvent: live.lastHoldEvent,
+      hostPriority: live.hostPriority,
+      lastSeek: live.lastSeek,
+      controlSent: live.controlSent,
+      controlReceived: live.controlReceived,
+      lastControl: live.lastControl,
+      controlHistory: live.controlHistory,
+      seeks: live.seeks,
+      nudges: live.nudges,
+      corrections: live.corrections,
+      stuckSeeks: live.stuckSeeks,
+      relayed: live.relayed,
+      mediaEcho: live.mediaEcho,
+      mediaEchoLocal: live.mediaEchoLocal,
+      firstDrift: live.firstDrift,
+      convergedAt: live.convergedAt,
+      stutter: live.stutter,
+      debug: live.debug,
+      reading: film.reading,
+      readingReply: film.reply,
+    };
     return {
       roomName: live.roomName || roomName,
       hostId: live.hostId || hostId,
+      role,
+      peerId,
+      name,
+      room,
       build: live.build || bridgeBuild,
       hostBuild: live.hostBuild || null,
+      socket: live.socket,
       peers,
       media: live.media || null,
       sameFate: Boolean(live.sameFate),
@@ -935,8 +1127,11 @@ export async function start() {
       cursorSites: Array.isArray(live.cursorSites) ? live.cursorSites : null,
       cursorSeen: Array.isArray(live.cursorSeen) ? live.cursorSeen : [],
       cursorForgot: Array.isArray(live.cursorForgot) ? live.cursorForgot : [],
+      scrollSites: Array.isArray(live.scrollSites) ? live.scrollSites : null,
+      scrollSeen: Array.isArray(live.scrollSeen) ? live.scrollSeen : [],
       trust: Boolean(trust),
       trustTarget: trustTarget || null,
+      diagnostics,
     };
   }
 
@@ -991,6 +1186,18 @@ export async function start() {
             writeSetting('brosr-cursor-forgot', JSON.stringify(cursorForgot));
           }
         }
+      } else if (data.action === 'scroll-site') {
+        if (role !== 'host') throw refusal('Only the host can change scroll sites.', 'not-host');
+        const site = cursorSiteOf(String(data.site || ''));
+        if (!site) throw refusal('That site is not valid.', 'bad-site');
+        const published = client.publish();
+        const base = Array.isArray(published.scrollSites)
+          ? published.scrollSites
+          : published.scrollSeen || [];
+        const next = new Set(base);
+        if (data.on) next.add(site);
+        else next.delete(site);
+        client.setScrollSites([...next]);
       } else if (data.action === 'room-name') {
         if (role !== 'host') throw refusal('Only the host can rename the room.', 'not-host');
         client.setRoomName(String(data.value || ''));
@@ -1136,8 +1343,10 @@ export async function start() {
     if (!anchor) return;
     greetedAt = Date.now();
     // The projection already names this instant, so the report is sent as it
-    // stands rather than carried forward a second time.
-    client.sendHostMedia({ ...relayedMedia.latest, ...anchor, at: Date.now() });
+    // stands rather than carried forward a second time. The greeting repeats
+    // an anchor, so it must not replay an old host action and reopen the
+    // host-priority window on every repeat.
+    client.sendHostMedia({ ...relayedMedia.latest, ...anchor, action: false, at: Date.now() });
   }, 500);
 
   // One film view feeds the panel. A viewer with no tab on the film still sees
@@ -1236,10 +1445,30 @@ export async function start() {
   };
   showLayoutNotice.shown = null;
 
+  // The landing page draws one group per person with control. It reads this
+  // when it is already open, and the dataset below when it is not.
+  let sharedTabsJson = '';
+  const publishSharedTabs = () => {
+    const next = {
+      role,
+      peerId,
+      hostId,
+      joined: [...joinedTabs],
+      groups: groupSharedTabs(sharedTabs, { hostId }),
+    };
+    const json = JSON.stringify(next);
+    if (json === sharedTabsJson) return;
+    sharedTabsJson = json;
+    document.documentElement.dataset.brosrTabs = json;
+    if (window.top !== window) return;
+    window.postMessage({ source: 'brosr-tabs', type: 'state', state: next }, location.origin);
+  };
+
   const publish = () => {
     const next = status();
     document.documentElement.dataset.brosr = JSON.stringify(next);
     showLayoutNotice(next.layoutNotice);
+    publishSharedTabs();
   };
 
   // A player object has no paused field and no play method, so the HTML start
@@ -1351,7 +1580,50 @@ export async function start() {
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const message = event.data;
-    if (!message || message.source !== 'brosr-app' || message.type !== 'send') return;
+    if (!message || message.source !== 'brosr-app') return;
+    // The landing page asks for the list once its script starts, because the
+    // core may have posted the first state before the page was listening.
+    if (message.type === 'tabs-state') {
+      publishSharedTabs();
+      return;
+    }
+    // A row is a choice. This is the only path that opens a shared tab, and it
+    // belongs to a click on the landing page.
+    if (message.type === 'join-tab') {
+      const key = String(message.key || '');
+      const offer = sharedTabs.find((tab) => tab.key === key);
+      if (!offer) return;
+      joinedTabs.add(key);
+      saveJoinedTabs();
+      publishSharedTabs();
+      if (api && api.runtime && api.runtime.sendMessage) {
+        api.runtime
+          .sendMessage({
+            type: 'brosr:tab-open-local',
+            url: offer.url,
+            key: offer.key,
+            foreground: true,
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+    // Stop leaves the tab open. The copy drops out of the joined list here, so
+    // no later announcement follows it, and the background forgets the key.
+    if (message.type === 'leave-tab') {
+      const key = String(message.key || '');
+      if (!key || !joinedTabs.has(key)) return;
+      joinedTabs.delete(key);
+      saveJoinedTabs();
+      publishSharedTabs();
+      if (api && api.runtime && api.runtime.sendMessage) {
+        api.runtime
+          .sendMessage({ type: 'brosr:tab-leave-local', key })
+          .catch(() => {});
+      }
+      return;
+    }
+    if (message.type !== 'send') return;
     client.sendApp(String(message.name || ''), message.data);
   });
   window.postMessage({ source: 'brosr-app', type: 'ready', role, peerId, room }, location.origin);
@@ -1674,12 +1946,46 @@ export async function start() {
       }
       if (message.type === 'brosr:tabs-announce') {
         // The background saw a tab this person chose to share. It goes out on
-        // the room socket like any other app message.
+        // the room socket like any other app message. The name travels too,
+        // because the receiver has only the sender id.
         client.sendApp(TAB_APP, {
           action: 'open',
           url: String(message.url || ''),
           key: message.key === undefined || message.key === null ? null : String(message.key),
+          title: String(message.title || ''),
+          owner: name,
         });
+        return reply({ ok: true });
+      }
+      if (message.type === 'brosr:tabs-resumed') {
+        // The panel put a stopped copy back in the room. The same tab follows
+        // the offer again, so it moves to wherever the publisher is now.
+        const key = String(message.key || '');
+        const offer = sharedTabs.find((tab) => tab.key === key);
+        if (!offer) return reply({ ok: false, reason: 'no-offer' });
+        joinedTabs.add(key);
+        saveJoinedTabs();
+        publishSharedTabs();
+        if (api && api.runtime && api.runtime.sendMessage) {
+          api.runtime
+            .sendMessage({
+              type: 'brosr:tab-open-local',
+              url: offer.url,
+              key,
+              foreground: false,
+            })
+            .catch(() => {});
+        }
+        return reply({ ok: true });
+      }
+      if (message.type === 'brosr:tab-left') {
+        // A copy this browser opened has closed, so the offer goes back to
+        // Open. The publisher still has the tab, and nobody else loses a copy.
+        const key = String(message.key || '');
+        if (!key) return reply({ ok: false, reason: 'key' });
+        joinedTabs.delete(key);
+        saveJoinedTabs();
+        publishSharedTabs();
         return reply({ ok: true });
       }
       if (message.type === 'brosr:trust-target') {

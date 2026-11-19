@@ -86,6 +86,12 @@ and open the host browser, then it reads and changes room settings through the p
 Every browser in the room holds one WebSocket to the relay. Frames are sealed with the key from
 the invite fragment, so the relay forwards bytes it cannot read.
 
+A tab someone with control opens is offered, not forced. The landing page lists the live tabs
+under the name of the person who shared each one, and a row with a player says whether it plays.
+A peer opens a copy by choice, a joined row offers Stop, and either closing the copy or stopping
+it leaves the sync and leaves the tab open. The room panel lists a stopped copy, and Resume puts
+that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detail.
+
 ## What the repository holds
 
 | Path | Contents |
