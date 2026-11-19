@@ -1054,6 +1054,17 @@ try {
           return urls.includes(offerUrl) ? urls : null;
         }, 'the opened copy in the guest browser', 20000).catch(() => null)
       : null;
+    // Control runs the other way too. The guest already holds control, so a tab
+    // it opens must reach the host under the guest's name. Without this step the
+    // lane only proves that a host can offer.
+    const controlUrl = `${offerBase}/control.html`;
+    await openGuest(controlUrl);
+    const controlOffer = await until(async () => {
+      const state = await readTabs(hostPage);
+      const groups = (state && state.groups) || [];
+      const guest = groups.find((group) => group.ownerId === PEER);
+      return guest && guest.tabs.some((tab) => tab.url === controlUrl) ? guest : null;
+    }, 'the granted guest tab at the host', 20000).catch(() => null);
     // A guest that arrives after the offer needs the replay, because the relay
     // keeps no history and the offer frame is gone by then.
     const lateUrl =
@@ -1089,6 +1100,7 @@ try {
     offerOk =
       Boolean(offered) &&
       Boolean(earlySeen) &&
+      Boolean(controlOffer) &&
       Boolean(replayed) &&
       Boolean(clicked && joinedOk && openedTabs);
     out.steps.offer = {
@@ -1097,6 +1109,13 @@ try {
       guestRole: offered ? offered.host.role : null,
       guestTabs: offered ? offered.host.tabs.map((tab) => tab.url) : null,
       early: { url: earlyUrl, seen: Boolean(earlySeen) },
+      control: {
+        url: controlUrl,
+        seen: Boolean(controlOffer),
+        owner: controlOffer ? controlOffer.owner : null,
+        role: controlOffer ? controlOffer.role : null,
+        tabs: controlOffer ? controlOffer.tabs.map((tab) => tab.url) : null,
+      },
       lateGuest: { peer: 'late-1', seen: Boolean(replayed) },
       open: { key, clicked, joined: joinedOk, tabs: openedTabs },
       ...(lateReport ? { lateDiagnosis: lateReport } : {}),
