@@ -1066,12 +1066,15 @@ try {
       const host = groups.find((group) => group.role === 'host');
       return host && host.tabs.some((tab) => tab.url === offerUrl) ? host : null;
     }, 'the replayed offer at a late guest', 25000).catch(() => null);
+    // Kept local until the step object below exists, so a miss reports the two
+    // ends instead of losing them to a write on an undefined object.
+    let lateReport = null;
     if (!replayed) {
       // A replay that never arrives has two ends: the guest never joined, or
       // the host never noticed it. Record both, so the next run names the end.
       const lateState = await latePage.read().catch(() => null);
       const hostNow = await hostPage.read().catch(() => null);
-      out.steps.offer.lateDiagnosis = {
+      lateReport = {
         late: lateState && {
           socket: lateState.socket,
           role: lateState.role,
@@ -1096,6 +1099,7 @@ try {
       early: { url: earlyUrl, seen: Boolean(earlySeen) },
       lateGuest: { peer: 'late-1', seen: Boolean(replayed) },
       open: { key, clicked, joined: joinedOk, tabs: openedTabs },
+      ...(lateReport ? { lateDiagnosis: lateReport } : {}),
       ok: offerOk,
     };
     if (!offerOk) {

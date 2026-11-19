@@ -1522,18 +1522,18 @@ export async function start() {
     }
   }
 
-  // A hidden room tab throttles its greet timer to about once a minute, and the
-  // host tab usually sits behind the page someone is reading. A guest that
-  // joins then waited that long for a replay of the tabs it missed. A hello
-  // arrives on the socket, so it asks at once, coalesced to one ask per burst.
-  let replayTimer = null;
+  // A hidden room tab throttles its timers to about once a minute, and the host
+  // tab usually sits behind the page someone is reading. A guest that joins
+  // then waited that long for a replay of the tabs it missed. A hello arrives
+  // on the socket, so the ask goes out at once, coalesced to one per burst
+  // without a timer that the same throttling would hold back.
+  let lastReplay = 0;
   const replayTabsSoon = () => {
     if (!api || !api.runtime || !api.runtime.sendMessage) return;
-    if (replayTimer) return;
-    replayTimer = setTimeout(() => {
-      replayTimer = null;
-      api.runtime.sendMessage({ type: 'brosr:tabs-replay' }).catch(() => {});
-    }, 200);
+    const now = Date.now();
+    if (now - lastReplay < 200) return;
+    lastReplay = now;
+    api.runtime.sendMessage({ type: 'brosr:tabs-replay' }).catch(() => {});
   };
 
   const connect = () => {

@@ -82,6 +82,13 @@ test('a hello asks for the replay at once, not only on the greet timer', () => {
     source,
     /api\.runtime\.sendMessage\(\{ type: 'brosr:tabs-replay' \}\)\.catch/
   );
+  // The coalescing window is a clock comparison, not a timer, because the
+  // hidden tab holds the same timers back.
+  const ask = source.slice(
+    source.indexOf('const replayTabsSoon'),
+    source.indexOf('const connect =')
+  );
+  assert.doesNotMatch(ask, /setTimeout/);
 });
 
 test('a tab this browser owns is not recorded as a copy', () => {
