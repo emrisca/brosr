@@ -934,23 +934,44 @@ export async function start() {
   // The app control panel asks for one snapshot and sends one change at a
   // time. The room tab already owns the roster, grants and media view, so this
   // handler turns those into JSON instead of adding a second state store.
+  // The session log needs the film tab's own counters. The host tab can ask
+  // the background page for the one tab that owns the film, then carry the
+  // answer to the app beside the room snapshot.
+  async function panelFilmReading(media) {
+    if (!media || !media.key) {
+      return { reading: null, reply: { ok: false, reason: 'no-media' } };
+    }
+    if (!api || !api.runtime || !api.runtime.sendMessage) {
+      return { reading: null, reply: { ok: false, reason: 'no-bridge' } };
+    }
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      const answer = await Promise.race([
+        api.runtime.sendMessage({ type: 'brosr:film-reading', key: media.key, requestId }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1600)),
+      ]);
+      if (!answer) return { reading: null, reply: { ok: false, reason: 'timeout' } };
+      if (answer.ok && !answer.relay) {
+        return { reading: null, reply: { ...answer, reason: 'no-relay' } };
+      }
+      return { reading: answer.ok && answer.relay ? answer : null, reply: answer };
+    } catch {
+      return { reading: null, reply: { ok: false, reason: 'send-failed' } };
+    }
+  }
+
   async function panelSnapshot() {
     const live = status();
-    let browser = null;
-    // Only the host has controls to feed from the tab list. A guest asks for
-    // the people view, so it never waits on the background page for it.
-    if (role === 'host' && api && api.runtime && api.runtime.sendMessage) {
-      try {
-        // The tab list is useful but not required to control the room. A
-        // background page that is still starting must not hold the snapshot.
-        browser = await Promise.race([
-          api.runtime.sendMessage({ type: 'brosr:tabs-list' }),
-          new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
-        ]);
-      } catch {
-        // The background page may still be starting.
-      }
-    }
+    // The tab list feeds the controls. The film reading feeds the log. They
+    // run together, so a slow player never delays a control change.
+    const listing =
+      role === 'host' && api && api.runtime && api.runtime.sendMessage
+        ? Promise.race([
+            api.runtime.sendMessage({ type: 'brosr:tabs-list' }),
+            new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+          ]).catch(() => null)
+        : Promise.resolve(null);
+    const [browser, film] = await Promise.all([listing, panelFilmReading(live.media)]);
     const self = {
       id: peerId,
       name,
@@ -965,11 +986,74 @@ export async function start() {
         (peer) => peer && peer.id !== peerId && !peer.self
       ),
     ];
+    // A copied report read on its own must name its own author. The app log
+    // uses the same rule, but it keeps the host's own control state honest.
+    const logPeers = [
+      { ...self, granted: Boolean(live.granted) },
+      ...(Array.isArray(live.peerList) ? live.peerList : []).filter(
+        (peer) => peer && peer.id !== peerId && !peer.self
+      ),
+    ];
+    const diagnostics = {
+      room,
+      roomName: live.roomName || roomName,
+      role,
+      peerId,
+      name,
+      build: live.build || bridgeBuild,
+      hostBuild: live.hostBuild || null,
+      socket: live.socket,
+      reconnects: live.reconnects,
+      playing: live.playing,
+      peers: live.peers,
+      peerList: logPeers,
+      media: live.media || null,
+      viewers: panelViewers(),
+      align: live.align,
+      latency: live.latency,
+      clockOffset: live.clockOffset,
+      driftRate: live.driftRate,
+      sampleCount: live.sampleCount,
+      seal: live.seal,
+      lastMediaFrame: live.lastMediaFrame,
+      lastMediaAction: live.lastMediaAction,
+      lastLocalMediaAction: live.lastLocalMediaAction,
+      mediaDrops: live.mediaDrops,
+      mediaDropTicks: live.mediaDropTicks,
+      lastMediaDrop: live.lastMediaDrop,
+      mediaDropHistory: live.mediaDropHistory,
+      holds: live.holds,
+      lastHoldEvent: live.lastHoldEvent,
+      hostPriority: live.hostPriority,
+      lastSeek: live.lastSeek,
+      controlSent: live.controlSent,
+      controlReceived: live.controlReceived,
+      lastControl: live.lastControl,
+      controlHistory: live.controlHistory,
+      seeks: live.seeks,
+      nudges: live.nudges,
+      corrections: live.corrections,
+      stuckSeeks: live.stuckSeeks,
+      relayed: live.relayed,
+      mediaEcho: live.mediaEcho,
+      mediaEchoLocal: live.mediaEchoLocal,
+      firstDrift: live.firstDrift,
+      convergedAt: live.convergedAt,
+      stutter: live.stutter,
+      debug: live.debug,
+      reading: film.reading,
+      readingReply: film.reply,
+    };
     return {
       roomName: live.roomName || roomName,
       hostId: live.hostId || hostId,
+      role,
+      peerId,
+      name,
+      room,
       build: live.build || bridgeBuild,
       hostBuild: live.hostBuild || null,
+      socket: live.socket,
       peers,
       media: live.media || null,
       sameFate: Boolean(live.sameFate),
@@ -984,6 +1068,7 @@ export async function start() {
       scrollSeen: Array.isArray(live.scrollSeen) ? live.scrollSeen : [],
       trust: Boolean(trust),
       trustTarget: trustTarget || null,
+      diagnostics,
     };
   }
 

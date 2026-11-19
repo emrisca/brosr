@@ -137,6 +137,9 @@ export type PanelTab = {
 export type PanelState = {
   roomName: string;
   hostId: string;
+  // The text report the host builds from the room and film readings. It is
+  // shown in Room controls, where a sync problem is read in place.
+  log?: string;
   peers: PanelPeer[];
   media: {
     key: string;

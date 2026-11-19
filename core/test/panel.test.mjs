@@ -96,6 +96,16 @@ test('the background reads one film owner and returns one answer', () => {
   assert.match(source, /requestId/);
 });
 
+test('the host tab carries the readings the app log shows', () => {
+  const source = fs.readFileSync(path.join(here, '..', 'browser-entry.mjs'), 'utf8');
+  assert.match(source, /async function panelFilmReading/);
+  assert.match(source, /type: 'brosr:film-reading'/);
+  assert.match(source, /readingReply: film\.reply/);
+  assert.match(source, /mediaDropHistory: live\.mediaDropHistory/);
+  assert.match(source, /lastLocalMediaAction: live\.lastLocalMediaAction/);
+  assert.match(source, /diagnostics,/);
+});
+
 test('a refused panel command carries a machine-readable reason', () => {
   const source = fs.readFileSync(path.join(here, '..', 'browser-entry.mjs'), 'utf8');
   assert.match(source, /const refusal = \(message, reason\)/);

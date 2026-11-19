@@ -336,13 +336,18 @@ test('the report names a reading with no relay block', () => {
   assert.match(text, /Reading: unavailable \(no-relay\)/);
 });
 
-test('the panel button is wired to the report builder and the clipboard', () => {
+test('the session log lives in the app room controls', () => {
   const html = fs.readFileSync(path.join(root, 'bridge', 'panel', 'room.html'), 'utf8');
   const panel = fs.readFileSync(path.join(root, 'bridge', 'panel', 'room.js'), 'utf8');
-  assert.match(html, /id="copy-sync"/);
-  assert.match(html, /<script src="sync-report\.js"><\/script>\s*<script src="room\.js"><\/script>/);
-  assert.match(panel, /function reportText\(\)/);
-  assert.match(panel, /buildSyncReport\(lastReply, filmReading/);
-  assert.match(panel, /navigator\.clipboard\.writeText\(text\)/);
-  assert.match(panel, /legacyCopy\(text\)/);
+  const controls = fs.readFileSync(
+    path.join(root, 'app', 'src', 'screens', 'controls.tsx'),
+    'utf8'
+  );
+  const host = fs.readFileSync(path.join(root, 'host', 'panel.mjs'), 'utf8');
+  assert.doesNotMatch(html, /copy-sync|sync-report\.js/);
+  assert.doesNotMatch(panel, /copySyncReport|brosrSyncReport|reportText/);
+  assert.match(controls, /Session log/);
+  assert.match(controls, /state\.log/);
+  assert.match(host, /withRoomLog/);
+  assert.match(host, /log: buildSyncReport/);
 });

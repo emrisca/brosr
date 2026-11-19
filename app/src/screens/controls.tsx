@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Loader2, RefreshCw, Save, Shield, Users } from 'lucide-react';
+import { Check, Loader2, RefreshCw, Save, ScrollText, Shield, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -278,6 +278,33 @@ export function RoomControls({ open, onOpenChange }: Props) {
                   Control lets a person pause the film, open tabs, and use the browser. It is
                   per person and can be revoked at any time.
                 </p>
+              </section>
+
+              <Separator />
+
+              <section className="flex flex-col gap-2">
+                <p
+                  id="session-log-label"
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+                >
+                  <ScrollText className="size-3.5" aria-hidden="true" />
+                  Session log
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  The host and peer readings from this room, updated in place.
+                </p>
+                {state.log ? (
+                  <pre
+                    aria-labelledby="session-log-label"
+                    className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+                  >
+                    {state.log}
+                  </pre>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    The room has not sent a session log yet.
+                  </p>
+                )}
               </section>
 
               <Separator />
