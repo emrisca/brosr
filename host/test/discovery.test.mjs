@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { discoverRooms, tailnetFromStatus } from '../discovery.mjs';
+import { discoverRooms, tailnetFromStatus, tailscaleBinaries } from '../discovery.mjs';
 
 const status = {
   Self: { HostName: 'here' },
@@ -39,6 +39,13 @@ test('the tailnet parser prefers IPv4, keeps IPv6 and skips offline nodes', () =
 test('a missing tailscale document is not a tailnet', () => {
   assert.equal(tailnetFromStatus(null), null);
   assert.equal(tailnetFromStatus({ Peer: {} }), null);
+});
+
+test('a mac checks the Apple silicon Homebrew tailscale path', () => {
+  const binaries = tailscaleBinaries('darwin');
+  const homebrew = binaries.indexOf('/opt/homebrew/bin/tailscale');
+  assert.ok(homebrew >= 0, 'the Apple silicon Homebrew path is missing');
+  assert.ok(homebrew < binaries.indexOf('/usr/local/bin/tailscale'));
 });
 
 test('discovery reads live rooms, rejects public links and removes duplicates', async () => {

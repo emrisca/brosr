@@ -7,17 +7,21 @@ import { DEFAULT_LOBBY_PORT, formatAddress, isAllowedHost, isTailnetHost } from 
 const QUERY_TIMEOUT_MS = 1400;
 const STATUS_TIMEOUT_MS = 4000;
 
-function binaries() {
-  if (process.platform === 'win32') {
+export function tailscaleBinaries(platform = process.platform) {
+  if (platform === 'win32') {
     return [
       'tailscale',
       'C:\\Program Files\\Tailscale\\tailscale.exe',
       'C:\\Program Files (x86)\\Tailscale\\tailscale.exe',
     ];
   }
+  // A window opened from Finder does not inherit the shell PATH, so an Apple
+  // silicon Homebrew install is invisible under the bare name. Name it, then
+  // fall back to the app bundle and the older Intel prefixes.
   return [
     'tailscale',
     '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+    '/opt/homebrew/bin/tailscale',
     '/usr/local/bin/tailscale',
     '/usr/bin/tailscale',
   ];
@@ -46,7 +50,7 @@ export function tailnetFromStatus(value) {
 }
 
 export function tailscaleStatus() {
-  for (const binary of binaries()) {
+  for (const binary of tailscaleBinaries()) {
     const result = spawnSync(binary, ['status', '--json'], {
       encoding: 'utf8',
       timeout: STATUS_TIMEOUT_MS,
