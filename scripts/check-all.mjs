@@ -78,6 +78,7 @@ if (fs.existsSync(signed)) {
 }
 
 run('relay files', ['scripts/check-relay-files.mjs'], 60000);
+run('updater feed', ['scripts/check-updater-feed.mjs'], 180000);
 run('zen lane', ['scripts/check-two-instance.mjs'], 240000);
 run('chromium lane', ['scripts/check-two-instance.mjs', '--chrome'], 240000);
 run('mixed lane', ['scripts/check-two-instance.mjs', '--mixed'], 240000);
