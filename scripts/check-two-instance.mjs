@@ -8,16 +8,19 @@
 // signed copy that lags the tree fails the run, because that is the artifact the
 // profile resolver would hand to the browser.
 //
-// Two lanes share the flow. The default lane uses two Zen profiles. The
-// --chrome lane loads the unpacked Chromium build in two windows. Branded
-// Google Chrome 137 and later ignore --load-extension. Brave, Chromium and
-// Chrome for Testing still read the flag at 157, so the lane prefers those.
+// Three lanes share the flow. The default lane uses two Zen profiles. The
+// --chrome lane loads the unpacked Chromium build in two windows. The --mixed
+// lane keeps a Zen host and swaps only the guest, so the offer and the follow
+// cross two browser engines. Branded Google Chrome 137 and later ignore
+// --load-extension. Brave, Chromium and Chrome for Testing still read the flag
+// at 157, so the lanes prefer those.
 //
 // Everything stays on loopback: its own relay, temp profiles and three free
 // ports. It never touches the app browser on 9333.
 //
 //   node scripts/check-two-instance.mjs
 //   node scripts/check-two-instance.mjs --chrome
+//   node scripts/check-two-instance.mjs --mixed
 //   node scripts/check-two-instance.mjs --zen=/path/to/zen
 //   BROSR_CHECK_BROWSER=/path/to/chromium node scripts/check-two-instance.mjs --chrome
 import { spawn, spawnSync } from 'node:child_process';
@@ -77,6 +80,7 @@ const CHROMIUM = [
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const out = { steps: {} };
 const chromeLane = process.argv.includes('--chrome');
+const mixedLane = process.argv.includes('--mixed');
 
 function free(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
@@ -623,49 +627,16 @@ try {
 
   let openHost;
   let openGuest;
-  if (chromeLane) {
-    const build = chromiumBuild();
-    chromium = build;
-    out.steps.lane = 'chromium';
-    out.steps.browser = `${path.basename(build.file)} ${build.version.replace(/^[^\d]*/, '')}`;
-    extensionDir = await mkdtemp(path.join(tmpdir(), 'brosr-check-ext-'));
-    buildChrome(extensionDir);
-    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-host-'));
-    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-guest-'));
-    const launch = (profile, port) =>
-      spawn(
-        build.file,
-        [
-          '--headless=new',
-          `--remote-debugging-port=${port}`,
-          `--user-data-dir=${profile}`,
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-gpu',
-          '--disable-features=Translate,MediaRouter',
-          '--window-size=1400,900',
-          `--disable-extensions-except=${extensionDir}`,
-          `--load-extension=${extensionDir}`,
-          'about:blank',
-        ],
-        { stdio: 'ignore' }
-      );
-    host = launch(hostProfile, HOST_PORT);
-    guest = launch(guestProfile, GUEST_PORT);
-    for (const port of [HOST_PORT, GUEST_PORT]) {
-      await until(
-        async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok,
-        `the devtools endpoint on ${port}`,
-        30000
-      );
-    }
-    openHost = (url) => openChromiumTab(HOST_PORT, url);
-    openGuest = (url) => openChromiumTab(GUEST_PORT, url);
-  } else {
-    const zen = findZen();
+  // The mixed lane keeps the Zen host and swaps only the guest, so the offer and
+  // the follow cross two browser engines instead of two windows of one.
+  const zenHost = !chromeLane;
+  const zenGuest = !chromeLane && !mixedLane;
+  out.steps.lane = chromeLane ? 'chromium' : mixedLane ? 'mixed' : 'zen';
+
+  let zen = null;
+  if (zenHost) {
+    zen = findZen();
     if (!zen) throw new Error('no Zen binary found. Pass --zen=<path>.');
-    out.steps.lane = 'zen';
-    out.steps.browser = 'Zen';
     // The app installs the signed copy when the profile resolver prefers it, so
     // the lane loads that exact file. This proves the shipped artifact instead
     // of a rebuild of it. A missing signed copy falls back to the tree, and a
@@ -688,44 +659,90 @@ try {
         ).version,
       };
     }
-    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-host-'));
-    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-guest-'));
-    writeProfile(hostProfile, { bridge });
-    writeProfile(guestProfile, { bridge });
-    const launch = (profile, port) =>
-      spawn(
-        zen,
-        ['--profile', profile, '--no-remote', '--new-instance', '--remote-debugging-port', String(port), '-headless', 'about:blank'],
-        { stdio: 'ignore' }
-      );
-    host = launch(hostProfile, HOST_PORT);
-    guest = launch(guestProfile, GUEST_PORT);
-    hostBidi = await connect(HOST_PORT);
-    guestBidi = await connect(GUEST_PORT);
-    openHost = async (url) => {
-      const created = await hostBidi.cmd('browsingContext.create', { type: 'tab' });
-      await hostBidi.cmd('browsingContext.navigate', {
-        context: created.context,
-        url,
-        wait: 'complete',
-      });
-      return zenPage(hostBidi, created.context);
-    };
-    openGuest = async (url) => {
-      const created = await guestBidi.cmd('browsingContext.create', { type: 'tab' });
-      await guestBidi.cmd('browsingContext.navigate', {
-        context: created.context,
-        url,
-        wait: 'complete',
-      });
-      return zenPage(guestBidi, created.context);
-    };
   }
+
+  let chrome = null;
+  let chromeName = null;
+  if (!zenGuest) {
+    chrome = chromiumBuild();
+    chromium = chrome;
+    chromeName = `${path.basename(chrome.file)} ${chrome.version.replace(/^[^\d]*/, '')}`;
+    extensionDir = await mkdtemp(path.join(tmpdir(), 'brosr-check-ext-'));
+    buildChrome(extensionDir);
+  }
+
+  const launchChrome = (profile, port) =>
+    spawn(
+      chrome.file,
+      [
+        '--headless=new',
+        `--remote-debugging-port=${port}`,
+        `--user-data-dir=${profile}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-gpu',
+        '--disable-features=Translate,MediaRouter',
+        '--window-size=1400,900',
+        `--disable-extensions-except=${extensionDir}`,
+        `--load-extension=${extensionDir}`,
+        'about:blank',
+      ],
+      { stdio: 'ignore' }
+    );
+  const launchZen = (profile, port) =>
+    spawn(
+      zen,
+      ['--profile', profile, '--no-remote', '--new-instance', '--remote-debugging-port', String(port), '-headless', 'about:blank'],
+      { stdio: 'ignore' }
+    );
+  const waitDevtools = (port) =>
+    until(
+      async () => (await fetch(`http://127.0.0.1:${port}/json/version`)).ok,
+      `the devtools endpoint on ${port}`,
+      30000
+    );
+  const zenPages = (bidi) => async (url) => {
+    const created = await bidi.cmd('browsingContext.create', { type: 'tab' });
+    await bidi.cmd('browsingContext.navigate', {
+      context: created.context,
+      url,
+      wait: 'complete',
+    });
+    return zenPage(bidi, created.context);
+  };
+
+  if (zenHost) {
+    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-host-'));
+    writeProfile(hostProfile, { bridge });
+    host = launchZen(hostProfile, HOST_PORT);
+    hostBidi = await connect(HOST_PORT);
+    openHost = zenPages(hostBidi);
+  } else {
+    hostProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-host-'));
+    host = launchChrome(hostProfile, HOST_PORT);
+    await waitDevtools(HOST_PORT);
+    openHost = (url) => openChromiumTab(HOST_PORT, url);
+  }
+
+  if (zenGuest) {
+    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-zen-guest-'));
+    writeProfile(guestProfile, { bridge });
+    guest = launchZen(guestProfile, GUEST_PORT);
+    guestBidi = await connect(GUEST_PORT);
+    openGuest = zenPages(guestBidi);
+  } else {
+    guestProfile = await mkdtemp(path.join(tmpdir(), 'brosr-chrome-guest-'));
+    guest = launchChrome(guestProfile, GUEST_PORT);
+    await waitDevtools(GUEST_PORT);
+    openGuest = (url) => openChromiumTab(GUEST_PORT, url);
+  }
+
+  out.steps.browser = mixedLane ? `Zen host, ${chromeName}` : zenHost ? 'Zen' : chromeName;
 
   // Every open page in the guest browser, so an Open click is judged by the tab
   // it created and not by the row that says it did.
   const guestTabUrls = async () => {
-    if (!chromeLane) {
+    if (zenGuest) {
       const tree = await guestBidi.cmd('browsingContext.getTree', {});
       const urls = [];
       const visit = (node) => {
@@ -747,6 +764,20 @@ try {
   // and the host could never publish a tab offer. The form therefore opens
   // after the room tab has claimed that role.
   let form = null;
+
+  // The ordinary order is the other way round from the offer step below: a
+  // person keeps a page open, starts the room, then invites someone. That tab
+  // never navigates again, so nothing but the room's own start can offer it.
+  // The server lives here so the tab exists before the host page does.
+  offerServer = http.createServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end('<!doctype html><title>Offered tab</title><p>offer</p>');
+  });
+  await new Promise((resolve) => offerServer.listen(0, '127.0.0.1', resolve));
+  const offerBase = `http://127.0.0.1:${offerServer.address().port}`;
+  const earlyUrl = `${offerBase}/early.html`;
+  await openHost(earlyUrl);
+  out.steps.earlyTab = earlyUrl;
 
   // The agent binds before the page reads its port, because the room's trust
   // client posts to this exact address and no other. The page object stands in
@@ -971,12 +1002,7 @@ try {
   // step that proves the offer channel between two real browsers.
   let offerOk = true;
   try {
-    offerServer = http.createServer((request, response) => {
-      response.writeHead(200, { 'content-type': 'text/html' });
-      response.end('<!doctype html><title>Offered tab</title><p>offer</p>');
-    });
-    await new Promise((resolve) => offerServer.listen(0, '127.0.0.1', resolve));
-    const offerUrl = `http://127.0.0.1:${offerServer.address().port}/offer.html`;
+    const offerUrl = `${offerBase}/offer.html`;
     const readTabs = async (page) => {
       const raw = await page.eval("document.documentElement.dataset.brosrTabs || ''");
       try {
@@ -995,6 +1021,15 @@ try {
       const host = groups.find((group) => group.role === 'host');
       return host && host.tabs.some((tab) => tab.url === offerUrl) ? { host } : null;
     }, 'the host tab offer at the guest', 20000).catch(() => null);
+    // The tab that was open before the room. Without an offer from the room's
+    // start the guest never learns about it, because that tab never loads
+    // again.
+    const earlySeen = await until(async () => {
+      const state = await readTabs(guestPage);
+      const groups = (state && state.groups) || [];
+      const host = groups.find((group) => group.role === 'host');
+      return host && host.tabs.some((tab) => tab.url === earlyUrl) ? host : null;
+    }, 'the tab that was open before the room', 20000).catch(() => null);
     const key = offered ? offered.host.tabs.find((tab) => tab.url === offerUrl).key : null;
     // Open is the real button on the landing page. It posts join-tab, the core
     // asks the bridge for a local tab, and the copy has to appear in this
@@ -1019,12 +1054,47 @@ try {
           return urls.includes(offerUrl) ? urls : null;
         }, 'the opened copy in the guest browser', 20000).catch(() => null)
       : null;
-    offerOk = Boolean(offered) && Boolean(clicked && joinedOk && openedTabs);
+    // A guest that arrives after the offer needs the replay, because the relay
+    // keeps no history and the offer frame is gone by then.
+    const lateUrl =
+      `http://${ORIGIN}:${RELAY_PORT}/?role=peer&room=${ROOM}&peer=late-1&name=Late&relay=${RELAY_PORT}` +
+      `${inviteKey ? `#k=${inviteKey}` : ''}`;
+    const latePage = await openGuest(lateUrl);
+    const replayed = await until(async () => {
+      const state = await readTabs(latePage);
+      const groups = (state && state.groups) || [];
+      const host = groups.find((group) => group.role === 'host');
+      return host && host.tabs.some((tab) => tab.url === offerUrl) ? host : null;
+    }, 'the replayed offer at a late guest', 25000).catch(() => null);
+    if (!replayed) {
+      // A replay that never arrives has two ends: the guest never joined, or
+      // the host never noticed it. Record both, so the next run names the end.
+      const lateState = await latePage.read().catch(() => null);
+      const hostNow = await hostPage.read().catch(() => null);
+      out.steps.offer.lateDiagnosis = {
+        late: lateState && {
+          socket: lateState.socket,
+          role: lateState.role,
+          peerId: lateState.peerId,
+          peers: lateState.peers,
+          peerList: (lateState.peerList || []).map((peer) => peer.id),
+        },
+        hostPeers: hostNow && (hostNow.peerList || []).map((peer) => peer.id),
+        lateTabs: await readTabs(latePage).catch(() => null),
+      };
+    }
+    offerOk =
+      Boolean(offered) &&
+      Boolean(earlySeen) &&
+      Boolean(replayed) &&
+      Boolean(clicked && joinedOk && openedTabs);
     out.steps.offer = {
       url: offerUrl,
       guestOwner: offered ? offered.host.owner : null,
       guestRole: offered ? offered.host.role : null,
       guestTabs: offered ? offered.host.tabs.map((tab) => tab.url) : null,
+      early: { url: earlyUrl, seen: Boolean(earlySeen) },
+      lateGuest: { peer: 'late-1', seen: Boolean(replayed) },
       open: { key, clicked, joined: joinedOk, tabs: openedTabs },
       ok: offerOk,
     };

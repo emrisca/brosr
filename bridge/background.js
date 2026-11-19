@@ -407,6 +407,14 @@ async function mayShare() {
   return roomRole === 'host' || prefs.granted === true;
 }
 
+// A tab that was already open when the room started never loads again, so the
+// navigation events cannot offer it. The room's start and a fresh grant sweep
+// the open tabs once, so a guest sees the pages the host already had.
+async function sweepTabs() {
+  const all = await api.tabs.query({}).catch(() => []);
+  for (const tab of all) considerTab(tab).catch(() => {});
+}
+
 // One tab id reaches several browser events at once. A set closes the window
 // between the first event and the record that the tab went out, so a host tab
 // opens one copy, not three.
@@ -424,7 +432,10 @@ async function shareTab(tab) {
     // names itself.
     const arrived = remoteOrigins.get(tab.id);
     const key = arrived === undefined || arrived === null ? tab.id : arrived;
-    await mapRemoteKey(key, tab.id);
+    // A tab this browser owns keeps its id as its key. Writing that pair into
+    // the remote book made the offer look like a copy, so a replay skipped it
+    // and closing it reported a peer leaving instead of withdrawing the offer.
+    if (arrived !== undefined && arrived !== null) await mapRemoteKey(key, tab.id);
     return await announce(tab.url, key, tab.title, mediaTabs.get(tab.id));
   } finally {
     announcing.delete(tab.id);
@@ -531,6 +542,9 @@ async function handle(message, sender) {
       if (seen.roomTabId === null || seen.roomTabId === from || !held) {
         roomRole = message.role === 'host' ? 'host' : 'peer';
         await save({ roomTabId: from, roomRole });
+        // The room just started on this browser. Tabs that were open before it
+        // have no navigation left to announce them, so they are offered here.
+        if (roomRole === 'host') sweepTabs().catch(() => {});
       }
     }
     // A tab that opens later still gets the cursor this person picked. The
@@ -567,7 +581,14 @@ async function handle(message, sender) {
   if (message.type === 'brosr:room-status') {
     // The room tab is the one place that knows whether this browser holds
     // control, so its report is also the grant state the tab list reads.
-    if (message.granted !== undefined) await savePrefs({ granted: Boolean(message.granted) });
+    if (message.granted !== undefined) {
+      await loadPrefs();
+      const before = prefs.granted;
+      await savePrefs({ granted: Boolean(message.granted) });
+      // Control just arrived, so the tabs this person already had become
+      // offers too, without waiting for each one to navigate.
+      if (!before && prefs.granted) sweepTabs().catch(() => {});
+    }
     await save({
       lastRoomStatus: {
         at: Date.now(),

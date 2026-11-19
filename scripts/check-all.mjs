@@ -80,6 +80,7 @@ if (fs.existsSync(signed)) {
 run('relay files', ['scripts/check-relay-files.mjs'], 60000);
 run('zen lane', ['scripts/check-two-instance.mjs'], 240000);
 run('chromium lane', ['scripts/check-two-instance.mjs', '--chrome'], 240000);
+run('mixed lane', ['scripts/check-two-instance.mjs', '--mixed'], 240000);
 
 const browser = process.env.BROSR_CHECK_BROWSER || findChromeForTesting(path.join(root, 'zen', '.runtime', 'cft'));
 const layout = browser ? { BROSR_CHECK_BROWSER: browser } : {};

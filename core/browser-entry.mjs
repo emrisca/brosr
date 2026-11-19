@@ -1522,6 +1522,20 @@ export async function start() {
     }
   }
 
+  // A hidden room tab throttles its greet timer to about once a minute, and the
+  // host tab usually sits behind the page someone is reading. A guest that
+  // joins then waited that long for a replay of the tabs it missed. A hello
+  // arrives on the socket, so it asks at once, coalesced to one ask per burst.
+  let replayTimer = null;
+  const replayTabsSoon = () => {
+    if (!api || !api.runtime || !api.runtime.sendMessage) return;
+    if (replayTimer) return;
+    replayTimer = setTimeout(() => {
+      replayTimer = null;
+      api.runtime.sendMessage({ type: 'brosr:tabs-replay' }).catch(() => {});
+    }, 200);
+  };
+
   const connect = () => {
     socket = new WebSocket(
       `ws://${relayHost}:${relayPort}/room?room=${encodeURIComponent(room)}&role=${encodeURIComponent(role)}&peer=${encodeURIComponent(peerId)}`
@@ -1543,6 +1557,17 @@ export async function start() {
         frame = new TextDecoder().decode(frame);
       }
       client.receive(frame, Date.now());
+      // The hello is the moment a peer appears. Reading it here keeps the
+      // replay timely on a room tab the browser has throttled.
+      if (role === 'host' || client.isGranted()) {
+        let kind = '';
+        try {
+          kind = JSON.parse(frame).type || '';
+        } catch {
+          kind = '';
+        }
+        if (kind === 'hello') replayTabsSoon();
+      }
       publish();
     };
     socket.onopen = () => {

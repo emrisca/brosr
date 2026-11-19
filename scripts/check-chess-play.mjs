@@ -79,6 +79,17 @@ class Tab {
   }
 
   send(method, params = {}, timeoutMs = 15000) {
+    const call = () => this.sendOnce(method, params, timeoutMs);
+    if (method !== 'Page.navigate') return call();
+    // A busy renderer can drop the navigate reply. One retry covers that, and
+    // a second miss stays a failure.
+    return call().catch((error) => {
+      if (!String(error.message).startsWith('cdp timeout')) throw error;
+      return call();
+    });
+  }
+
+  sendOnce(method, params = {}, timeoutMs = 15000) {
     const id = (this.nextId += 1);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
