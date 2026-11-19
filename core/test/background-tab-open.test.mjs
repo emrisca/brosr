@@ -16,9 +16,9 @@ const source = fs.readFileSync(
   'utf8'
 );
 
-function loadBackground({ sessionGet } = {}) {
-  const tabs = [];
-  const saved = {};
+function loadBackground({ sessionGet, tabs: seed = [], store = {} } = {}) {
+  const tabs = seed.slice();
+  const saved = store;
   const created = [];
   let nextId = 10;
   let listener = null;
@@ -31,7 +31,7 @@ function loadBackground({ sessionGet } = {}) {
   const api = {
     storage: {
       session: {
-        get: sessionGet || (async () => ({})),
+        get: sessionGet || (async () => saved),
         set: async (changes) => Object.assign(saved, changes),
       },
       local: {
@@ -84,6 +84,15 @@ function loadBackground({ sessionGet } = {}) {
     listener,
     release: () => releaseCreate(),
   };
+}
+
+async function until(check, label = 'condition', timeout = 2000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (await check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timeout: ${label}`);
 }
 
 function ask(listener, message, sender = {}) {
@@ -156,6 +165,30 @@ test('a mirrored click and a shared tab open one copy for the same URL', async (
   assert.equal(fromClick.tabId, fromShare.tabId, 'both requests name the same tab');
   assert.equal(fromShare.joined, true, 'the shared announcement joined the open');
   assert.equal(saved.remoteKeyTabs['42'], fromClick.tabId, 'the shared key follows the tab');
+});
+
+test('a restarted worker still replays the tabs it announced', async () => {
+  // Chrome stops an idle worker, and the replay is the only frame a late guest
+  // gets. A book kept only in memory left the host with nothing to send, so
+  // the newcomer saw no offer until someone shared the tab again.
+  const store = {};
+  const seed = [
+    { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true },
+    { id: 2, url: 'http://127.0.0.1:8891/offer.html', active: false },
+  ];
+  const first = loadBackground({ tabs: seed, store });
+  await ask(first.listener, { type: 'brosr:room-hello', role: 'host' }, { tab: { id: 1 } });
+  // The sweep runs after the hello answers.
+  await until(
+    () => store.announcedTabs && store.announcedTabs['2'] === seed[1].url,
+    'the announced book'
+  );
+
+  // A restart keeps session storage and loses every variable in the script.
+  const again = loadBackground({ tabs: seed, store });
+  const reply = await ask(again.listener, { type: 'brosr:tabs-replay' });
+  assert.equal(reply.ok, true, 'the restarted worker accepts the replay');
+  assert.equal(reply.sent, 1, 'the tab shared before the restart goes out again');
 });
 
 test('a stopped copy leaves the room and comes back from the panel', async () => {

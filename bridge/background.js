@@ -51,6 +51,7 @@ const text = (error) => String((error && error.message) || error);
 const memory = {
   roomTabId: null,
   roomRole: null,
+  announcedTabs: null,
   lastPanel: null,
   lastSelftest: null,
   lastRoomStatus: null,
@@ -132,7 +133,7 @@ api.tabs.onRemoved.addListener((id) => {
   for (const [key, entry] of [...stoppedTabs]) {
     if (entry.tabId === id) stoppedTabs.delete(key);
   }
-  announced.delete(id);
+  forgetAnnounced(id);
   remoteTabs.delete(id);
   remoteOrigins.delete(id);
   mediaTabs.delete(id);
@@ -239,6 +240,29 @@ state()
 // opened from a frame never goes back out, which is what stops a loop.
 const remoteTabs = new Set();
 const announced = new Map();
+// A Chrome worker stops when it is idle, and a restart empties that map. The
+// replay is the only frame a late guest gets, so the announced book lives in
+// session storage too, or a host that shared before the restart replays
+// nothing and the newcomer waits for a second share that never comes.
+const announcedBook = () => Object.fromEntries(announced);
+const announcedRestored = state()
+  .then((saved) => {
+    const book = saved && saved.announcedTabs;
+    if (!book || typeof book !== 'object') return;
+    for (const [raw, url] of Object.entries(book)) {
+      const id = Number(raw);
+      if (validId(id) && typeof url === 'string' && url) announced.set(id, url);
+    }
+  })
+  .catch(() => {});
+async function rememberAnnounced(id, url) {
+  announced.set(id, url);
+  await save({ announcedTabs: announcedBook() });
+}
+async function forgetAnnounced(id) {
+  if (!announced.delete(id)) return;
+  await save({ announcedTabs: announcedBook() });
+}
 // A shared tab keeps the host tab id that opened it. A later navigation in
 // that tab moves the copy here instead of opening another tab.
 const remoteKeys = new Map();
@@ -404,7 +428,15 @@ async function announceClose(key) {
 // does. A plain peer shares nothing.
 async function mayShare() {
   await loadPrefs();
-  return roomRole === 'host' || prefs.granted === true;
+  if (prefs.granted === true) return true;
+  // The role arrives on the hello, and a worker restart loses it. Reading the
+  // saved role keeps a replay from answering no-control on a host that has
+  // held control all along.
+  if (roomRole === null) {
+    const seen = await state();
+    if (!roomRole) roomRole = seen.roomRole || null;
+  }
+  return roomRole === 'host';
 }
 
 // A tab that was already open when the room started never loads again, so the
@@ -426,7 +458,7 @@ async function shareTab(tab) {
   announcing.add(tab.id);
   try {
     if (announced.get(tab.id) === tab.url) return false;
-    announced.set(tab.id, tab.url);
+    await rememberAnnounced(tab.id, tab.url);
     // A tab that arrived from another browser goes out under the key it came
     // with, so the other side navigates that same tab. A tab from this browser
     // names itself.
@@ -762,7 +794,7 @@ async function handle(message, sender) {
         await shareTab(tab);
       }
     } else {
-      announced.delete(tabId);
+      await forgetAnnounced(tabId);
     }
     return { ok: true, shared: Boolean(message.shared) };
   }
@@ -773,6 +805,8 @@ async function handle(message, sender) {
   // private.
   if (message.type === 'brosr:tabs-replay') {
     if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    // The book restore runs at startup and the ask can beat it.
+    await announcedRestored;
     const all = await api.tabs.query({}).catch(() => []);
     const shown = new Map(
       all.filter((tab) => validId(tab.id)).map((tab) => [tab.id, tab])
