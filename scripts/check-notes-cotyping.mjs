@@ -8,6 +8,7 @@
 //   BROSR_CHECK_BROWSER=/path/to/chrome node scripts/check-notes-cotyping.mjs
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createBrowserLog, describeSilentRenderer } from './lane-diagnostics.mjs';
 import net from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -85,6 +86,7 @@ class Tab {
   // The page change is then made from inside the renderer, and the readiness
   // wait after it decides whether the page arrived.
   async navigate(url, timeoutMs = 20000) {
+    const started = Date.now();
     try {
       return await this.sendOnce('Page.navigate', { url }, timeoutMs);
     } catch (error) {
@@ -97,7 +99,15 @@ class Tab {
         .then((out) => Boolean(out && out.result && out.result.value === 2))
         .catch(() => false);
       if (!answered) {
-        throw new Error('the page stopped answering after Page.navigate timed out');
+        throw new Error(
+          `the page stopped answering after Page.navigate timed out: ${describeSilentRenderer({
+            url,
+            elapsedMs: Date.now() - started,
+            socketOpen: this.ws.readyState === 1,
+            child: chrome,
+            browserLog,
+          })}`
+        );
       }
       await this.sendOnce(
         'Runtime.evaluate',
@@ -175,6 +185,7 @@ const profile = await mkdtemp(path.join(tmpdir(), 'brosr-notes-cotyping-'));
 // A fresh library per run, so a saved note from an earlier run cannot leak in.
 const store = await mkdtemp(path.join(tmpdir(), 'brosr-notes-store-'));
 let chrome = null;
+const browserLog = createBrowserLog();
 const tabs = [];
 const failures = [];
 const fail = (message) => {
@@ -241,8 +252,9 @@ try {
       '--window-size=1440,900',
       'about:blank',
     ],
-    { stdio: 'ignore' }
+    { stdio: ['ignore', 'ignore', 'pipe'] }
   );
+  chrome.stderr.on('data', (chunk) => browserLog.push(chunk));
   cdp = `http://127.0.0.1:${devPort}`;
   await waitFor(async () => (await fetch(`${cdp}/json/version`)).ok, 'devtools endpoint');
 

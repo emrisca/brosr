@@ -75,6 +75,8 @@ crosses that boundary does not count.
 | Every layout lane goes red on a fresh browser that never answers | A runner's Chrome can come up with a renderer that answers no evaluate and no navigate, so five lanes fail before reading a box. A lane now relaunches once in a new browser, and every check still runs | `scripts/check-landing-layout.mjs` |
 | A layout lane reports red because `Page.navigate` went unanswered | The lane ended the run on the first `cdp timeout`, and a retry to the same target repeated the wait, so a dropped reply looked like a layout fault. The lane now sets the location from inside the page once the renderer answers, and the readiness check still decides whether the page arrived | `scripts/check-landing-layout.mjs` |
 | The Chromium lane types the room keys into the landing page search box | The lane focused the first input before every key run, and the real landing page opens with a search box, so the core recorded field values instead of key events and the host form timed out on text nobody typed | `scripts/check-two-instance.mjs` |
+| A granted guest's tab never reaches the host | The offer step read only the host's offer at the guest, so a guest that published nothing still passed | `scripts/check-two-instance.mjs` |
+| A wedged layout lane reports only a timeout | The lane kept no browser stderr and named neither the devtools socket nor the browser process, so a dead browser, a wedged renderer and a tab that went away all read the same | `core/test/lane-diagnostics.test.mjs`, `scripts/check-landing-layout.mjs` |
 
 ## The rules
 

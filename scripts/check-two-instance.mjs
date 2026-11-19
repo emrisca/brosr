@@ -81,6 +81,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const out = { steps: {} };
 const chromeLane = process.argv.includes('--chrome');
 const mixedLane = process.argv.includes('--mixed');
+// The offer step can leave a picture of both landing pages behind. It is off by
+// default, because a lane run should not write files unless a person asked.
+const SHOT_DIR = process.env.BROSR_OFFER_SHOTS || '';
 
 function free(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
@@ -135,6 +138,7 @@ function zenPage(bidi, context) {
   };
   return {
     eval: evalIn,
+    shot: () => bidi.cmd('browsingContext.captureScreenshot', { context }),
     sendActions: (actions) => bidi.cmd('input.performActions', { context, actions }),
     keys: (text) =>
       bidi.cmd('input.performActions', {
@@ -271,6 +275,10 @@ class ChromiumPage {
     } catch {
       return null;
     }
+  }
+
+  async shot() {
+    return this.send('Page.captureScreenshot', { format: 'png' });
   }
 }
 
@@ -769,9 +777,17 @@ try {
   // person keeps a page open, starts the room, then invites someone. That tab
   // never navigates again, so nothing but the room's own start can offer it.
   // The server lives here so the tab exists before the host page does.
+  // Each path carries its own title, so a picture of the landing page names
+  // which tab was offered instead of showing one repeated word.
+  const tabTitles = { offer: 'Offer tab', early: 'Early tab', control: 'Control tab' };
   offerServer = http.createServer((request, response) => {
+    const name = String(request.url || '/')
+      .replace(/^\//, '')
+      .replace(/\.html$/, '') || 'tab';
     response.writeHead(200, { 'content-type': 'text/html' });
-    response.end('<!doctype html><title>Offered tab</title><p>offer</p>');
+    response.end(
+      `<!doctype html><title>${tabTitles[name] || 'Room tab'}</title><p>${name}</p>`
+    );
   });
   await new Promise((resolve) => offerServer.listen(0, '127.0.0.1', resolve));
   const offerBase = `http://127.0.0.1:${offerServer.address().port}`;
@@ -1011,6 +1027,10 @@ try {
         return null;
       }
     };
+    // A person can keep a picture of the two landing pages. The row count is
+    // read from the drawn page, because the state attribute alone does not
+    // prove that a row was painted.
+    let shots = null;
     await openHost(offerUrl);
     // A host page sends its own offer out and keeps its list for others, so the
     // guest is the side that must show the row. The row also has to sit under
@@ -1065,6 +1085,36 @@ try {
       const guest = groups.find((group) => group.ownerId === PEER);
       return guest && guest.tabs.some((tab) => tab.url === controlUrl) ? guest : null;
     }, 'the granted guest tab at the host', 20000).catch(() => null);
+    if (SHOT_DIR) {
+      const countRows = (page) =>
+        page
+          .eval("document.querySelectorAll('#live-groups .live-row').length")
+          .catch(() => -1);
+      const guestRows = await until(async () => {
+        const n = await countRows(guestPage);
+        return n >= 2 ? n : null;
+      }, 'the host rows on the guest landing page', 8000).catch(() => countRows(guestPage));
+      const hostRows = await until(async () => {
+        const n = await countRows(hostPage);
+        return n >= 1 ? n : null;
+      }, 'the guest rows on the host landing page', 8000).catch(() => countRows(hostPage));
+      const save = async (page, name) => {
+        try {
+          const result = await page.shot();
+          fs.mkdirSync(SHOT_DIR, { recursive: true });
+          const file = path.join(SHOT_DIR, name);
+          fs.writeFileSync(file, Buffer.from(result.data, 'base64'));
+          return file;
+        } catch (error) {
+          return `failed: ${String((error && error.message) || error)}`;
+        }
+      };
+      shots = {
+        rows: { guest: guestRows, host: hostRows },
+        guest: await save(guestPage, 'offer-guest-host-tabs.png'),
+        host: await save(hostPage, 'offer-host-guest-control.png'),
+      };
+    }
     // A guest that arrives after the offer needs the replay, because the relay
     // keeps no history and the offer frame is gone by then.
     const lateUrl =
@@ -1116,6 +1166,7 @@ try {
         role: controlOffer ? controlOffer.role : null,
         tabs: controlOffer ? controlOffer.tabs.map((tab) => tab.url) : null,
       },
+      ...(shots ? { shots } : {}),
       lateGuest: { peer: 'late-1', seen: Boolean(replayed) },
       open: { key, clicked, joined: joinedOk, tabs: openedTabs },
       ...(lateReport ? { lateDiagnosis: lateReport } : {}),
