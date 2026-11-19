@@ -199,7 +199,7 @@ class ChromiumPage {
 
   // Chrome inserts a character on a keyDown with text. The virtual key code
   // keeps the event shaped like a real key, and the page sees isTrusted true.
-  async sendActions(actions) {
+  async sendActions(actions, { focusField = true } = {}) {
     // The form tab sits behind the guest while it types, and a background tab
     // can drop synthetic keys. Raising it first gives the field focus back.
     await this.send('Page.bringToFront').catch(() => {});
@@ -209,9 +209,11 @@ class ChromiumPage {
     // Raising a tab does not always restore the element it had focused, and a
     // key event goes to whatever holds focus. A headless runner left the body
     // focused and the field empty, so the field is focused again here.
-    await this.eval(
-      "(() => { const active = document.activeElement; if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return true; const field = document.querySelector('input, textarea, [contenteditable]'); if (!field) return false; field.focus(); return document.activeElement === field; })()"
-    ).catch(() => false);
+    if (focusField) {
+      await this.eval(
+        "(() => { const active = document.activeElement; if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return true; const field = document.querySelector('input, textarea, [contenteditable]'); if (!field) return false; field.focus(); return document.activeElement === field; })()"
+      ).catch(() => false);
+    }
     for (const group of actions || []) {
       if (group.type !== 'key') continue;
       for (const step of group.actions || []) {
@@ -236,15 +238,26 @@ class ChromiumPage {
 
   async keys(text) {
     await this.send('Page.bringToFront');
-    await this.sendActions([
-      {
-        type: 'key',
-        actions: [...text].flatMap((ch) => [
-          { type: 'keyDown', value: ch },
-          { type: 'keyUp', value: ch },
-        ]),
-      },
-    ]);
+    // These keys belong to the room, not to a field on this page. The landing
+    // page has a search box, and focusing it made the core record field values
+    // instead of key events, so the host read snapshots of the text.
+    await this.eval(
+      "(() => { const active = document.activeElement; if (active && active !== document.body) active.blur(); return true; })()"
+    ).catch(() => false);
+    await this.sendActions(
+      [
+        {
+          type: 'key',
+          actions: [...text].flatMap((ch) => [
+            { type: 'keyDown', value: ch },
+            { type: 'keyUp', value: ch },
+          ]),
+        },
+      ],
+      // No field on this page belongs to the room, so nothing may be focused
+      // here. Focusing the search box turned the key run into field values.
+      { focusField: false }
+    );
   }
 
   async read() {

@@ -67,6 +67,7 @@ crosses that boundary does not count.
 | A same-fate hold on a buffer wait freezes the room for the stutter timeout | The hold frame cleared the buffer wait, so the source could not report recovery and the host kept the hold until its ten-second expiry. The wait now survives the hold and expires at the buffer deadline, and the release seeks at once | `core/test/fate.test.mjs`, `core/test/media-relay.test.mjs` |
 | Every playhead keeps one fixed offset for the session | The clock estimator kept the first sample that held the smallest round trip, so one sample taken across a clock step stayed the answer while every later path tied on round trip, and a fixed offset is a fixed error in every playhead that reads room time | `core/test/clock.test.mjs` |
 | A LAN peer run has no relay witness | `lan-peers.mjs` accepted `--probe` on its own command line but built each child command without the flag, so every journal held zero relay reads | `spike/lan-peers.test.mjs` |
+| The Chromium lane types the room keys into the landing page search box | The lane focused the first input before every key run, and the real landing page opens with a search box, so the core recorded field values instead of key events and the host form timed out on text nobody typed | `scripts/check-two-instance.mjs` |
 
 ## The rules
 
