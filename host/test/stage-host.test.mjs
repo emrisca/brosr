@@ -289,3 +289,21 @@ test('staged host/cli.mjs and host/trust.mjs execute cleanly via non-canonical/s
     await rm(scratch, { recursive: true, force: true });
   }
 });
+
+test('release workflow publishes atomically via draft release after uploading latest.json', () => {
+  const yml = fs.readFileSync(releaseWorkflow, 'utf8');
+  assert.match(
+    yml,
+    /releaseDraft:\s*true/,
+    'release.yml must keep releaseDraft: true while matrix builds run so /releases/latest never serves a partial release without latest.json'
+  );
+  const uploadIdx = yml.indexOf('gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber');
+  const publishIdx = yml.indexOf('gh release edit "$TAG" --draft=false');
+  assert.notEqual(uploadIdx, -1, 'release.yml must upload latest.json');
+  assert.notEqual(publishIdx, -1, 'release.yml must publish the draft release via gh release edit --draft=false');
+  assert.equal(
+    uploadIdx < publishIdx,
+    true,
+    'release.yml must upload latest.json before flipping --draft=false'
+  );
+});

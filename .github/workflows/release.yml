@@ -89,7 +89,7 @@ jobs:
             again every six hours. Install downloads in place and restarts the
             app. The app checks each update against a signing key that ships
             inside it, and refuses a release signed with another key.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: false
 
@@ -132,3 +132,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false
