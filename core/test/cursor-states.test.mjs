@@ -41,8 +41,8 @@ test('every Windows pointer role maps to a room role', () => {
   assert.equal(cursorRole(''), 'default');
 });
 
-test('a set keeps one image per role and drops a state the room would refuse', () => {
-  const huge = 'A'.repeat(15000);
+test('a set keeps one image per role and drops a state past the local budget', () => {
+  const huge = 'A'.repeat(200001);
   const states = cleanCursorStates([
     still('Normal Select'),
     still('Arrow'),
@@ -53,6 +53,16 @@ test('a set keeps one image per role and drops a state the room would refuse', (
   assert.deepEqual(Object.keys(states).sort(), ['default', 'wait']);
   assert.equal(cleanCursorStates([]), null);
   assert.equal(cleanCursorStates(null), null);
+});
+
+test('a local state may be larger than a room frame', () => {
+  const big = 'A'.repeat(15000);
+  const states = cleanCursorStates([
+    { ...still('Normal Select'), src: `data:image/webp;base64,${big}`, animated: true },
+  ]);
+  assert.equal(states.default.src.length, `data:image/webp;base64,${big}`.length);
+  assert.equal(states.default.animated, true);
+  assert.ok(cleanCursor({ ...still('Normal Select'), src: `data:image/webp;base64,${big}` }) === null);
 });
 
 test('the stored cursor keeps its states and the room frame does not', () => {
@@ -68,6 +78,8 @@ test('a moving or multi-state pointer needs a follower element', () => {
   assert.equal(cursorNeedsFollower({ src: 'data:image/png;base64,AAAA', w: 32 }), false);
   const states = cleanCursorStates([still('Normal Select'), still('Busy')]);
   assert.equal(cursorNeedsFollower({ ...still('Normal Select'), states }), true);
+  const moving = cleanCursorStates([{ ...still('Normal Select'), animated: true }]);
+  assert.equal(cursorNeedsFollower({ ...still('Normal Select'), states: moving }), true);
   assert.equal(cursorNeedsFollower(null), false);
 });
 
@@ -80,5 +92,74 @@ test('the page draws the set with a follower and the panel sends every state', (
 
   const panel = fs.readFileSync(path.join(root, '..', 'bridge', 'panel', 'room.js'), 'utf8');
   assert.match(panel, /async function useWholeSet/);
-  assert.match(panel, /cursor: \{\s*\.\.\.base,[\s\S]{0,80}states,/);
+  assert.match(panel, /cursor: \{\s*\.\.\.base,[\s\S]{0,200}states:/);
+});
+
+// A real scuba cat page keeps one anchor around its default pointer. Before
+// the CDN scan ran first, that single card closed the list at one and the
+// other fourteen pointers never reached the panel.
+test('one leftover anchor does not hide the rest of the set', () => {
+  const panel = fs.readFileSync(path.join(root, '..', 'bridge', 'panel', 'room.js'), 'utf8');
+  const grab = (name) => {
+    const start = panel.indexOf(`function ${name}(`);
+    assert.ok(start >= 0, `missing ${name}`);
+    let depth = 0;
+    for (let i = panel.indexOf('{', start); i < panel.length; i += 1) {
+      if (panel[i] === '{') depth += 1;
+      else if (panel[i] === '}') {
+        depth -= 1;
+        if (!depth) return panel.slice(start, i + 1);
+      }
+    }
+    assert.fail(`unclosed ${name}`);
+  };
+  const at = panel.indexOf('const CURSOR_PREVIEW');
+  assert.ok(at >= 0, 'missing CURSOR_PREVIEW');
+  const source = [
+    panel.slice(at, panel.indexOf(';', at) + 1),
+    grab('cursorSetSlug'),
+    grab('cursorStateName'),
+    grab('cursorCardsFrom'),
+    'return cursorCardsFrom;',
+  ].join('\n');
+  const build = new Function(source)();
+  const base = 'https://www.cursors-4u.com/cursor/scuba-cat-cursor-set';
+  const roles = [
+    'Scuba Cat',
+    'Handwriting',
+    'Move',
+    'Alternate Select',
+    'Precision Select',
+    'Link Select',
+    'Diagonal Resize 2',
+    'Text Select',
+    'Vertical Resize',
+    'Horizontal Resize',
+    'Busy',
+    'Help Select',
+    'Unavailable',
+    'Diagonal Resize 1',
+    'Working in Background',
+  ];
+  const images = roles.map((role, index) => ({
+    src: `https://cdn.cursors-4u.net/previews/scuba-cat-cursor-set-scuba-cat-${index}.webp`,
+    alt: index === 0 ? 'Scuba Cat Cursor' : role,
+  }));
+  // A nav tile names another set, and the slug keeps it out.
+  images.push({
+    src: 'https://cdn.cursors-4u.net/previews/chrome-glass-remastered-hd-animated-cursor-set-arr-1.webp',
+    alt: 'Chrome Glass Remastered',
+  });
+  const anchors = [
+    {
+      href: 'https://www.cursors-4u.com/cursor/scuba-cat-normal-select',
+      src: images[0].src,
+      alt: 'Scuba Cat Cursor',
+      title: '',
+    },
+  ];
+  const cards = build(images, anchors, base);
+  assert.equal(cards.length, 15);
+  assert.deepEqual(cards.map((card) => card.name), roles);
+  assert.equal(new Set(cards.map((card) => card.preview)).size, 15);
 });

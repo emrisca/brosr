@@ -197,10 +197,16 @@ export function cursorRole(value) {
   return 'default';
 }
 
+// A state never travels to the room, so it may keep the full animated preview
+// the site served. The total keeps a fifteen state set well inside the store
+// quota of one origin.
+export const CURSOR_STATE_LIMIT = 200000;
+export const CURSOR_STATE_TOTAL = 900000;
+
 // A set arrives from the panel as a list of named images, and from storage as
 // a role map. One image per role is enough, and the first one wins so a set
 // with two Normal files still has one arrow.
-export function cleanCursorStates(value) {
+export function cleanCursorStates(value, limit = CURSOR_STATE_LIMIT) {
   let entries = [];
   if (Array.isArray(value)) {
     entries = value;
@@ -211,13 +217,21 @@ export function cleanCursorStates(value) {
     }));
   }
   const states = {};
+  let total = 0;
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
-    const state = cleanCursor(entry);
+    const state = cleanCursorImage(entry, limit);
     if (!state) continue;
+    if (total + state.src.length > CURSOR_STATE_TOTAL) continue;
     const role = CURSOR_ROLES.includes(entry.role) ? entry.role : cursorRole(entry.name);
     if (states[role]) continue;
-    states[role] = { src: state.src, w: state.w, h: state.h };
+    states[role] = {
+      src: state.src,
+      w: state.w,
+      h: state.h,
+      ...(state.animated ? { animated: true } : {}),
+    };
+    total += state.src.length;
   }
   return Object.keys(states).length ? states : null;
 }
@@ -235,18 +249,22 @@ export function restoreCursor(value) {
 // a moving pointer needs a follower element. A set with more than one state
 // needs one too, because the image changes with the element under the point.
 export function cursorNeedsFollower(cursor) {
-  if (!cursor || typeof cursor.src !== 'string' || !cursor.src) return false;
-  if (cursor.states && Object.keys(cursor.states).length > 1) return true;
-  return /^data:image\/gif;base64,/i.test(cursor.src);
+  if (!cursor) return false;
+  const states = cursor.states || {};
+  if (Object.keys(states).length > 1) return true;
+  const local = states.default || cursor;
+  if (!local || typeof local.src !== 'string' || !local.src) return false;
+  if (local.animated) return true;
+  return /^data:image\/gif;base64,/i.test(local.src);
 }
 
 // A custom pointer is a small, self-contained image. Refusing anything else
 // keeps a remote frame from making a page fetch an arbitrary address.
-export function cleanCursor(value) {
+export function cleanCursorImage(value, limit = CURSOR_DATA_LIMIT) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const src = typeof value.src === 'string' ? value.src : '';
   if (!/^data:image\/(?:png|webp|gif|jpeg);base64,[a-z0-9+/=]+$/i.test(src)) return null;
-  if (src.length > CURSOR_DATA_LIMIT) return null;
+  if (src.length > limit) return null;
   const width = Math.max(1, Math.min(96, Math.round(Number(value.w) || 32)));
   const height = Math.max(1, Math.min(96, Math.round(Number(value.h) || 32)));
   const name = typeof value.name === 'string' ? value.name.replace(/\s+/g, ' ').trim() : '';
@@ -255,5 +273,11 @@ export function cleanCursor(value) {
     name: name.slice(0, 40),
     w: width,
     h: height,
+    ...(value.animated ? { animated: true } : {}),
   };
+}
+
+// The room frame keeps the small limit. A local state uses the larger one.
+export function cleanCursor(value) {
+  return cleanCursorImage(value, CURSOR_DATA_LIMIT);
 }

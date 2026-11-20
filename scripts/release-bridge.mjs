@@ -80,35 +80,55 @@ function loadKeys() {
   return env;
 }
 
+// AMO lists a version row before it signs the package. An unreviewed row still
+// names a file, but that file is the package AMO received, not a signed copy,
+// and copying it over the signed XPI throws away the good signature. Only a
+// public file may be used.
+function amoFileSigned(row) {
+  return Boolean(row && row.file && row.file.url && row.file.status === 'public');
+}
+
 // AMO's record of a version, for the case where the upload landed and the
 // signature came back after web-ext stopped waiting. Unlisted versions appear
-// only with filter=all_with_unlisted, and file stays absent until AMO signs.
-async function amoHeld(version, dir, key, secret) {
+// only with filter=all_with_unlisted, and file stays unreviewed until AMO
+// signs, which can take minutes. Each poll carries a fresh token because AMO
+// rejects one whose expiry is too far out.
+async function amoHeld(version, dir, key, secret, waitMs = Number(process.env.BROSR_SIGN_WAIT_MS || 300000)) {
   const b64 = (value) => Buffer.from(value).toString('base64url');
-  const now = Math.floor(Date.now() / 1000);
-  const header = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const body = b64(JSON.stringify({ iss: key, jti: randomUUID(), iat: now, exp: now + 300 }));
-  const jwt = `${header}.${body}.${createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')}`;
-  const list = await fetch(
-    `https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(BRIDGE_ID)}/versions/?page_size=50&filter=all_with_unlisted`,
-    { headers: { Authorization: `JWT ${jwt}` } }
-  );
-  if (!list.ok) {
-    console.error(`[release] the AMO version list answered ${list.status}`);
-    return null;
+  const token = () => {
+    const now = Math.floor(Date.now() / 1000);
+    const header = b64(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+    const body = b64(JSON.stringify({ iss: key, jti: randomUUID(), iat: now, exp: now + 240 }));
+    return `${header}.${body}.${createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')}`;
+  };
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const list = await fetch(
+      `https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(BRIDGE_ID)}/versions/?page_size=50&filter=all_with_unlisted`,
+      { headers: { Authorization: `JWT ${token()}` } }
+    );
+    if (!list.ok) {
+      console.error(`[release] the AMO version list answered ${list.status}`);
+      return null;
+    }
+    const data = await list.json();
+    const row = (data.results || []).find((entry) => entry.version === version);
+    if (amoFileSigned(row)) {
+      const file = await fetch(row.file.url, { headers: { Authorization: `JWT ${token()}` } });
+      if (!file.ok) {
+        console.error(`[release] the AMO file answered ${file.status}`);
+        return null;
+      }
+      fs.mkdirSync(dir, { recursive: true });
+      const out = path.join(dir, `${version}.xpi`);
+      fs.writeFileSync(out, Buffer.from(await file.arrayBuffer()));
+      return out;
+    }
+    // A missing or unreviewed row is not a signed copy yet. Keep waiting until
+    // the cap, because a second upload of the version is refused.
+    if (Date.now() + 10000 > deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, 10000));
   }
-  const data = await list.json();
-  const row = (data.results || []).find((entry) => entry.version === version);
-  if (!row || !row.file || !row.file.url) return null;
-  const file = await fetch(row.file.url, { headers: { Authorization: `JWT ${jwt}` } });
-  if (!file.ok) {
-    console.error(`[release] the AMO file answered ${file.status}`);
-    return null;
-  }
-  fs.mkdirSync(dir, { recursive: true });
-  const out = path.join(dir, `${version}.xpi`);
-  fs.writeFileSync(out, Buffer.from(await file.arrayBuffer()));
-  return out;
 }
 
 const versions = manifests.map(readVersion);

@@ -451,42 +451,99 @@ function cursorSetName(value) {
   }
 }
 
-function parseCursorSet(html, base) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
+// A set page serves one preview per Windows role from its CDN, with the role
+// in the alt text. The class that used to wrap each pointer is gone, so the
+// images are read directly and scoped by the set's own file prefix. The nav
+// tiles and the favorite strip name other sets, and the prefix leaves them out.
+const CURSOR_PREVIEW = /^https?:\/\/cdn\.cursors-4u\.net\/previews\//i;
+
+function cursorSetSlug(value) {
+  try {
+    return new URL(String(value || '')).pathname.split('/').filter(Boolean).pop() || '';
+  } catch {
+    return '';
+  }
+}
+
+function cursorStateName(alt, src) {
+  const label = String(alt || '').replace(/\s*Cursor(\s+Set)?$/i, '').trim();
+  if (label) return label;
+  try {
+    const file = new URL(src).pathname.split('/').pop().replace(/\.[a-z0-9]+$/i, '');
+    return file.slice(0, 40) || 'Cursor';
+  } catch {
+    return 'Cursor';
+  }
+}
+
+// The card list is built from plain records so the rule that broke on a real
+// set page can be tested without a browser. Every current set page keeps one
+// leftover anchor for its default pointer, so the CDN previews are read first
+// and that single anchor merely adds to them.
+function cursorCardsFrom(images, anchors, base) {
   const cards = [];
   const seen = new Set();
-  for (const anchor of doc.querySelectorAll('a.cursor-set-link')) {
-    let href;
-    let preview;
+  const add = (href, preview, name) => {
+    if (!href || !preview || seen.has(preview)) return;
+    seen.add(preview);
+    cards.push({ name: name || 'Cursor', href, preview });
+  };
+  const slug = cursorSetSlug(base);
+  for (const image of images) {
     try {
-      href = new URL(anchor.getAttribute('href') || '', base).toString();
-      const image = anchor.querySelector('img');
-      preview = image ? new URL(image.getAttribute('src') || '', base).toString() : '';
+      const preview = new URL(image.src, base).toString();
+      if (!CURSOR_PREVIEW.test(preview)) continue;
+      const file = new URL(preview).pathname.split('/').pop();
+      if (slug && !file.startsWith(`${slug}-`)) continue;
+      add(preview, preview, cursorStateName(image.alt, preview));
     } catch {
-      continue;
+      // A preview that will not parse stays out.
     }
-    if (!href || !preview || seen.has(href)) continue;
-    const text = (anchor.getAttribute('title') || anchor.querySelector('img')?.getAttribute('alt') || 'Cursor')
-      .replace(/\s*Cursor$/i, '')
-      .trim();
-    seen.add(href);
-    cards.push({ name: text || 'Cursor', href, preview });
   }
-  // A single cursor page lists no set. It still names its own preview, so the
-  // page offers that one pointer instead of failing.
+  // An older set page wrapped every pointer in this class. It is kept so a
+  // page the site has not migrated still loads, and it adds nothing the CDN
+  // scan already read.
+  for (const anchor of anchors) {
+    try {
+      const preview = new URL(anchor.src, base).toString();
+      const text = (anchor.title || anchor.alt || 'Cursor').replace(/\s*Cursor$/i, '').trim();
+      add(new URL(anchor.href, base).toString(), preview, text);
+    } catch {
+      // A malformed anchor is skipped, not fatal.
+    }
+  }
+  return cards.slice(0, 40);
+}
+
+function parseCursorSet(html, base) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const images = [...doc.querySelectorAll('img[src], img[data-src]')].map((image) => ({
+    src: image.getAttribute('src') || image.getAttribute('data-src') || '',
+    alt: image.getAttribute('alt') || '',
+  }));
+  const anchors = [...doc.querySelectorAll('a.cursor-set-link')].map((anchor) => {
+    const image = anchor.querySelector('img');
+    return {
+      href: anchor.getAttribute('href') || '',
+      src: image ? image.getAttribute('src') || image.getAttribute('data-src') || '' : '',
+      alt: image?.getAttribute('alt') || '',
+      title: anchor.getAttribute('title') || '',
+    };
+  });
+  const cards = cursorCardsFrom(images, anchors, base);
+  // A page with no readable list still names one preview, so it offers that
+  // pointer instead of failing.
   if (!cards.length) {
     const meta = doc.querySelector('meta[property="og:image"], link[rel="image_src"]');
     try {
       const raw = meta ? meta.getAttribute('content') || meta.getAttribute('href') || '' : '';
       const preview = raw ? new URL(raw, base).toString() : '';
-      if (/^https?:/i.test(preview)) {
-        cards.push({ name: cursorSetName(String(base)) || 'Cursor', href: String(base), preview });
-      }
+      if (/^https?:/i.test(preview)) cards.push({ name: cursorSetName(base), href: String(base), preview });
     } catch {
       // A page with no readable preview stays empty.
     }
   }
-  return cards.slice(0, 40);
+  return cards;
 }
 
 function renderCursorCards(cards) {
@@ -519,8 +576,11 @@ function renderCursorCards(cards) {
 }
 
 // The room frame carries one image. This leaves room for the address and the
-// name that travel beside it.
+// name that travel beside it. A state drawn on this page never enters a frame,
+// so it may keep the preview the site served.
 const CURSOR_MAX_DATA = 14000;
+const CURSOR_STATE_DATA = 200000;
+const CURSOR_LOCAL_SIZES = [96, 80, 64, 48];
 
 function blobDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -531,18 +591,20 @@ function blobDataUrl(blob) {
   });
 }
 
-async function cursorImage(preview) {
+async function cursorImage(preview, limit = CURSOR_MAX_DATA, sizes = [32, 28, 24, 20]) {
   const response = await fetchWithDeadline(preview, 8000, { credentials: 'include' });
   if (!response.ok) throw new Error('The preview did not load.');
   const blob = await response.blob();
   if (!blob.type.startsWith('image/')) throw new Error('The preview is not an image.');
-  if (blob.size > 500000) throw new Error('The cursor image is too large.');
+  if (blob.size > (limit > CURSOR_MAX_DATA ? 2000000 : 500000)) {
+    throw new Error('The cursor image is too large.');
+  }
   const bitmap = await createImageBitmap(blob);
   // An animated cursor is a stack of frames. A canvas draws the first one and
   // drops the rest, which is why an animated pick used to arrive as a still
   // pointer. An image that carries its own motion keeps the bytes the site
   // served, and a still image takes the smaller resize path below.
-  const animated = /^image\/(gif|webp)$/i.test(blob.type);
+  const animated = /^image\/(gif|webp|apng)$/i.test(blob.type);
   // The size is read before the bitmap closes. A closed bitmap reports a zero
   // width, and a 96 px cursor would then reach the room as a 32 px one.
   const width = Math.max(1, Math.min(96, bitmap.width || 32));
@@ -550,15 +612,15 @@ async function cursorImage(preview) {
   if (animated && bitmap.width <= 96 && bitmap.height <= 96) {
     try {
       const src = await blobDataUrl(blob);
-      if (src && src.length <= CURSOR_MAX_DATA) {
+      if (src && src.length <= limit) {
         bitmap.close?.();
-        return { src, w: width, h: height };
+        return { src, w: width, h: height, animated: true };
       }
     } catch {
       // A blob that will not read falls through to the resized still.
     }
   }
-  for (const size of [32, 28, 24, 20]) {
+  for (const size of sizes) {
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -569,13 +631,13 @@ async function cursorImage(preview) {
     context.drawImage(bitmap, 0, 0, size, size);
     let src = canvas.toDataURL('image/webp', 0.82);
     if (!src.startsWith('data:image/webp')) src = canvas.toDataURL('image/png');
-    if (src.length <= CURSOR_MAX_DATA) {
+    if (src.length <= limit) {
       bitmap.close?.();
-      return { src, w: size, h: size };
+      return { src, w: size, h: size, animated: false };
     }
   }
   bitmap.close?.();
-  throw new Error('The cursor image is too large for the room.');
+  throw new Error('The cursor image is too large.');
 }
 
 async function chooseCursor(card, button) {
@@ -583,10 +645,14 @@ async function chooseCursor(card, button) {
   button.disabled = true;
   setCursorStatus(`Loading ${card.name}...`);
   try {
-    const image = await cursorImage(card.preview);
+    // The page draws the large local copy, which keeps an animation. The room
+    // still gets its own small frame of the same pointer.
+    const local = await cursorImage(card.preview, CURSOR_STATE_DATA, CURSOR_LOCAL_SIZES);
+    const wire = await cursorImage(card.preview).catch(() => null);
+    const image = wire || { src: local.src, w: local.w, h: local.h };
     const reply = await roomMessage({
       type: 'brosr:cursor',
-      cursor: { ...image, name: card.name },
+      cursor: { ...image, name: card.name, states: [{ ...local, name: card.name }] },
     });
     if (!reply || !reply.ok) throw new Error('The room did not accept that cursor.');
     notice('Custom cursor set for the room.');
@@ -598,6 +664,12 @@ async function chooseCursor(card, button) {
     cursorBusy = false;
     button.disabled = false;
   }
+}
+
+// A file that names the normal pointer wins over a set cover image, because
+// the cover is often a still of the whole set.
+function cursorStateRank(name) {
+  return /(^|\s)(normal|default|arrow)(\s|$)/i.test(String(name || '')) ? 0 : 1;
 }
 
 // A set is one pointer per Windows role. Loading every preview keeps the
@@ -612,24 +684,29 @@ async function useWholeSet(button) {
     const loaded = await Promise.all(
       cursorCards.map(async (card) => {
         try {
-          const image = await cursorImage(card.preview);
-          return { ...image, name: card.name };
+          const image = await cursorImage(card.preview, CURSOR_STATE_DATA, CURSOR_LOCAL_SIZES);
+          return { ...image, name: card.name, preview: card.preview };
         } catch {
           // One state that will not load does not sink the set.
           return null;
         }
       })
     );
-    const states = loaded.filter(Boolean);
+    const states = loaded
+      .filter(Boolean)
+      .sort((a, b) => cursorStateRank(a.name) - cursorStateRank(b.name));
     if (!states.length) throw new Error('No pointer in that set would load.');
-    const base =
-      states.find((state) => /(^|\s)(normal|default|arrow)(\s|$)/i.test(state.name)) || states[0];
+    // The arrow is what the room draws, so it gets its own small copy.
+    const chosen = states[0];
+    const wire = await cursorImage(chosen.preview).catch(() => null);
+    const base = wire || (chosen.src.length <= CURSOR_MAX_DATA ? chosen : null);
+    if (!base) throw new Error('That set has no pointer the room can carry.');
     const reply = await roomMessage({
       type: 'brosr:cursor',
       cursor: {
         ...base,
-        name: cursorSetName($('cursor-set').value) || base.name,
-        states,
+        name: cursorSetName($('cursor-set').value) || chosen.name,
+        states: states.map(({ preview: _preview, ...state }) => state),
       },
     });
     if (!reply || !reply.ok) throw new Error('The room did not accept that set.');
@@ -676,7 +753,12 @@ async function cursorSetHtml(url) {
           func: () => (document.documentElement ? document.documentElement.outerHTML : ''),
         });
         const html = results && results[0] ? results[0].result : '';
-        if (typeof html === 'string' && html.includes('cursor-set-link')) return html;
+        if (
+          typeof html === 'string' &&
+          /cursor-set-link|cdn\.cursors-4u\.net\/previews\//.test(html)
+        ) {
+          return html;
+        }
       } catch {
         // The tab may still be on its way to the set page.
       }
