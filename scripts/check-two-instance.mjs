@@ -1082,6 +1082,51 @@ try {
           return urls.includes(offerUrl) ? urls : null;
         }, 'the opened copy in the guest browser', 20000).catch(() => null)
       : null;
+    // Stop is the way out of a synced tab. The control peer clicks the real
+    // button, and the room must drop the key and keep it dropped. A stop that
+    // only cleared the local row would pass a single read, so the second read
+    // comes after the next room tick.
+    const stopSelector = `.live-stop[data-key=${JSON.stringify(key)}]`;
+    const stopSeen = joinedOk
+      ? await until(
+          () => guestPage.eval(`Boolean(document.querySelector(${JSON.stringify(stopSelector)}))`),
+          'the stop button at the guest',
+          8000
+        ).catch(() => false)
+      : false;
+    const stopClicked = stopSeen
+      ? await guestPage.eval(
+          `(() => { const button = document.querySelector(${JSON.stringify(stopSelector)}); if (!button) return false; button.click(); return true; })()`
+        )
+      : false;
+    const leftJoined = async () => {
+      const state = await readTabs(guestPage);
+      return state && !((state.joined || []).includes(key)) ? state : null;
+    };
+    const stopLeft = stopClicked
+      ? Boolean(
+          await until(leftJoined, 'the stopped key at the guest', 8000).catch(() => null)
+        )
+      : false;
+    if (stopLeft) await sleep(1500);
+    const stopHeld = stopLeft
+      ? Boolean(await until(leftJoined, 'the stopped key after a tick', 8000).catch(() => null))
+      : false;
+    // Stop leaves the tab open, so the copy is still in this browser.
+    const stopTabOpen = stopHeld ? (await guestTabUrls()).includes(offerUrl) : false;
+    const stopOk = Boolean(stopClicked) && stopLeft && stopHeld && stopTabOpen;
+    out.steps.stop = {
+      key,
+      button: Boolean(stopSeen),
+      clicked: Boolean(stopClicked),
+      left: stopLeft,
+      held: stopHeld,
+      open: stopTabOpen,
+      ok: stopOk,
+    };
+    if (!stopOk) {
+      process.stderr.write(`[brosr] the stop did not hold: ${JSON.stringify(out.steps.stop)}\n`);
+    }
     // Control runs the other way too. The guest already holds control, so a tab
     // it opens must reach the host under the guest's name. Without this step the
     // lane only proves that a host can offer.
@@ -1161,6 +1206,7 @@ try {
       Boolean(earlySeen) &&
       Boolean(controlOffer) &&
       Boolean(replayed) &&
+      stopOk &&
       Boolean(clicked && joinedOk && openedTabs);
     out.steps.offer = {
       url: offerUrl,

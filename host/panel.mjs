@@ -2,16 +2,72 @@
 // loopback panel peer, sends one app message, waits for the host tab's answer,
 // and closes. The host tab checks the token before it changes anything.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import { formatAddress } from '../core/friends.mjs';
 import { PANEL_APP, PANEL_PEER } from '../core/panel.mjs';
 import { decode, encode } from '../core/protocol.mjs';
 import { openFrame, roomKey, sealFrame } from '../core/seal.mjs';
-import { readJoin, readRun } from './room.mjs';
+import { readJoin, readRun, RUN_DIR } from './room.mjs';
 
 const TIMEOUT_MS = 8000;
 const require = createRequire(import.meta.url);
 const { buildSyncReport } = require('../bridge/panel/sync-report.js');
+
+// One line per rate correction a film tab ran, on the host machine. A film
+// that keeps getting slower shows as a run of entries where the element rate
+// sits away from the room rate, which is the record a decay leaves on disk.
+const MEDIA_LOG = path.join(RUN_DIR, 'media-sync.jsonl');
+const MEDIA_LOG_LIMIT = 512 * 1024;
+
+export function rateLogLines(data) {
+  const rate = data && data.reading && data.reading.rate;
+  if (!rate || !Array.isArray(rate.trace)) return [];
+  const out = [];
+  for (const entry of rate.trace) {
+    if (!entry || !Number.isFinite(Number(entry.at))) continue;
+    out.push({
+      at: Number(entry.at),
+      room: data.room || null,
+      peer: data.peerId || null,
+      role: data.role || null,
+      kind: entry.kind || null,
+      roomRate: entry.roomRate,
+      elementRate: entry.elementRate,
+      drift: entry.drift,
+    });
+  }
+  return out;
+}
+
+function appendRateLog(data) {
+  const entries = rateLogLines(data);
+  if (!entries.length) return;
+  try {
+    fs.mkdirSync(RUN_DIR, { recursive: true });
+    // Each status read is a new process, so the newest line in the file is the
+    // cursor. A rate entry is written once, not on every poll.
+    let seen = -Infinity;
+    try {
+      const text = fs.readFileSync(MEDIA_LOG, 'utf8').trimEnd();
+      const last = JSON.parse(text.slice(text.lastIndexOf('\n') + 1) || '{}');
+      if (Number.isFinite(Number(last.at))) seen = Number(last.at);
+    } catch {
+      // A new room or a half written tail starts the file again.
+    }
+    const fresh = entries.filter((entry) => entry.at > seen);
+    if (!fresh.length) return;
+    fs.appendFileSync(MEDIA_LOG, fresh.map((entry) => JSON.stringify(entry)).join('\n') + '\n');
+    // The newest lines matter, so a limit keeps the tail instead of the head.
+    if (fs.statSync(MEDIA_LOG).size > MEDIA_LOG_LIMIT) {
+      const tail = fs.readFileSync(MEDIA_LOG, 'utf8').slice(-MEDIA_LOG_LIMIT);
+      fs.writeFileSync(MEDIA_LOG, tail.slice(tail.indexOf('\n') + 1));
+    }
+  } catch {
+    // A read only state folder must not break the controls.
+  }
+}
 
 // The room tab sends the current room and film readings. The app shows the
 // same report in Room controls, so the host turns that state into one text log
@@ -23,12 +79,19 @@ function withRoomLog(state) {
     role: state.diagnostics.role || state.role,
     peerId: state.diagnostics.peerId || state.peerId,
   };
+  appendRateLog(data);
   return {
     ...state,
+    logFile: MEDIA_LOG,
     log: buildSyncReport(
       { room: data.room, roomName: data.roomName, role: data.role, data },
       data.reading || null,
-      { now: Date.now(), surface: 'host app', readingReply: data.readingReply || null }
+      {
+        now: Date.now(),
+        surface: 'host app',
+        readingReply: data.readingReply || null,
+        logFile: MEDIA_LOG,
+      }
     ),
   };
 }

@@ -240,6 +240,16 @@ function clamp(value, max) {
   return Math.max(0, Number.isFinite(max) && max > 0 ? Math.min(value, max) : value);
 }
 
+// One place sets the element rate, so every correction leaves a trace entry and
+// none of them compares against the corrected element.
+function setRate(video, rate) {
+  const want = Number(rate);
+  if (!video || !Number.isFinite(want) || want <= 0) return false;
+  if (Math.abs(Number(video.playbackRate || 1) - want) <= 0.001) return false;
+  video.playbackRate = want;
+  return true;
+}
+
 // A tab the room opened has no gesture of its own, so the browser can refuse an
 // unmuted start. Muting is the retry that works, and the viewer can raise the
 // volume again.
@@ -478,11 +488,17 @@ export class RemoteMediaSync {
       bufferHolds: 0,
       holds: 0,
       expiredHolds: 0,
+      rateChanges: 0,
+      lastRate: null,
       last: null,
     };
     // The report needs the path, not only the totals: which point was wanted,
     // how long the wait lasted, and whether the hold released or expired.
     this.history = { seeks: [], buffers: [], holds: [] };
+    // The rate corrections this tab ran. A film that keeps getting slower is
+    // visible here: each entry names the room rate beside the rate the element
+    // ran, so a correction that leaked back out shows as a step.
+    this.rateTrace = [];
     this.bufferWait = null;
     this.holdEvent = null;
   }
@@ -500,6 +516,38 @@ export class RemoteMediaSync {
   // divide it again, which is the slow motion that grew with the session.
   reportedRate() {
     return this.roomRate;
+  }
+
+  // Record a rate correction only when it changed the element. A tick that
+  // reasserts the same rate would fill the trace and hide the step that
+  // matters, which is the element moving away from the room rate.
+  noteRate(now, kind, roomRate, video, drift) {
+    if (!video) return;
+    const elementRate = Number(video.playbackRate || 1);
+    const last = this.rateTrace[this.rateTrace.length - 1];
+    if (last && last.kind === kind && Math.abs(last.elementRate - elementRate) < 0.001) {
+      return;
+    }
+    this.rateTrace.push({
+      at: now,
+      kind,
+      roomRate: Math.round(Number(roomRate) * 1000) / 1000,
+      elementRate: Math.round(elementRate * 1000) / 1000,
+      drift: Number.isFinite(Number(drift)) ? Math.round(Number(drift) * 1000) / 1000 : null,
+    });
+    this.stats.rateChanges += 1;
+    this.stats.lastRate = kind;
+    if (this.rateTrace.length > RELAY_HISTORY_LIMIT) this.rateTrace.shift();
+  }
+
+  // The panel and the host log read this. A run where elementRate sits away
+  // from roomRate is a film that is running at a correction nobody asked for.
+  rateView() {
+    return {
+      roomRate: this.roomRate,
+      changes: this.stats.rateChanges,
+      trace: this.rateTrace.map((entry) => ({ ...entry })),
+    };
   }
 
   historyView() {
@@ -606,8 +654,9 @@ export class RemoteMediaSync {
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
     // The rate the room asked this tab to follow. Everything below corrects
     // against that rate and never against the corrected element.
-    const roomRate = Number(frame.rate || 1);
-    if (Number.isFinite(roomRate) && roomRate > 0) this.roomRate = roomRate;
+    const asked = Number(frame.rate);
+    const roomRate = Number.isFinite(asked) && asked > 0 ? asked : this.roomRate || 1;
+    this.roomRate = roomRate;
     // A hold is not a playhead correction. It pauses this tab and keeps it
     // paused until the room sends the release that carries the source's
     // position. A normal tick during that window must not resume the film.
@@ -724,6 +773,12 @@ export class RemoteMediaSync {
       this.bufferHeld = false;
       this.bufferReady = false;
       video.currentTime = expected;
+      // A seek puts the playhead where the room is, so the correction that
+      // was closing the old gap no longer applies. Leaving it on the element
+      // runs the rest of the film at a rate nobody asked for.
+      if (setRate(video, roomRate)) {
+        this.noteRate(now, 'seek-reset', roomRate, video, drift);
+      }
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
@@ -750,9 +805,8 @@ export class RemoteMediaSync {
         }
         this.waitingTarget = expected;
         if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
-          const roomRate = Number(frame.rate || 1);
-          if (Math.abs(Number(video.playbackRate || 1) - roomRate) > 0.001) {
-            video.playbackRate = roomRate;
+          if (setRate(video, roomRate)) {
+            this.noteRate(now, 'buffer-rate', roomRate, video, drift);
           }
           // Stop the film while it waits, or it keeps moving away from the
           // target and the seek has to cover a larger gap when data arrives.
@@ -772,6 +826,12 @@ export class RemoteMediaSync {
       this.bufferHeld = false;
       this.bufferReady = false;
       video.currentTime = expected;
+      // The jump landed, so the nudge that was closing the old gap ends with
+      // it. Without this the film keeps the five percent correction until the
+      // next tick, and a room that jumps often adds that error every time.
+      if (setRate(video, roomRate)) {
+        this.noteRate(now, 'seek-reset', roomRate, video, drift);
+      }
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
@@ -785,9 +845,9 @@ export class RemoteMediaSync {
 
     if (!paused && Math.abs(drift) > RELAY_NUDGE_SECONDS) {
       const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
-      if (Math.abs(Number(video.playbackRate || 1) - nudge) > 0.001) video.playbackRate = nudge;
-    } else if (Math.abs(Number(video.playbackRate || 1) - roomRate) > 0.001) {
-      video.playbackRate = roomRate;
+      if (setRate(video, nudge)) this.noteRate(now, 'nudge', roomRate, video, drift);
+    } else if (setRate(video, roomRate)) {
+      this.noteRate(now, 'room-rate', roomRate, video, drift);
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need

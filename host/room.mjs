@@ -28,7 +28,7 @@ const STATE = process.env.BROSR_STATE ? path.resolve(process.env.BROSR_STATE) : 
 const RUNTIME = process.env.BROSR_ZEN_RUNTIME
   ? path.resolve(process.env.BROSR_ZEN_RUNTIME)
   : path.join(ROOT, 'zen', '.runtime');
-const RUN_DIR = STATE;
+export const RUN_DIR = STATE;
 const RUN_FILE = path.join(RUN_DIR, 'room.json');
 const JOIN_FILE = path.join(RUN_DIR, 'join.json');
 const PROFILE = path.join(RUN_DIR, 'profile');

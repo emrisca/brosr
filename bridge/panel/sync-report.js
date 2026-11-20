@@ -114,10 +114,16 @@
     return `${(ms / 1000).toFixed(1)} s`;
   }
 
+  function rateText(value) {
+    const rate = Number(value);
+    return Number.isFinite(rate) && rate > 0 ? rate.toFixed(2) : '';
+  }
+
   function buildSyncReport(reply, reading, context = {}) {
     const data = reply && reply.data ? reply.data : null;
     const now = Number(context.now) || Date.now();
     const lines = ['Brosr sync report', `Generated: ${new Date(now).toISOString()}`];
+    if (present(context.logFile)) lines.push(`Log file: ${context.logFile}`);
     if (!data) {
       lines.push('Status: no room reply.');
       return lines.join('\n');
@@ -279,6 +285,34 @@
             .join(', ') || (reply.ok ? 'no-relay' : 'unknown')
         : 'no-response';
       add('Reading', `unavailable (${reason})`);
+    }
+
+    // A film tab that stops reporting its own correction can still be running
+    // one. These lines name the room rate beside the element rate, so a decay
+    // shows as entries where the two drift apart instead of one number.
+    if (relay && relay.rate && Array.isArray(relay.rate.trace) && relay.rate.trace.length) {
+      const changes = Number(relay.rate.changes);
+      add(
+        'Room rate',
+        `${rateText(relay.rate.roomRate)}${
+          Number.isFinite(changes) ? ` (${changes} correction${changes === 1 ? '' : 's'})` : ''
+        }`
+      );
+      add(
+        'Rate trace',
+        relay.rate.trace
+          .filter(Boolean)
+          .map((entry) => {
+            const at = stamp(entry.at);
+            const drift = Number(entry.drift);
+            return (
+              `${entry.kind || 'rate'} ${rateText(entry.roomRate)} -> ${rateText(entry.elementRate)}` +
+              (Number.isFinite(drift) ? `, ${drift.toFixed(2)} s` : '') +
+              (at ? ` at ${at}` : '')
+            );
+          })
+          .join('; ')
+      );
     }
 
     add('Matched copy', offset(data.align && data.align.offsetMs));
@@ -598,6 +632,7 @@
               applies: relay.applies,
               last: relay.last || null,
               stats: relay.stats || null,
+              rate: relay.rate || null,
               localDrops: relay.localDrops || null,
               lastLocalDrop: relay.lastLocalDrop || null,
               history: relay.history || null,

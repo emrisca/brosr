@@ -346,6 +346,9 @@ async function startPageMedia() {
         // tab can wait on a buffer and retry a stuck seek without either one
         // showing up in the room counters.
         relay: { ...relay, stats: { ...remote.stats }, history: remote.historyView() },
+        // The rate corrections this tab ran, so the session log names a film
+        // that is running at a rate the room never asked for.
+        rate: remote.rateView(),
         position: Number(video.currentTime || 0),
         duration: Number(video.duration || 0),
         paused: Boolean(video.paused),

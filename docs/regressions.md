@@ -19,6 +19,7 @@ crosses that boundary does not count.
 | A peer gets a tab it never asked for | A shared tab was treated as an instruction to open, so a peer's browser opened a copy by itself | `core/test/live-tabs.test.mjs`, `core/test/tabs-replay.test.mjs` |
 | A peer with control opens a tab on the same site and the host gets a copy | The replay gate compared the link with the film page it was replayed on, so any same-site new tab passed, and only a page of the room has tiles | `core/test/tabs-replay.test.mjs` |
 | A stopped copy follows the film again after its next page | The media hello had no stop check, and the open path reused a stopped tab by URL, so a new key put the copy back in the room | `core/test/background-tab-open.test.mjs` |
+| A jump leaves the film running at the correction rate | A seek put the playhead right but left the five percent nudge on the element, so a room that jumps often kept adding that error instead of clearing it | `core/test/media-rate.test.mjs` |
 | A peer clicks a Live tab and nothing appears | The copy opened in the background, behind the room tab | `core/test/tab-sync-controls.test.mjs`, `scripts/check-landing-layout.mjs` |
 | A stopped tab starts syncing again on its next page | Stop dropped the key but left the tab mapped, so a navigation published it back | `core/test/tab-sync-controls.test.mjs` |
 | A Live tab row never says playing or paused | The offer carried the URL and title only, so the row had no state to show | `core/test/live-tabs.test.mjs`, `core/test/tab-sync-controls.test.mjs` |
