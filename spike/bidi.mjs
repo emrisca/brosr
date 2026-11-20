@@ -46,7 +46,9 @@ export class BiDi {
     return this;
   }
 
-  cmd(method, params = {}) {
+  // A screenshot can wait on a paint that never comes, so a caller that needs a
+  // shorter bound passes its own. Everything else keeps the 20 s default.
+  cmd(method, params = {}, timeoutMs = 20000) {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -56,11 +58,17 @@ export class BiDi {
           this.pending.delete(id);
           reject(new Error(`timeout: ${method}`));
         }
-      }, 20000);
+      }, timeoutMs);
     });
   }
 
   close() {
+    // A caller that walks away from a command still needs its promise settled,
+    // or the capture loop would wait on a socket that is already gone.
+    for (const [id, entry] of this.pending) {
+      this.pending.delete(id);
+      entry.reject(new Error('session closed'));
+    }
     try {
       this.ws.close();
     } catch {

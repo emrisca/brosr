@@ -101,6 +101,37 @@ test('a room says whether the host is one of its members', async () => {
   legacy.close();
 });
 
+test('a replacement host takes the room without leaving a stale host count', async () => {
+  await waitHealth();
+  const oldHost = await connect('swap', 'host', 'host-old');
+  const guest = await connect('swap', 'peer', 'guest-1');
+
+  const before = await (await fetch(`${BASE}/status?room=swap`)).json();
+  assert.equal(before.peers, 2);
+  assert.equal(before.hosts, 1);
+
+  // The replacement joins while the old host is still listed, which is the
+  // moment a swap can count one person twice.
+  const newHost = await connect('swap', 'host', 'host-new');
+  const overlap = await (await fetch(`${BASE}/status?room=swap`)).json();
+  assert.equal(overlap.peers, 3, 'both live sockets are counted during the overlap');
+  assert.equal(overlap.hosts, 2);
+
+  oldHost.close();
+  let after = null;
+  for (let i = 0; i < 40; i++) {
+    after = await (await fetch(`${BASE}/status?room=swap`)).json();
+    if (after.peers === 2 && after.hosts === 1) break;
+    await sleep(50);
+  }
+  assert.equal(after.peers, 2, 'the retired host socket is gone');
+  assert.equal(after.hosts, 1, 'only the replacement counts as host');
+  assert.equal(after.people, 2, 'the retired host identity is not kept');
+
+  newHost.close();
+  guest.close();
+});
+
 test('people counts each peer once across tabs, and ignores the panel socket', async () => {
   await waitHealth();
   const host = await connect('counted', 'host', 'host-1');

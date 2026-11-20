@@ -19,6 +19,9 @@ const FILES = [
   'host/cli.mjs',
   'host/room.mjs',
   'host/panel.mjs',
+  // The panel reads the sync report through this loader, which survives the
+  // module type app/package.json puts on the staged tree.
+  'host/report.mjs',
   // The room imports the hold helper, which imports the pipe client. A bundle
   // without either one stops on the first Chrome start.
   'host/chrome-hold.mjs',

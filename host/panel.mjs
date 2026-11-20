@@ -4,16 +4,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { formatAddress } from '../core/friends.mjs';
 import { PANEL_APP, PANEL_PEER } from '../core/panel.mjs';
 import { decode, encode } from '../core/protocol.mjs';
 import { openFrame, roomKey, sealFrame } from '../core/seal.mjs';
 import { readJoin, readRun, RUN_DIR } from './room.mjs';
+import { buildSyncReport } from './report.mjs';
 
 const TIMEOUT_MS = 8000;
-const require = createRequire(import.meta.url);
-const { buildSyncReport } = require('../bridge/panel/sync-report.js');
 
 // One line per rate correction a film tab ran, on the host machine. A film
 // that keeps getting slower shows as a run of entries where the element rate

@@ -58,6 +58,7 @@ crosses that boundary does not count.
 | Notes stays dark in a light room | The page carried one colour scheme and no light rules, so the sheet sat on a black stage | `scripts/check-room-apps-layout.mjs` |
 | A notes toolbar letter is too small to hit | The letter buttons shrank to their glyph and the row gave one of them 23 px of width | `scripts/check-room-apps-layout.mjs` |
 | Chess seats and move counts sit at 10 px | The seat label, the session state and the move count used a size meant for the board coordinates | `scripts/check-room-apps-layout.mjs` |
+| The app's Room controls says the room did not answer | `app/package.json` marks the staged tree as module type, so Node loaded the UMD sync report as ES, `module.exports` never ran, and `buildSyncReport` was undefined when the panel built its log | `core/test/sync-report-app-layout.test.mjs` |
 | Chess squares change size between ranks | The board declared eight columns and no rows, so each implicit auto row sized to the pieces inside it and the ranks holding pieces grew taller than the empty ones | `scripts/check-room-apps-layout.mjs` |
 | A dragged chess piece snaps back | The board listened for clicks only, so a press and a release on two squares read as one tap on the release square | `scripts/check-chess-play.mjs` |
 | The guest who has waited longest loses their place in line | A full waiting list dropped its oldest entry to make room for the newest, so the front of the queue was the first thing thrown away | `scripts/check-chess-play.mjs` |
@@ -98,3 +99,46 @@ crosses that boundary does not count.
 | A granted peer jumps around the film and playback sinks into slow motion | The rate a following tab reported came from its own nudged element, so each hop divided the room rate by 1.05 again and the rate decayed for the rest of the session | `core/test/media-relay.test.mjs`, `core/test/entry-capture.test.mjs` |
 | A real cursors-4u set loads only its cover in the panel | The page still wraps its default pointer in one `a.cursor-set-link`, so the legacy branch added a card and the early return skipped the CDN state scan | `core/test/cursor-states.test.mjs` |
 | A failed sign replaces a good signed XPI with an unsigned copy | AMO lists a version row before it signs the file, and the fallback copied that unreviewed package over `bridge-signed.xpi`, so the guard rejected a file that had been fine | `core/test/release-sign.test.mjs` |
+| A room never names its film and no media frame reaches a peer | The cursor echo lived in page scope and read the cursor that only `start()` holds, so the first hello threw and `start()` stopped before it registered the message listener and the media tick | `core/test/cursor-echo.test.mjs` |
+
+## Open findings
+
+These two were found while producing the demo tour. Neither has a failing
+test yet. They stay here until the cause is fixed and a regression test covers
+it.
+
+### A replacement browser leaves the room with no host
+
+**Symptom.** After capture moved to two warm guest browsers, both panes showed
+"The host is not in this room" and "3 apps open in this room".
+
+**Cause.** The retired host browser still held a page socket in the room,
+while its room tab, the only socket with `role=host`, had closed. `/status`
+counted three peer sockets and zero hosts. The relay reported the sockets it
+had. The session had not closed every socket of the browser it retired.
+
+**Reproduction note.** Start the relay and open a host room in browser A and a
+guest room in browser B. Open two more guest room pages in browsers C and D.
+Close A's room tab but leave A's landing page open. `GET /status?room=<name>`
+then reports `peers: 3` and `hosts: 0`, and the landing pages in C and D show
+the host notice. Closing A's landing page drops `peers` to 2, and the host
+notice remains until a page joins with `role=host`.
+
+The relay swap accounting now has a guard in `spike/relay.test.mjs`. The
+session side is open. Retiring a browser must close every room socket it
+holds, and a replacement that should host must join with `role=host`.
+
+### A long capture run stops answering screenshots
+
+**Symptom.** At roughly frame 2000, `browsingContext.captureScreenshot` times
+out on both panes. The pane holds its last frame. The timed out command stays
+queued in the browser and blocks later commands.
+
+**Cause.** Not established. The capture loop and the BiDi session are the
+suspects. The renderer worked around it by launching replacement browsers
+mid-run, holding the last frame, and bounding the movie to the narration.
+
+**Reproduction note.** Drive one room in two BiDi panes and capture both at
+30 fps. After about 66 seconds, around 2000 frames, a screenshot call stops
+answering. A retry does not return, and later evaluate or navigate calls queue
+behind it. A fresh browser on the same relay captures normally.

@@ -220,9 +220,9 @@ function applyOwnCursor(cursor) {
 // The background page echoes this cursor every two seconds. The states are
 // only needed where the pointer is drawn, and the broadcast that changes the
 // cursor already delivers them, so the echo carries the room shape only.
-function wireCursor() {
-  if (!ownCursor) return null;
-  const { states: _states, ...base } = ownCursor;
+export function wireCursor(cursor) {
+  if (!cursor) return null;
+  const { states: _states, ...base } = cursor;
   return base;
 }
 
@@ -1820,7 +1820,7 @@ export async function start() {
           type: 'brosr:room-hello',
           role,
           build: bridgeBuild,
-          cursor: showOwnCursor ? wireCursor() : null,
+          cursor: showOwnCursor ? wireCursor(ownCursor) : null,
         })
         .catch(() => {});
     hello();
