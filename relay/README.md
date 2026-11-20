@@ -1,8 +1,8 @@
 # Relay
 
 The room relay. It forwards text and binary frames between the members of one room, keeps one
-table per room, and never parses a frame. A sealed room stays sealed because the relay only
-copies bytes.
+table per room, evicts rooms when the last client leaves, and never parses a frame. A sealed room
+stays sealed because the relay only copies bytes.
 
 ## Run
 
@@ -16,25 +16,30 @@ Environment:
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | Bind address. A LAN test sets `0.0.0.0`. |
 | `PORT` | `8787` | HTTP and WebSocket port. |
-| `FIXTURES` | `../spike/fixtures` | Room pages and fixtures. |
-| `ASSETS` | `../assets` | The mark and shared images. |
-| `MEDIA` | `../spike/.runtime` | Clips served under `/media/`. |
+| `LANDING` | `../landing` | Room landing page and built-in apps (`/`, `/canvas`, `/notes`, `/chess`, `/docs-client.js`). |
+| `FIXTURES` | `../spike/fixtures` | Room test fixtures served as fallback (or first when `FIXTURES` is set without `LANDING`). |
+| `ASSETS` | `../assets` | The mark and shared images under `/assets/`. |
+| `MEDIA` | `../spike/.runtime` | Clips served under `/media/` with HTTP `Range` (`206`) support. |
+| `BROSR_DOCS_DIR` | `../spike/.runtime/docs` | Host document library folder for `/docs` and `/docs/:id`. |
+| `BROSR_DOCS_TOKEN` | unset | Required `?token=` for `/docs`. When unset, only loopback requests are allowed. |
 | `RELAY_CAPTURE` | unset | JSONL file of every forwarded payload. |
 
-Routes are `/health`, `/stats`, `/room` for the WebSocket, and files at the root.
+Routes: `/health`, `/stats`, `/status`, `/room` (WebSocket with `room`, `role`, `peer`), `/docs`,
+`/docs/:id`, `/media/*`, `/assets/*`, landing apps, and fixtures.
 
-## Proof
+## Proof and parity
 
 ```sh
-cargo build
-cd ../core && RELAY_BIN="$PWD/../relay/target/debug/brosr-relay" node --test test/wire.test.mjs
+cargo test --manifest-path relay/Cargo.toml
+cargo build --manifest-path relay/Cargo.toml
+RELAY_BIN="$PWD/relay/target/debug/brosr-relay" node --test core/test/wire.test.mjs spike/relay.test.mjs
 ```
 
-The test seals a presence frame and sends it through this relay. It then reads the capture file.
-It requires opcode 2, and it requires that the bytes hold no URL, no peer name and no message
-type.
+`wire.test.mjs` seals a presence frame, sends it through this relay, and verifies the capture holds
+opcode 2 bytes with no URL, peer name, or message type. `spike/relay.test.mjs` verifies room
+isolation, `/status` role and people counting, empty-room cleanup, `/media/` byte ranges, landing
+routes, and `/docs` CRUD and token gating against both `spike/relay.js` and `brosr-relay`.
 
 ## Limits
 
-Range requests are not served, so a clip that seeks still needs the Node relay. The relay has no
-authentication, so it binds loopback by default.
+The relay has no room authentication, so it binds loopback by default.

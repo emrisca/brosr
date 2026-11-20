@@ -78,6 +78,12 @@ if (fs.existsSync(signed)) {
 }
 
 run('relay files', ['scripts/check-relay-files.mjs'], 60000);
+run(
+  'relay parity',
+  ['--test', 'spike/relay.test.mjs', 'core/test/wire.test.mjs'],
+  120000,
+  { RELAY_BIN: relay }
+);
 run('updater feed', ['scripts/check-updater-feed.mjs'], 180000);
 run('zen lane', ['scripts/check-two-instance.mjs'], 240000);
 run('chromium lane', ['scripts/check-two-instance.mjs', '--chrome'], 240000);

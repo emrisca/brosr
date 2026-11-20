@@ -15,18 +15,18 @@ packs. Google Chrome 137 and later ignore the flag that loads an unpacked add-on
 room installs the three add-ons over the devtools pipe instead, with a helper process holding it
 open.
 
-Status: `v0.3.21` ships a signed macOS and Windows app. Rooms run in Firefox and Brave.
+Status: `v0.3.48` ships a signed macOS and Windows app (bridge `0.4.11`). Rooms run in Firefox, Zen and Brave.
 
 ## Quick start for non-developers
 
 You do not need Node, Rust or a checkout to try Brosr. Take the build for your machine from
-[the latest release](https://github.com/emrisca/brosr/releases/latest):
+[the latest release](https://github.com/emrisca/brosr/releases/latest) (currently `v0.3.48`):
 
 | Machine | File |
 | --- | --- |
-| macOS on Apple silicon | [`Brosr_0.3.21_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.21/Brosr_0.3.21_aarch64.dmg) |
-| macOS on Intel | [`Brosr_0.3.21_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.21/Brosr_0.3.21_x64.dmg) |
-| Windows, 64-bit | [`Brosr_0.3.21_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.21/Brosr_0.3.21_x64-setup.exe) or [`Brosr_0.3.21_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.21/Brosr_0.3.21_x64_en-US.msi) |
+| macOS on Apple silicon | [`Brosr_0.3.48_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.48/Brosr_0.3.48_aarch64.dmg) |
+| macOS on Intel | [`Brosr_0.3.48_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.48/Brosr_0.3.48_x64.dmg) |
+| Windows, 64-bit | [`Brosr_0.3.48_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.48/Brosr_0.3.48_x64-setup.exe) or [`Brosr_0.3.48_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.48/Brosr_0.3.48_x64_en-US.msi) |
 
 The macOS build carries an ad hoc signature and no notarisation, so the first launch needs one
 extra step. Move Brosr to Applications, try to open it, then allow it in System Settings,
@@ -103,7 +103,7 @@ that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detai
 | `app/` | The Brosr app. A Tauri window with a React setup flow that drives `host/cli.mjs`. |
 | `spike/` | The M0 harness and the M1, M3 and M4 checks. It downloads its own Firefox. |
 | `zen/` | The older Zen lane: profile setup, the live window and the legacy docked panel. |
-| `relay/` | The axum relay. It forwards frames per room and serves the fixtures. |
+| `relay/` | The Rust axum relay. Full parity with `spike/relay.js`: per-room WebSocket fan-out with empty-room eviction, `/health`, `/stats`, `/status`, HTTP `Range` media serving under `/media/*`, landing and room apps (`/`, `/canvas`, `/notes`, `/chess`), token/loopback-guarded `/docs`, and fixtures. Packaged inside desktop releases under `resources/relay/`. |
 | `labs/align/` | The offline copy alignment lane: measure the offset between two copies of a film and write it for the room. |
 | `docs/m0-results.md` | What the M0 spike measured. |
 | `assets/` | The Brosr app icon. `brosr-icon.svg` is the source, and `node assets/render-icon.mjs` draws the 1024 pixel `brosr-icon.png` from it. The 16 to 256 pixel copies feed the extension manifest and the app surfaces only. `node assets/icons.mjs` rebuilds the copies and `brosr.ico`. `assets/windows-shortcut.ps1` writes a Windows shortcut and tile from that ICO. |
@@ -120,11 +120,14 @@ npm test
 The suite covers protocol encode and decode, the clock estimator, the drift controller, the
 overlay, the room state and the input guards.
 
-The host lifecycle has its own suite, and the two run in one pass from the repo root:
+The host lifecycle and relay parity suites run with it in one pass from the repo root:
 
 ```bash
-node --test core/test/*.test.mjs host/test/*.test.mjs
+node --test core/test/*.test.mjs host/test/*.test.mjs spike/relay.test.mjs
 ```
+
+To run the Rust axum relay's own unit tests and verify parity against the compiled binary, see
+[relay/README.md](relay/README.md).
 
 ## Check the landing links
 
@@ -192,7 +195,7 @@ node host/cli.mjs stop
 ```
 
 `zen/live.mjs` is the older Zen lane. It builds the same profile, opens Zen on a room and
-docks the legacy panel:
+docked the legacy panel:
 
 ```bash
 node zen/live.mjs --room=demo
@@ -273,7 +276,9 @@ and reviews.
 - [docs/design.md](docs/design.md) states what works per use case and what a room cannot do.
 - [docs/engines.md](docs/engines.md) compares the Gecko and Chromium lanes side by side.
 - [docs/sync.md](docs/sync.md) covers the layers, the protocol and the media policy.
+- [docs/privacy.md](docs/privacy.md) states what stays sealed, what the relay sees, and what never crosses it.
 - [docs/milestones.md](docs/milestones.md) tracks M0 to M8 with the as-built notes.
 - [core/README.md](core/README.md) explains the modules and the five rules the code depends on.
+- [relay/README.md](relay/README.md) documents the Rust axum relay routes, env vars, and parity proofs.
 - [spike/README.md](spike/README.md) records the last run and the findings that changed the code.
 - [docs/m0-results.md](docs/m0-results.md) summarises the M0 measurements.

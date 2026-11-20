@@ -20,10 +20,13 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
+            relay_ext: ""
           - platform: macos-latest
             target: x86_64-apple-darwin
+            relay_ext: ""
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            relay_ext: ".exe"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -40,17 +43,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: |
+            app/src-tauri
+            relay
 
       - name: Install the frontend
         working-directory: app
         run: npm ci
+
+      - name: Build the relay
+        run: cargo build --manifest-path relay/Cargo.toml --release --target ${{ matrix.target }}
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          BROSR_RELAY_BIN: ${{ github.workspace }}/relay/target/${{ matrix.target }}/release/brosr-relay${{ matrix.relay_ext }}
         with:
           projectPath: app
           args: --target ${{ matrix.target }}

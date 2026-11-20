@@ -117,6 +117,22 @@ A person can point at a tile, so a cursor travels with the room.
 The URL tile opens the address in a tab and the bridge shares that tab, so the site keeps its
 own page and its own scripts.
 
+### Taking over as host
+
+A room outlives the page that hosted it. The relay names a host by the role its socket joined
+with, so a room whose host page closed has peers and no host, and the landing page says so.
+
+- A room page offers one button, "Take over as host", when the relay reports a measured host
+  count of zero. A relay that sends no host count made no measurement, so a missing field never
+  reads as a missing host.
+- The button navigates the page to the same URL with `role=host` and `peer=host`. The core falls
+  back to the id `host` for a host socket, and the relay names the host by that id, so the two
+  travel together. One without the other joins as a second peer and the room stays hostless.
+- The room, the name, the relay port and the key in the fragment ride along, and a guest grant
+  drops, because a grant belongs to the guest role.
+- The offer grants nothing new. Any peer holding the room link could already open it with
+  `role=host`, and the button only reads the state the relay already reported.
+
 ### Watch, the sites that play in sync
 
 Watch is the tile for one playhead. The room matches the film by page, then sets the position and

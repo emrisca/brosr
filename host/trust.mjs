@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
 import { ChromeCdp } from './chrome-cdp.mjs';
+import { pointerLockDecision } from '../core/input.mjs';
 import { actionsForRecord } from '../core/trust.mjs';
 
 export const TRUST_TTL_MS = 5 * 60 * 1000;
@@ -72,6 +73,8 @@ export async function createTrustAgent({
   grant,
   token: givenToken = '',
   ttlMs = TRUST_TTL_MS,
+  pointerLocked = () => false,
+  onTargetError = null,
 } = {}) {
   if (!bidi) throw new Error('the agent needs a BiDi session');
   if (!context) throw new Error('the agent needs a browsing context');
@@ -97,6 +100,11 @@ export async function createTrustAgent({
     if (url.pathname !== '/action') {
       req.resume();
       reply(res, 404, { ok: false, reason: 'not-found' });
+      return;
+    }
+    if (req.method !== 'POST') {
+      req.resume();
+      reply(res, 405, { ok: false, reason: 'method' });
       return;
     }
 
@@ -134,6 +142,22 @@ export async function createTrustAgent({
       return;
     }
 
+    // Guardrail #5: pointer lock is local by design. Refuse the batch with the
+    // explicit policy decision before touching the browser actuator.
+    const lockActive = Boolean(typeof pointerLocked === 'function' ? pointerLocked() : pointerLocked);
+    for (const record of records) {
+      const lock = pointerLockDecision({
+        record,
+        pointerLockElement: lockActive ? true : null,
+      });
+      if (!lock.allow) {
+        stats.rejected += 1;
+        stats.reasons[lock.reason] = (stats.reasons[lock.reason] || 0) + 1;
+        reply(res, 403, { ok: false, ...lock });
+        return;
+      }
+    }
+
     let applied = 0;
     let skipped = 0;
     stats.batches += 1;
@@ -149,6 +173,8 @@ export async function createTrustAgent({
         applied += 1;
       } catch (error) {
         stats.rejected += 1;
+        stats.reasons.bidi = (stats.reasons.bidi || 0) + 1;
+        if (typeof onTargetError === 'function') onTargetError(error);
         reply(res, 502, {
           ok: false,
           reason: 'bidi',
@@ -186,12 +212,18 @@ export async function createTrustAgent({
     revoke() {
       active = false;
       closedAt = Date.now();
-      return new Promise((resolve) => server.close(resolve));
+      return new Promise((resolve) => {
+        server.close(resolve);
+        if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      });
     },
     close() {
       if (!active) return Promise.resolve();
       active = false;
-      return new Promise((resolve) => server.close(resolve));
+      return new Promise((resolve) => {
+        server.close(resolve);
+        if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+      });
     },
     isActive() {
       return active;
@@ -234,17 +266,26 @@ export async function resolveTrustTarget(bidi, target) {
       return null;
     }
   };
-  // An exact address wins. The room params a tab adds later change the query,
-  // so origin and path are the fallback that still names the same page.
+  // An exact address wins, then same origin+path+query (ignoring hash), then
+  // same origin+path as fallback when room parameters change the query.
   const exact = contexts.find((item) => {
     const url = read(item);
     return url && url.href === wanted.href;
+  });
+  const withQuery = contexts.find((item) => {
+    const url = read(item);
+    return (
+      url &&
+      url.origin === wanted.origin &&
+      url.pathname === wanted.pathname &&
+      url.search === wanted.search
+    );
   });
   const page = contexts.find((item) => {
     const url = read(item);
     return url && url.origin === wanted.origin && url.pathname === wanted.pathname;
   });
-  const hit = exact || page;
+  const hit = exact || withQuery || page;
   return hit ? hit.context : null;
 }
 
@@ -270,6 +311,7 @@ export function watchTrust({
     targetUrl: null,
     targetContext: context,
     missingTarget: null,
+    pointerLocked: false,
   };
   let agent = null;
   let peerId = null;
@@ -313,6 +355,7 @@ export function watchTrust({
     } catch (error) {
       state.error = text(error);
     }
+    state.pointerLocked = Boolean(published && published.pointerLock);
     const granted = grantedPeers(published);
     // The panel names the tab this grant types into. The room tab itself is
     // the fallback, so a closed or missing target never stops the channel.
@@ -361,6 +404,10 @@ export function watchTrust({
         token,
         ttlMs,
         grant: { peerId, active: true },
+        pointerLocked: () => state.pointerLocked,
+        onTargetError: () => {
+          resolvedAt = 0;
+        },
       });
       state.seenGrants += 1;
       state.peerId = peerId;

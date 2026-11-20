@@ -1,33 +1,51 @@
 // Two rooms on one relay. A frame must reach its own room and nothing else.
-// This test starts a real relay on a spare port and speaks real WebSockets.
+// This suite starts a real relay on an ephemeral port and speaks real HTTP and
+// WebSockets. Set RELAY_BIN to run the exact same contract against the Rust
+// axum relay binary.
 
-import test, { after } from 'node:test';
+import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 8799;
-const BASE = `http://127.0.0.1:${PORT}`;
+const root = path.join(here, '..');
+const RELAY_JS = path.join(here, 'relay.js');
+const RELAY_BIN = process.env.RELAY_BIN || '';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const relay = spawn(process.execPath, [path.join(here, 'relay.js')], {
-  stdio: ['ignore', 'pipe', 'pipe'],
-  env: { ...process.env, PORT: String(PORT) },
-});
-relay.stdout.on('data', () => {});
-relay.stderr.on('data', (chunk) => process.stderr.write(chunk));
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
 
-after(() => {
-  relay.kill('SIGKILL');
-});
+function spawnRelay(env) {
+  const fullEnv = { ...process.env, HOST: '127.0.0.1', ...env };
+  return RELAY_BIN
+    ? spawn(RELAY_BIN, [], { stdio: ['ignore', 'pipe', 'pipe'], env: fullEnv })
+    : spawn(process.execPath, [RELAY_JS], { stdio: ['ignore', 'pipe', 'pipe'], env: fullEnv });
+}
 
-async function waitHealth() {
+let PORT = 0;
+let BASE = '';
+let relay = null;
+let docsDir = '';
+let mediaDir = '';
+
+async function waitHealth(base = BASE) {
   for (let i = 0; i < 60; i++) {
     try {
-      const res = await fetch(`${BASE}/health`);
+      const res = await fetch(`${base}/health`);
       if (res.ok) return;
     } catch {
       // Not up yet.
@@ -36,6 +54,30 @@ async function waitHealth() {
   }
   throw new Error('relay did not start');
 }
+
+before(async () => {
+  PORT = await freePort();
+  BASE = `http://127.0.0.1:${PORT}`;
+  docsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brosr-relay-docs-'));
+  mediaDir = path.join(here, '.runtime');
+  fs.mkdirSync(mediaDir, { recursive: true });
+  relay = spawnRelay({
+    PORT: String(PORT),
+    BROSR_DOCS_DIR: docsDir,
+    BROSR_DOCS_TOKEN: '',
+    MEDIA: mediaDir,
+    LANDING: path.join(root, 'landing'),
+    ASSETS: path.join(root, 'assets'),
+  });
+  relay.stdout.on('data', () => {});
+  relay.stderr.on('data', (chunk) => process.stderr.write(chunk));
+  await waitHealth();
+});
+
+after(() => {
+  if (relay) relay.kill('SIGKILL');
+  if (docsDir) fs.rmSync(docsDir, { recursive: true, force: true });
+});
 
 function connect(room, role = 'peer', peer = '') {
   const named = peer ? `&peer=${encodeURIComponent(peer)}` : '';
@@ -118,15 +160,15 @@ test('a replacement host takes the room without leaving a stale host count', asy
   assert.equal(overlap.hosts, 2);
 
   oldHost.close();
-  let after = null;
+  let afterClose = null;
   for (let i = 0; i < 40; i++) {
-    after = await (await fetch(`${BASE}/status?room=swap`)).json();
-    if (after.peers === 2 && after.hosts === 1) break;
+    afterClose = await (await fetch(`${BASE}/status?room=swap`)).json();
+    if (afterClose.peers === 2 && afterClose.hosts === 1) break;
     await sleep(50);
   }
-  assert.equal(after.peers, 2, 'the retired host socket is gone');
-  assert.equal(after.hosts, 1, 'only the replacement counts as host');
-  assert.equal(after.people, 2, 'the retired host identity is not kept');
+  assert.equal(afterClose.peers, 2, 'the retired host socket is gone');
+  assert.equal(afterClose.hosts, 1, 'only the replacement counts as host');
+  assert.equal(afterClose.people, 2, 'the retired host identity is not kept');
 
   newHost.close();
   guest.close();
@@ -201,30 +243,146 @@ test('closing every client of a room removes the room', async () => {
 
 test('a named clip serves range requests, and a missing one gives 404', async () => {
   await waitHealth();
-  const dir = path.join(here, '.runtime');
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, 'range-test.webm');
+  const file = path.join(mediaDir, 'range-test.webm');
   fs.writeFileSync(file, Buffer.alloc(1024, 7));
 
-  const ranged = await fetch(`${BASE}/media/range-test.webm`, { headers: { range: 'bytes=0-99' } });
-  assert.equal(ranged.status, 206, 'a range request answers 206');
-  assert.equal(ranged.headers.get('content-range'), 'bytes 0-99/1024');
-  assert.equal((await ranged.arrayBuffer()).byteLength, 100);
+  try {
+    const ranged = await fetch(`${BASE}/media/range-test.webm`, { headers: { range: 'bytes=0-99' } });
+    assert.equal(ranged.status, 206, 'a range request answers 206');
+    assert.equal(ranged.headers.get('content-range'), 'bytes 0-99/1024');
+    assert.equal(ranged.headers.get('accept-ranges'), 'bytes');
+    assert.equal((await ranged.arrayBuffer()).byteLength, 100);
 
-  const whole = await fetch(`${BASE}/media/range-test.webm`);
-  assert.equal(whole.status, 200, 'a plain request answers 200');
-  assert.equal(whole.headers.get('accept-ranges'), 'bytes');
+    const outOfRange = await fetch(`${BASE}/media/range-test.webm`, {
+      headers: { range: 'bytes=2000-2100' },
+    });
+    assert.equal(outOfRange.status, 416, 'a range past EOF answers 416');
+    assert.equal(outOfRange.headers.get('content-range'), 'bytes */1024');
 
-  const missing = await fetch(`${BASE}/media/absent.webm`);
+    const whole = await fetch(`${BASE}/media/range-test.webm`);
+    assert.equal(whole.status, 200, 'a plain request answers 200');
+    assert.equal(whole.headers.get('accept-ranges'), 'bytes');
+    assert.equal((await whole.arrayBuffer()).byteLength, 1024);
+
+    const missing = await fetch(`${BASE}/media/absent.webm`);
+    assert.equal(missing.status, 404);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test('landing and room app routes serve with expected MIME types', async () => {
+  await waitHealth();
+  const cases = [
+    ['/', 'text/html'],
+    ['/landing.css', 'text/css'],
+    ['/favicon.svg', 'image/svg+xml'],
+    ['/docs-client.js', 'text/javascript'],
+    ['/canvas', 'text/html'],
+    ['/canvas/canvas.js', 'text/javascript'],
+    ['/notes', 'text/html'],
+    ['/notes/notes.js', 'text/javascript'],
+    ['/chess', 'text/html'],
+    ['/chess/chess.js', 'text/javascript'],
+  ];
+  for (const [route, expectedType] of cases) {
+    const res = await fetch(`${BASE}${route}`);
+    assert.equal(res.status, 200, `${route} should answer 200`);
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    assert.ok(
+      contentType.startsWith(expectedType),
+      `${route} arrived as ${contentType}, expected ${expectedType}`
+    );
+  }
+});
+
+test('the docs store creates, lists, filters, updates, deletes and rejects bad ids', async () => {
+  await waitHealth();
+  const putNote = await fetch(`${BASE}/docs/note-1`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'note',
+      name: '  Meeting\tnotes  ',
+      at: 2000,
+      body: '<p>Hello &amp; welcome&nbsp;home</p>',
+    }),
+  });
+  assert.equal(putNote.status, 200);
+  assert.deepEqual(await putNote.json(), { ok: true, id: 'note-1' });
+
+  const putCanvas = await fetch(`${BASE}/docs/canvas-1`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'canvas',
+      name: 'Sketch',
+      at: 3000,
+      body: { layers: [{ strokes: [{ id: 's1' }] }] },
+    }),
+  });
+  assert.equal(putCanvas.status, 200);
+
+  const listed = await (await fetch(`${BASE}/docs`)).json();
+  assert.equal(listed.ok, true);
+  assert.equal(listed.docs.length, 2);
+  assert.equal(listed.docs[0].id, 'canvas-1', 'newer document sorts first');
+  assert.equal(listed.docs[0].preview, '1 stroke');
+  assert.equal(listed.docs[1].id, 'note-1');
+  assert.equal(listed.docs[1].name, 'Meeting notes');
+  assert.equal(listed.docs[1].preview, 'Hello & welcome home');
+
+  const onlyNotes = await (await fetch(`${BASE}/docs?kind=note`)).json();
+  assert.equal(onlyNotes.docs.length, 1);
+  assert.equal(onlyNotes.docs[0].id, 'note-1');
+
+  const loaded = await (await fetch(`${BASE}/docs/note-1`)).json();
+  assert.equal(loaded.ok, true);
+  assert.equal(loaded.doc.id, 'note-1');
+  assert.equal(loaded.doc.body, '<p>Hello &amp; welcome&nbsp;home</p>');
+
+  const badPut = await fetch(`${BASE}/docs/..%2Fescape`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'note', body: 'x' }),
+  });
+  assert.equal(badPut.status, 400);
+
+  const badDelete = await fetch(`${BASE}/docs/..%2Fescape`, { method: 'DELETE' });
+  assert.equal(badDelete.status, 400);
+
+  const removed = await fetch(`${BASE}/docs/note-1`, { method: 'DELETE' });
+  assert.equal(removed.status, 200);
+  const missing = await fetch(`${BASE}/docs/note-1`);
   assert.equal(missing.status, 404);
-  fs.rmSync(file, { force: true });
+});
+
+test('a token-gated docs store refuses requests without the matching token', async (t) => {
+  const tokenPort = await freePort();
+  const tokenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'brosr-relay-token-docs-'));
+  const tokenRelay = spawnRelay({
+    PORT: String(tokenPort),
+    BROSR_DOCS_DIR: tokenDir,
+    BROSR_DOCS_TOKEN: 'secret-token-123',
+  });
+  t.after(() => {
+    tokenRelay.kill('SIGKILL');
+    fs.rmSync(tokenDir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${tokenPort}`;
+  await waitHealth(base);
+
+  const denied = await fetch(`${base}/docs`);
+  assert.equal(denied.status, 403);
+  const wrong = await fetch(`${base}/docs?token=wrong`);
+  assert.equal(wrong.status, 403);
+  const allowed = await fetch(`${base}/docs?token=secret-token-123`);
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(await allowed.json(), { ok: true, docs: [] });
 });
 
 test('a relay on a busy port exits instead of serving', async () => {
-  const second = spawn(process.execPath, [path.join(here, 'relay.js')], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, PORT: String(PORT) },
-  });
+  const second = spawnRelay({ PORT: String(PORT) });
   let text = '';
   second.stdout.on('data', (chunk) => (text += chunk.toString()));
   second.stderr.on('data', (chunk) => (text += chunk.toString()));

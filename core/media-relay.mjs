@@ -19,6 +19,9 @@ export const RELAY_TICK_MS = 250;
 // A gap this large is a seek. A smaller gap is a rate nudge.
 export const RELAY_DRIFT_SECONDS = 1;
 export const RELAY_NUDGE_SECONDS = 0.25;
+// Once a rate nudge starts, keep nudging until drift settles cleanly inside
+// this band instead of parking right at 250 ms and bouncing across the budget.
+export const RELAY_NUDGE_STOP_SECONDS = 0.05;
 // A seek takes a moment to land. Another one before it lands fights the first.
 export const RELAY_SEEK_SETTLE_MS = 700;
 // A seek into data the player has not fetched can wedge the element. Wait for
@@ -78,11 +81,29 @@ export function isCinecatWatchPage(value = '') {
   }
 }
 
-// A Cinecat player frame reports the title page that owns it, not the provider
-// URL inside the frame. A missing or non-watch referrer keeps the frame URL,
-// so a normal embedded player still works the way it did before.
-export function framePageHref({ href = '', referrer = '', embedded = false } = {}) {
+function isHttpUrl(value = '') {
+  try {
+    const url = new URL(String(value || ''));
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// A player inside a cross-origin iframe (such as Cinecat or Miruro's generic
+// strm.cx/?embed=1) often has an embed URL and stripped referrer that never
+// name the episode. When the bridge background hands down the tab's top URL,
+// use it unless the iframe itself is a YouTube embed (which names its own id).
+// Without topUrl, fall back to the Cinecat watch-page referrer rule.
+export function framePageHref({
+  href = '',
+  referrer = '',
+  topUrl = '',
+  embedded = false,
+} = {}) {
   if (!embedded) return href;
+  if (isYouTubeHost(href)) return href;
+  if (isHttpUrl(topUrl)) return topUrl;
   return isCinecatWatchPage(referrer) ? referrer : href;
 }
 
@@ -99,15 +120,27 @@ export function isPageBoundSource(raw) {
   return !text || PAGE_BOUND_SOURCE.test(text) || MANIFEST_SOURCE.test(text);
 }
 
-// The key names the page and drops the query and the fragment, so a time stamp
-// or a token in the address does not split one film into two keys.
+// Query parameters that identify a title or episode on sites whose watch route
+// puts episode identity in the query string (for example Miruro's /watch?id=&ep=).
+// Timestamps, server picks, tokens and room params stay out so two viewers on
+// the same episode share one key.
+const PAGE_IDENTITY_PARAMS = ['ep', 'episode', 'id', 's', 'season'];
+
+// The key names the page and keeps only canonical episode identity parameters,
+// dropping timestamps, tokens, servers and fragments.
 export function pageKey(href) {
   const text = String(href || '');
   if (!text) return '';
   try {
     const url = new URL(text);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
-    return PAGE_KEY_PREFIX + url.origin + url.pathname;
+    const kept = new URLSearchParams();
+    for (const name of PAGE_IDENTITY_PARAMS) {
+      const value = url.searchParams.get(name);
+      if (value !== null && value !== '') kept.set(name, value);
+    }
+    const query = kept.toString();
+    return PAGE_KEY_PREFIX + url.origin + url.pathname + (query ? '?' + query : '');
   } catch {
     return '';
   }
@@ -471,6 +504,10 @@ export class RemoteMediaSync {
     // A tab that has never applied a frame has no position of its own. Its
     // first frame seeds the player, so it seeks rather than nudges.
     this.primed = false;
+    // Track the active film key so an in-place SPA film swap seeds fresh.
+    this.lastKey = null;
+    // Hysteresis flag so a rate nudge closes drift cleanly below 50 ms.
+    this.nudging = false;
     // The rate the room asked for. A nudge is this tab's own correction, so it
     // never becomes the rate this tab reports back to the room.
     this.roomRate = null;
@@ -652,6 +689,18 @@ export class RemoteMediaSync {
     const yt = isYouTubeHost(this.pageHostname());
     const ownKey = yt ? playerKey(this.pageHref()) : mediaKeyFor(video, { pageUrl: this.pageHref() });
     if (frame.key !== ownKey) return { ok: false, reason: 'key' };
+    if (this.lastKey !== frame.key) {
+      this.lastKey = frame.key;
+      this.primed = false;
+      this.nudging = false;
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferHeld = false;
+      this.bufferReady = false;
+      this.lastSeekTarget = null;
+      this.lastSeekAt = -Infinity;
+      this.seekIssuedAt = -Infinity;
+    }
     // The rate the room asked this tab to follow. Everything below corrects
     // against that rate and never against the corrected element.
     const asked = Number(frame.rate);
@@ -745,7 +794,6 @@ export class RemoteMediaSync {
     // after it keeps the room's own policy.
     const paused = !frame.playing;
     const seed = !this.primed;
-    this.primed = true;
     const seekLimit = paused || seed ? RELAY_NUDGE_SECONDS : RELAY_DRIFT_SECONDS;
     // The guest may catch up on its own. A gap that no longer needs a seek
     // must not keep the next one inside the old buffer deadline.
@@ -783,6 +831,8 @@ export class RemoteMediaSync {
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
       this.recordSeek(now, expected, 'retry');
+      this.primed = true;
+      this.nudging = false;
       this.stats.stuckSeeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek-retry';
@@ -815,6 +865,7 @@ export class RemoteMediaSync {
             this.bufferHeld = true;
             this.stats.bufferHolds += 1;
           }
+          this.nudging = false;
           this.stats.skips += 1;
           this.stats.last = 'buffer';
           return { ok: true, skipped: 'buffer', drift: Math.round(drift * 1000) / 1000 };
@@ -836,6 +887,8 @@ export class RemoteMediaSync {
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
       this.recordSeek(now, expected, 'seek');
+      this.primed = true;
+      this.nudging = false;
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';
@@ -843,11 +896,20 @@ export class RemoteMediaSync {
       return { ok: true, action: 'seek', drift: Math.round(drift * 1000) / 1000 };
     }
 
-    if (!paused && Math.abs(drift) > RELAY_NUDGE_SECONDS) {
+    this.primed = true;
+    const absDrift = Math.abs(drift);
+    const wantNudge =
+      !paused &&
+      !video.seeking &&
+      (absDrift > RELAY_NUDGE_SECONDS ||
+        (this.nudging && absDrift > RELAY_NUDGE_STOP_SECONDS));
+    if (wantNudge) {
+      this.nudging = true;
       const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
       if (setRate(video, nudge)) this.noteRate(now, 'nudge', roomRate, video, drift);
-    } else if (setRate(video, roomRate)) {
-      this.noteRate(now, 'room-rate', roomRate, video, drift);
+    } else {
+      this.nudging = false;
+      if (setRate(video, roomRate)) this.noteRate(now, 'room-rate', roomRate, video, drift);
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need

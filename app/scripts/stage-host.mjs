@@ -3,15 +3,61 @@
 // folder is generated, never committed, and rebuilt on every frontend build so
 // a shipped file cannot be older than its source.
 //
-//   node scripts/stage-host.mjs
+//   node scripts/stage-host.mjs [--out <dir>]
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = path.join(here, '..');
 const repo = path.join(app, '..');
-const out = path.join(app, 'src-tauri', 'resources');
+
+function argValue(name) {
+  const flag = `--${name}`;
+  const hit = process.argv.find((entry) => entry.startsWith(`${flag}=`));
+  if (hit) return hit.slice(flag.length + 1);
+  const index = process.argv.indexOf(flag);
+  return index >= 0 && index + 1 < process.argv.length ? process.argv[index + 1] : '';
+}
+
+const outOverride = argValue('out') || String(process.env.BROSR_STAGE_OUT || '').trim();
+const out = outOverride ? path.resolve(outOverride) : path.join(app, 'src-tauri', 'resources');
+const relayName = process.platform === 'win32' ? 'brosr-relay.exe' : 'brosr-relay';
+
+function stop(why) {
+  console.error(`[stage-host] ${why}`);
+  process.exit(1);
+}
+
+// Resolve an optional Rust relay binary before modifying the output folder so a
+// bad BROSR_RELAY_BIN fails fast with a clear diagnosis instead of silently
+// shipping only the Node fallback.
+function resolveRelaySource() {
+  const explicit = String(process.env.BROSR_RELAY_BIN || '').trim();
+  if (explicit) {
+    const candidate = path.resolve(explicit);
+    let stat;
+    try {
+      stat = fs.statSync(candidate);
+    } catch {
+      stop(`BROSR_RELAY_BIN does not exist: ${candidate}`);
+    }
+    if (!stat.isFile()) {
+      stop(`BROSR_RELAY_BIN is not a file: ${candidate}`);
+    }
+    return candidate;
+  }
+  const built = path.join(repo, 'relay', 'target', 'release', relayName);
+  try {
+    if (fs.statSync(built).isFile()) return built;
+  } catch {
+    // Optional when a local dev build has not compiled relay/ yet.
+  }
+  return '';
+}
+
+const relaySource = resolveRelaySource();
 
 // One entry per file the host opens at run time. A missing entry stops the
 // build here, not on a user's first launch.
@@ -22,6 +68,10 @@ const FILES = [
   // The panel reads the sync report through this loader, which survives the
   // module type app/package.json puts on the staged tree.
   'host/report.mjs',
+  // The room spawns trust.mjs by path rather than static import, and trust.mjs
+  // imports chrome-cdp.mjs for Chromium builds. Both must land in the bundle.
+  'host/trust.mjs',
+  'host/chrome-cdp.mjs',
   // The room imports the hold helper, which imports the pipe client. A bundle
   // without either one stops on the first Chrome start.
   'host/chrome-hold.mjs',
@@ -47,6 +97,9 @@ const FILES = [
   'spike/zip.mjs',
   'spike/unzip.mjs',
   'spike/bidi.mjs',
+  // Keep resources/relay present and non-empty in every build so Tauri's
+  // bundle.resources entry works both with and without a compiled Rust relay.
+  'relay/README.md',
   'bridge/manifest.json',
   'bridge/manifest.chrome.json',
   'bridge/background.js',
@@ -101,11 +154,6 @@ function copyTree(relative) {
   return { files, size };
 }
 
-function stop(why) {
-  console.error(`[stage-host] ${why}`);
-  process.exit(1);
-}
-
 function copy(relative) {
   const from = path.join(repo, relative);
   if (!fs.existsSync(from)) stop(`missing source ${relative}`);
@@ -144,33 +192,60 @@ for (const relative of TREES) {
   count += tree.files;
 }
 
-// Every staged module can import another staged file, and the list above is
-// kept by hand. A missed entry ships a tree that only fails on a user's first
-// launch, so each relative import is resolved against the staged copy and a
-// target that never landed stops the build here.
+let stagedRelayRel = '';
+if (relaySource) {
+  stagedRelayRel = path.join('relay', relayName);
+  const to = path.join(out, stagedRelayRel);
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.copyFileSync(relaySource, to);
+  if (process.platform !== 'win32') {
+    const mode = fs.statSync(relaySource).mode & 0o777;
+    fs.chmodSync(to, mode);
+  }
+  bytes += fs.statSync(to).size;
+  count += 1;
+}
+
+// Every staged module can import another staged file or spawn a sibling script
+// by path, and the list above is kept by hand. A missed entry ships a tree that
+// only fails on a user's first launch, so each relative import and sibling
+// helper path is resolved against the staged copy and stops the build here.
 const IMPORT =
   /(?:from\s*|import\s*\(\s*|require\s*\(\s*)['"](\.[^'"]+)['"]/g;
+const SIBLING_SCRIPT =
+  /path\.join\(\s*here\s*,\s*['"]([^'"]+\.(?:mjs|js))['"]\s*\)/g;
 const SERVER_SIDE = ['host/', 'core/', 'zen/', 'spike/'];
 const holes = [];
 for (const relative of copied) {
   if (!/\.(mjs|js)$/.test(relative)) continue;
   if (!SERVER_SIDE.some((prefix) => relative.startsWith(prefix))) continue;
   const file = path.join(out, relative);
-  for (const match of fs.readFileSync(file, 'utf8').matchAll(IMPORT)) {
+  const source = fs.readFileSync(file, 'utf8');
+  for (const match of source.matchAll(IMPORT)) {
     const target = path.resolve(path.dirname(file), match[1]);
     if (!target.startsWith(out + path.sep)) continue;
     if (fs.existsSync(target)) continue;
     holes.push(`${relative} imports ${match[1]}`);
   }
+  for (const match of source.matchAll(SIBLING_SCRIPT)) {
+    const target = path.resolve(path.dirname(file), match[1]);
+    if (!target.startsWith(out + path.sep)) continue;
+    if (fs.existsSync(target)) continue;
+    holes.push(`${relative} spawns ${match[1]}`);
+  }
 }
-if (holes.length) stop(`staged modules import files that did not land:\n  ${holes.sort().join('\n  ')}`);
+if (holes.length) stop(`staged modules reference files that did not land:\n  ${holes.sort().join('\n  ')}`);
 
 // The app reads these names, so a bundle that lost one fails here.
 for (const required of [
   'host/cli.mjs',
   'host/bookmarks.mjs',
+  'host/trust.mjs',
+  'host/chrome-cdp.mjs',
   'core/seal.mjs',
   'bridge/manifest.json',
+  'spike/relay.js',
+  'relay/README.md',
   'spike/fixtures/room-b.html',
   'spike/fixtures/sync.html',
   'landing/index.html',
@@ -181,6 +256,32 @@ for (const required of [
 ]) {
   if (!fs.existsSync(path.join(out, required))) stop(`staged tree lacks ${required}`);
 }
+if (stagedRelayRel && !fs.existsSync(path.join(out, stagedRelayRel))) {
+  stop(`staged tree lacks ${stagedRelayRel}`);
+}
+
+// Verify the staged runtime actually imports and spawns from the staged tree.
+const realOut = fs.realpathSync(out);
+const roomImport = spawnSync(
+  process.execPath,
+  ['--input-type=module', '-e', 'await import(process.argv[1])', pathToFileURL(path.join(realOut, 'host', 'room.mjs')).href],
+  { cwd: realOut, encoding: 'utf8' }
+);
+if (roomImport.status !== 0) {
+  stop(`staged host/room.mjs failed to import: ${(roomImport.stderr || roomImport.stdout || '').trim()}`);
+}
+
+const trustProbe = spawnSync(process.execPath, [path.join(realOut, 'host', 'trust.mjs')], {
+  cwd: realOut,
+  encoding: 'utf8',
+});
+if (trustProbe.status !== 2 || !/--debug-port/.test(trustProbe.stderr || '')) {
+  stop(
+    `staged host/trust.mjs spawn check failed (status ${trustProbe.status}): ${(trustProbe.stderr || trustProbe.stdout || '').trim()}`
+  );
+}
 
 const kb = Math.round(bytes / 1024);
-console.log(`[stage-host] ${count} files, ${kb} KB -> src-tauri/resources`);
+const destLabel = outOverride ? out : 'src-tauri/resources';
+const relayNote = stagedRelayRel ? ` (with ${stagedRelayRel})` : '';
+console.log(`[stage-host] ${count} files, ${kb} KB -> ${destLabel}${relayNote}`);

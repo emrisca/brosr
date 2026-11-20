@@ -10,6 +10,54 @@ export const MAX_QUEUE = 512;
 // Moving a cursor and scrolling are free. Everything that acts needs a grant.
 export const FREE_KINDS = new Set(['move', 'scroll']);
 
+const POINTER_LOCK_KINDS = new Set(['pointerlock', 'pointer-lock', 'requestpointerlock']);
+
+const isPoint = (point) =>
+  Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
+
+function modifiersOf(record) {
+  return {
+    ctrlKey: Boolean(record && (record.ctrl || record.ctrlKey)),
+    altKey: Boolean(record && (record.alt || record.altKey)),
+    shiftKey: Boolean(record && (record.shift || record.shiftKey)),
+    metaKey: Boolean(record && (record.meta || record.metaKey)),
+  };
+}
+
+// Pointer lock is local by design and never crosses the room. Any active local
+// lock or remote pointer-lock request is refused with a named reason.
+export function pointerLockDecision({
+  doc = null,
+  record = null,
+  requested = false,
+  pointerLockElement = undefined,
+} = {}) {
+  const kind = String((record && record.kind) || '').toLowerCase();
+  if (
+    requested === true ||
+    POINTER_LOCK_KINDS.has(kind) ||
+    Boolean(record && record.requestPointerLock)
+  ) {
+    return {
+      allow: false,
+      reason: 'pointer-lock-local',
+      message: 'Pointer lock is local by design and cannot be relayed remotely.',
+    };
+  }
+  const lockEl =
+    pointerLockElement !== undefined
+      ? pointerLockElement
+      : doc && doc.pointerLockElement;
+  if (Boolean(lockEl) || Boolean(record && record.pointerLock)) {
+    return {
+      allow: false,
+      reason: 'pointer-lock-active',
+      message: 'Remote input is refused while local pointer lock is active.',
+    };
+  }
+  return { allow: true, reason: 'ok' };
+}
+
 export class GrantBook {
   constructor({ now = () => Date.now() } = {}) {
     this.now = now;
@@ -45,21 +93,32 @@ export class GrantBook {
     return [...this.grants.values()].filter((grant) => grant.expiresAt > local);
   }
 
-  allows(peerId, { tabId = 'tab', origin = '', kind = 'click' } = {}) {
-    if (FREE_KINDS.has(kind)) return true;
+  decide(
+    peerId,
+    { tabId = 'tab', origin = '', kind = 'click', doc = null, pointerLockElement = undefined } = {}
+  ) {
+    const lock = pointerLockDecision({ doc, pointerLockElement, record: { kind } });
+    if (!lock.allow) return lock;
+    if (FREE_KINDS.has(kind)) return { allow: true, reason: 'free-kind' };
     // A browser-wide grant names every tab with '*'. An exact tab entry wins,
     // then the wildcard, so a per-tab grant keeps the meaning it had.
     const exactKey = this.key(peerId, tabId);
     const wildKey = this.key(peerId, '*');
     const exact = this.grants.get(exactKey);
     const grant = exact || this.grants.get(wildKey);
-    if (!grant) return false;
+    if (!grant) return { allow: false, reason: 'no-grant' };
     if (grant.expiresAt <= this.now()) {
       this.grants.delete(exact ? exactKey : wildKey);
-      return false;
+      return { allow: false, reason: 'expired' };
     }
-    if (grant.origin && origin && grant.origin !== origin) return false;
-    return true;
+    if (grant.origin && origin && grant.origin !== origin) {
+      return { allow: false, reason: 'origin-mismatch' };
+    }
+    return { allow: true, reason: 'ok' };
+  }
+
+  allows(peerId, options = {}) {
+    return this.decide(peerId, options).allow;
   }
 }
 
@@ -82,10 +141,15 @@ export function normalizeOrigin(url) {
   }
 }
 
-export function originAllowed(url, { blocked = BLOCKED_ORIGINS } = {}) {
+export function originDecision(url, { blocked = BLOCKED_ORIGINS } = {}) {
   const origin = normalizeOrigin(url);
-  if (!origin) return false;
-  return !blocked.includes(origin);
+  if (!origin) return { allow: false, reason: 'invalid-origin', origin: '' };
+  if (blocked.includes(origin)) return { allow: false, reason: 'blocked-origin', origin };
+  return { allow: true, reason: 'ok', origin };
+}
+
+export function originAllowed(url, { blocked = BLOCKED_ORIGINS } = {}) {
+  return originDecision(url, { blocked }).allow;
 }
 
 function attribute(element, name) {
@@ -107,6 +171,57 @@ export function isSensitiveField(element) {
   const names = `${attribute(element, 'name')} ${attribute(element, 'id')}`.toLowerCase();
   if (!names.trim()) return false;
   return /(pass|secret|token|card|cvv|cvc|ssn|iban)/.test(names);
+}
+
+// Guardrail #5: input capture policy returns allow plus a reason, never a bare
+// boolean. Local pointer lock, untrusted events and sensitive fields are named.
+export function inputCaptureDecision({
+  doc = null,
+  event = null,
+  record = null,
+  requested = false,
+  pointerLockElement = undefined,
+} = {}) {
+  const lock = pointerLockDecision({ doc, record, requested, pointerLockElement });
+  if (!lock.allow) return lock;
+  if (event && event.isTrusted === false) {
+    return { allow: false, reason: 'untrusted' };
+  }
+  if (event && event.target && isSensitiveField(event.target)) {
+    return { allow: false, reason: 'sensitive' };
+  }
+  return { allow: true, reason: 'ok' };
+}
+
+// Normalize a DOM WheelEvent into a wire record carrying finite deltas,
+// deltaMode, viewport coordinates, optional selector/canvas fraction, and
+// keyboard modifiers. Non-finite deltas are rejected instead of becoming NaN.
+export function wheelRecord(event, { path = '', canvas = null, point = null } = {}) {
+  if (!event || typeof event !== 'object') return null;
+  const deltaX = event.deltaX === undefined ? 0 : Number(event.deltaX);
+  const deltaY = event.deltaY === undefined ? 0 : Number(event.deltaY);
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return null;
+  const mode = Number(event.deltaMode);
+  const deltaMode = mode === 1 || mode === 2 ? mode : 0;
+  const resolvedPoint = isPoint(point)
+    ? { x: point.x, y: point.y }
+    : Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+      ? { x: event.clientX, y: event.clientY }
+      : null;
+  const record = {
+    kind: 'wheel',
+    ...(path ? { path: String(path) } : {}),
+    ...(resolvedPoint ? { point: resolvedPoint } : {}),
+    ...(canvas ? { canvas } : {}),
+    deltaX,
+    deltaY,
+    deltaMode,
+    ctrl: Boolean(event.ctrlKey || event.ctrl),
+    alt: Boolean(event.altKey || event.alt),
+    shift: Boolean(event.shiftKey || event.shift),
+    meta: Boolean(event.metaKey || event.meta),
+  };
+  return record;
 }
 
 // A stable path a peer can resolve on its own copy of the page.
@@ -155,30 +270,57 @@ export function canvasPoint(canvas, fraction = { x: 0.5, y: 0.5 }) {
 
 // Coalesces pointer moves to 30 Hz and keeps down, up and keys in order.
 export class InputBatcher {
-  constructor({ send = () => {}, now = () => Date.now(), maxQueue = MAX_QUEUE, peerId = 'me' } = {}) {
+  constructor({
+    send = () => {},
+    now = () => Date.now(),
+    maxQueue = MAX_QUEUE,
+    peerId = 'me',
+    doc = null,
+    onRefuse = () => {},
+  } = {}) {
     this.send = send;
     this.peerId = peerId;
     this.now = now;
     this.maxQueue = maxQueue;
+    this.doc = doc;
+    this.onRefuse = onRefuse;
     this.queue = [];
     this.pendingMove = null;
     this.seq = 0;
     this.movesDropped = 0;
     this.recordsDropped = 0;
+    this.refused = 0;
+    this.reasons = {};
     this.sent = 0;
   }
 
+  _checkPolicy(record) {
+    const decision = pointerLockDecision({ doc: this.doc, record });
+    if (!decision.allow) {
+      this.refused += 1;
+      this.reasons[decision.reason] = (this.reasons[decision.reason] || 0) + 1;
+      this.onRefuse(decision, record);
+    }
+    return decision;
+  }
+
   move(record) {
+    const decision = this._checkPolicy(record);
+    if (!decision.allow) return decision;
     if (this.pendingMove) this.movesDropped += 1;
     this.pendingMove = record;
+    return decision;
   }
 
   push(record) {
+    const decision = this._checkPolicy(record);
+    if (!decision.allow) return decision;
     this.queue.push(record);
     if (this.queue.length > this.maxQueue) {
       this.queue.splice(0, this.queue.length - this.maxQueue);
       this.recordsDropped += 1;
     }
+    return decision;
   }
 
   // A site can leave the mirror list between two events. The queued records
@@ -211,6 +353,8 @@ export class InputBatcher {
       queued: this.queue.length + (this.pendingMove ? 1 : 0),
       movesDropped: this.movesDropped,
       recordsDropped: this.recordsDropped,
+      refused: this.refused,
+      reasons: { ...this.reasons },
       seq: this.seq,
     };
   }
@@ -284,8 +428,32 @@ function setFieldValue(element, value) {
   );
 }
 
-// Replay one batch. Every record passes the grant, the target and the field
-// guards before anything reaches the page.
+function wheelPoint(target, record) {
+  if (isPoint(record.point)) return { x: record.point.x, y: record.point.y };
+  if (record.canvas && target && String(target.tagName || '').toLowerCase() === 'canvas') {
+    return canvasPoint(target, record.canvas);
+  }
+  if (target && typeof target.getBoundingClientRect === 'function') {
+    const rect = target.getBoundingClientRect();
+    if (
+      rect &&
+      Number.isFinite(rect.left) &&
+      Number.isFinite(rect.top) &&
+      Number.isFinite(rect.width) &&
+      Number.isFinite(rect.height)
+    ) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    return {
+      x: Number(rect && (rect.x ?? rect.left)) || 0,
+      y: Number(rect && (rect.y ?? rect.top)) || 0,
+    };
+  }
+  return { x: 0, y: 0 };
+}
+
+// Replay one batch. Every record passes the pointer-lock, grant, target and
+// field guards before anything reaches the page.
 export function replayInput(
   records,
   {
@@ -306,6 +474,11 @@ export function replayInput(
   };
 
   for (const record of records) {
+    const lock = pointerLockDecision({ doc: root, record });
+    if (!lock.allow) {
+      drop(lock.reason);
+      continue;
+    }
     if (!allowed(record)) {
       drop('grant');
       continue;
@@ -321,6 +494,7 @@ export function replayInput(
     }
 
     const target = record.path ? resolvePath(root, record.path) : null;
+    const mods = modifiersOf(record);
 
     if (record.kind === 'click' || record.kind === 'down' || record.kind === 'up') {
       if (!target) {
@@ -341,6 +515,7 @@ export function replayInput(
         clientX: point.x,
         clientY: point.y,
         button: record.button || 0,
+        ...mods,
       };
       const kind = record.kind === 'click' ? ['mousedown', 'mouseup', 'click'] : [record.kind];
       let canceled = false;
@@ -361,12 +536,18 @@ export function replayInput(
         drop('sensitive');
         continue;
       }
-      const node = target || root.activeElement;
+      const node = target || (root && root.activeElement);
       if (!node) {
         drop('target');
         continue;
       }
-      const options = { bubbles: true, cancelable: true, key: record.key, code: record.code || '' };
+      const options = {
+        bubbles: true,
+        cancelable: true,
+        key: record.key,
+        code: record.code || '',
+        ...mods,
+      };
       dispatch(root, node, new view.KeyboardEvent('keydown', options));
       dispatch(root, node, new view.KeyboardEvent('keyup', options));
       result.applied += 1;
@@ -388,18 +569,36 @@ export function replayInput(
     }
 
     if (record.kind === 'wheel') {
-      if (!target) {
+      const deltaX = record.deltaX === undefined ? 0 : Number(record.deltaX);
+      const deltaY = record.deltaY === undefined ? 0 : Number(record.deltaY);
+      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+        drop('delta');
+        continue;
+      }
+      const wheelTarget =
+        target ||
+        (!record.path && isPoint(record.point) && root && typeof root.elementFromPoint === 'function'
+          ? root.elementFromPoint(record.point.x, record.point.y)
+          : null);
+      if (!wheelTarget) {
         drop('target');
         continue;
       }
+      const point = wheelPoint(wheelTarget, record);
+      const mode = Number(record.deltaMode);
+      const deltaMode = mode === 1 || mode === 2 ? mode : 0;
       dispatch(
         root,
-        target,
+        wheelTarget,
         new view.WheelEvent('wheel', {
           bubbles: true,
           cancelable: true,
-          deltaX: record.deltaX || 0,
-          deltaY: record.deltaY || 0,
+          clientX: point.x,
+          clientY: point.y,
+          deltaX,
+          deltaY,
+          deltaMode,
+          ...mods,
         })
       );
       result.applied += 1;

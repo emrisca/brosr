@@ -297,14 +297,23 @@ async function startPageMedia() {
   };
 
   // The page that holds the player names the film when the source is a blob or
-  // a manifest. A Cinecat player frame names the title page that embedded it,
-  // because the frame URL alone names a provider and not the film. Any other
-  // frame keeps its own address, so an embedded player still works as before.
+  // a manifest. A cross-origin player frame asks the background for its parent
+  // tab URL (with a short deadline) so generic embeds like Miruro's strm.cx
+  // frame key on the watch page and episode rather than colliding across titles.
   const embedded = window.top !== window;
+  let topUrl = '';
+  if (embedded) {
+    const reply = await Promise.race([
+      send({ type: 'brosr:tab-url' }),
+      new Promise((resolve) => setTimeout(() => resolve(null), 300)),
+    ]);
+    if (reply && reply.ok && typeof reply.url === 'string') topUrl = reply.url;
+  }
   const pageHref = () =>
     framePageHref({
       href: location.href,
       referrer: document.referrer,
+      topUrl,
       embedded,
     });
 
@@ -452,6 +461,13 @@ async function startPageMedia() {
     if (!message) return undefined;
     if (message.type === 'brosr:presence-draw') {
       placeCursor(message.position);
+      return undefined;
+    }
+    if (embedded && message.type === 'brosr:tab-url' && typeof message.url === 'string') {
+      if (message.url !== topUrl) {
+        topUrl = message.url;
+        queueMicrotask(() => reportMedia(false));
+      }
       return undefined;
     }
     if (message.type === 'brosr:cursor-image') {

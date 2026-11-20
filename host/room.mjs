@@ -534,8 +534,63 @@ async function launch(browser, args, dirs) {
   return { pid: held.pid, holderPid: held.holderPid, ids: held.ids, errors: held.errors };
 }
 
+// A packaged bundle places the Rust relay next to host/ under ../relay/.
+export function stagedRelayBinary(root = ROOT, platform = process.platform) {
+  const name = platform === 'win32' ? 'brosr-relay.exe' : 'brosr-relay';
+  const candidate = path.join(root, 'relay', name);
+  try {
+    return fs.statSync(candidate).isFile() ? candidate : '';
+  } catch {
+    return '';
+  }
+}
+
 // One room at a time. A second start stops the first, because two relays on one
 // port and two windows on one profile would fight.
+// Build the command and environment for the room relay. Priority order:
+// 1. Explicit RELAY_BIN override
+// 2. Auto-discovered staged ../relay/brosr-relay(.exe) beside host/
+// 3. Node relay (spike/relay.js) portable fallback
+export function relayLaunch({
+  host,
+  port,
+  docsDir,
+  docsToken,
+  relayBin = process.env.RELAY_BIN || '',
+  root = ROOT,
+  platform = process.platform,
+}) {
+  const baseEnv = {
+    PORT: String(port),
+    HOST: host,
+    BROSR_DOCS_DIR: docsDir,
+    BROSR_DOCS_TOKEN: docsToken,
+  };
+  const explicit = String(relayBin || '').trim();
+  const staged = explicit ? '' : stagedRelayBinary(root, platform);
+  const binary = explicit || staged;
+  if (binary) {
+    return {
+      command: binary,
+      args: [],
+      source: explicit ? 'env' : 'staged',
+      env: {
+        ...baseEnv,
+        LANDING: path.join(root, 'landing'),
+        FIXTURES: path.join(root, 'spike', 'fixtures'),
+        ASSETS: path.join(root, 'assets'),
+        MEDIA: path.join(root, 'spike', '.runtime'),
+      },
+    };
+  }
+  return {
+    command: process.execPath,
+    args: [root === ROOT ? RELAY : path.join(root, 'spike', 'relay.js')],
+    source: 'node',
+    env: baseEnv,
+  };
+}
+
 export async function start(options = {}) {
   const previous = readRun();
   if (previous) stop();
@@ -568,15 +623,10 @@ export async function start(options = {}) {
 
   // The relay does not read the profile, so it boots while the profile is
   // written. A cold first run then costs the larger of the two legs, not both.
-  const relay = spawn(process.execPath, [RELAY], {
+  const relaySpec = relayLaunch({ host, port, docsDir, docsToken });
+  const relay = spawn(relaySpec.command, relaySpec.args, {
     cwd: ROOT,
-    env: {
-      ...process.env,
-      PORT: String(port),
-      HOST: host,
-      BROSR_DOCS_DIR: docsDir,
-      BROSR_DOCS_TOKEN: docsToken,
-    },
+    env: { ...process.env, ...relaySpec.env },
     detached: true,
     stdio: 'ignore',
     windowsHide: true,

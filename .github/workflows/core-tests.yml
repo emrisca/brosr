@@ -16,5 +16,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.x
-      - name: Run the core and host suites
-        run: node --test core/test/*.test.mjs host/test/*.test.mjs
+      - name: Run the core, host and relay suites
+        run: node --test core/test/*.test.mjs host/test/*.test.mjs spike/relay.test.mjs

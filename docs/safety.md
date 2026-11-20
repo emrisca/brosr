@@ -28,3 +28,9 @@ room treats input as a privilege, not a default.
 6. **Rate limits.** The sync core drops more than 120 input batches per second per peer, and
    more than one navigation per second per room. A hostile peer must not be able to make the
    app unusable.
+7. **Pointer lock is local by design.** Pointer lock captures raw mouse motion for a single
+   user's window and cannot safely be shared or triggered remotely. Capture, batching, grant
+   checks, replay, and trusted actuator helpers all refuse pointer-lock requests
+   (`pointer-lock-local`) and refuse remote input while local pointer lock is active
+   (`pointer-lock-active`), returning `{ allow: false, reason, message }` rather than silently
+   dropping or relaying events.

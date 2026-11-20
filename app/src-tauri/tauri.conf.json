@@ -41,7 +41,8 @@
       "resources/spike",
       "resources/landing",
       "resources/bridge",
-      "resources/assets"
+      "resources/assets",
+      "resources/relay"
     ],
     "icon": [
       "icons/32x32.png",

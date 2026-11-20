@@ -4,7 +4,7 @@
 
 import { decode, encode } from './protocol.mjs';
 import { ClockEstimator } from './clock.mjs';
-import { DriftController } from './drift.mjs';
+import { DriftController, decideDrift } from './drift.mjs';
 import { MediaAdapter, bufferedAround } from './media.mjs';
 import { CursorOverlay, actionText, mediaAction } from './overlay.mjs';
 import {
@@ -1329,9 +1329,11 @@ export function createRoomClient({
     // but a tick never counts as a seek.
     const hostAnchor = isHost() && read && explicit !== 'seek';
     const base = hostAnchor ? read.position : localPosition(message.position, alignOffset);
+    const frameRate = Number(message.rate);
+    const rate = Number.isFinite(frameRate) && frameRate > 0 ? frameRate : 1;
     const rawExpected =
       base +
-      (message.playing ? (roomTimeOf(local) - message.roomTime) / 1000 : 0);
+      (message.playing ? ((roomTimeOf(local) - message.roomTime) / 1000) * rate : 0);
     // A seek past the end is clamped by every player. Name the point that will
     // actually land, not the request, or the report looks like a jump to a
     // position neither copy ever held.
@@ -1440,12 +1442,13 @@ export function createRoomClient({
 
     // The adapter owns the flags. A starved element and a site ad reach the
     // policy through one call, so neither site can forget one of them.
-    const step = drift.tick(driftMs, media.flags(picked));
-
-    if (step.action === 'seek') {
+    const flags = media.flags(picked);
+    // Check the buffered range before committing a seek into DriftController;
+    // otherwise a buffer wait consumes the seek cooldown and double-counts seeks.
+    const preview = decideDrift(driftMs, flags);
+    if (preview.action === 'seek' && !drift.coolingDown()) {
       const max = Number.isFinite(read.duration) && read.duration > 0 ? read.duration : expected;
       const target = Math.max(0, Math.min(expected, max));
-      // A site player fetches on seek, so only an element needs the range check.
       const buffered = media.bufferedAround
         ? media.bufferedAround(picked, target)
         : bufferedAround(picked, target);
@@ -1456,6 +1459,12 @@ export function createRoomClient({
           return { ok: true, pending: 'buffer' };
         }
       }
+    }
+    const step = drift.tick(driftMs, flags);
+
+    if (step.action === 'seek') {
+      const max = Number.isFinite(read.duration) && read.duration > 0 ? read.duration : expected;
+      const target = Math.max(0, Math.min(expected, max));
       waitingSince = null;
       media.apply(picked, { action: 'seek', position: target });
       lastSeekAt = local;
@@ -1465,11 +1474,13 @@ export function createRoomClient({
       // A seek can leave the player paused. The room is playing, so play.
       if (message.playing && !read.playing) media.apply(picked, { action: 'play' });
     } else if (step.action === 'pause') {
+      waitingSince = null;
       // The adapter knows whether a buffering player needs a pause, so the
       // decision passes through rather than being second-guessed here.
       media.apply(picked, { action: 'pause' });
       if (read.rate !== 1) media.apply(picked, { action: 'tick', rate: 1 });
     } else {
+      waitingSince = null;
       if (message.playing && !read.playing) media.apply(picked, { action: 'play' });
       if (read.rate !== drift.rate) media.apply(picked, { action: 'tick', rate: drift.rate });
     }

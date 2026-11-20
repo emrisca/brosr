@@ -521,6 +521,11 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
 
 api.tabs.onUpdated.addListener((id, info, tab) => {
   if (!info.url && info.status !== 'complete') return;
+  if (info.url) {
+    // An embedded player frame cannot see SPA URL changes in its parent tab
+    // (for example switching episodes on Miruro), so push the new tab URL down.
+    api.tabs.sendMessage(id, { type: 'brosr:tab-url', url: info.url }).catch(() => {});
+  }
   considerTab(tab || { id, url: info.url }).catch(() => {});
 });
 
@@ -1003,6 +1008,12 @@ async function handle(message, sender) {
     if (summon !== null) api.tabs.remove(summon).catch(() => {});
     return reply;
   }
+  // A cross-origin player frame asks for its parent tab URL so generic embeds
+  // (like strm.cx/?embed=1 under Miruro) key on the watch page and episode.
+  if (message.type === 'brosr:tab-url') {
+    const url = sender && sender.tab && typeof sender.tab.url === 'string' ? sender.tab.url : '';
+    return { ok: Boolean(url), url };
+  }
   // A tab with a player says which film it shows. The room tab owns the
   // socket, so the state goes there from every other tab.
   if (message.type === 'brosr:media-hello') {
@@ -1239,12 +1250,22 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // The toolbar declares a popup, so the browser owns that click and this script
 // never sees it. The chord runs inside a user action, which is the one place a
-// popup can be opened from a script.
-api.commands.onCommand.addListener(async (command) => {
-  if (command !== 'open-room-panel') return;
-  // The room tab records the command, so a headless run can prove the key
-  // chord reached the bridge even when the sidebar opens without a new tab.
-  const id = await roomTab();
-  if (validId(id)) api.tabs.sendMessage(id, { type: 'brosr:command', command }).catch(() => {});
-  await openPanel();
-});
+// popup can be opened from a script. openPopup must be invoked synchronously
+// before any await; awaiting roomTab() first yields to the event loop and drops
+// the user gesture in both Gecko MV2 and Chromium MV3.
+if (api.commands && api.commands.onCommand) {
+  api.commands.onCommand.addListener((command) => {
+    if (command !== 'open-room-panel') return;
+    const opened = openPanel();
+    // The room tab records the command, so a headless run can prove the key
+    // chord reached the bridge even when the popup opens without a new tab.
+    const notified = roomTab()
+      .then((id) => {
+        if (validId(id)) {
+          return api.tabs.sendMessage(id, { type: 'brosr:command', command }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+    return Promise.all([opened, notified]);
+  });
+}

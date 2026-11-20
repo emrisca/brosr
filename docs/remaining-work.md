@@ -1,4 +1,4 @@
-# What is left, 18 November 2026
+# What is left, 20 November 2026
 
 This is the working list beside [the design](design.md). The plan holds the design and the
 per-milestone done-when. This file holds what is still open, what was measured, and what to do
@@ -6,24 +6,60 @@ next. It is not a replacement for the plan and it is not a status claim about sh
 
 ## Where things stand today
 
-- Release `v0.3.28` is the latest, cut on 18 November from `3416dd7`. The workflow run
-  `44411237677` built all three platforms and `latest.json` is signed for `darwin-aarch64`,
-  `darwin-x86_64` and `windows-x86_64`. The earlier cuts that matter here are `v0.3.13` and
-  `v0.3.17` (commit `1676127`).
+- Release `v0.3.48` is the next release tag (after `v0.3.47` at `e1185f0`), matching
+  `app/package.json`, `app/src-tauri/tauri.conf.json`, and `app/src-tauri/Cargo.toml`. The
+  bridge manifest (`bridge/manifest.json`) is at `0.4.11`. Earlier milestone releases include
+  `v0.3.13`, `v0.3.17` (`1676127`), and `v0.3.28` (`3416dd7`, workflow run `44411237677`
+  signing `latest.json` for `darwin-aarch64`, `darwin-x86_64`, and `windows-x86_64`).
 - The version stamp is in a built release. It reads `getVersion()` and draws bottom right, so a
-  window names the build it runs. The install on this Mac runs `0.3.28`.
+  window names the build it runs.
 - Notes carries co-typing. Two people can type in one note and neither save takes the other
   hand's words away.
 - The Zen room starts without Marionette unless `--dock` asks for the dock. Google accepts the
   sign-in in the room window, so the panel and the sign-in no longer exclude each other.
 - The landing page links Notes and Play (chess) beside Canvas, and the Watch tile carries a live
-  FMHY directory with a filter instead of the word `Soon`.
+  FMHY directory with a filter instead of the word `Soon`. Live tabs are offered instead of
+  forced, with own-row listing, playback state, and stop/resume controls.
 - The room apps hold their layout in a narrow window and in a light room. The chess board keeps
   its rank heights, a dragged piece lands where it is dropped, and the waiting list keeps the
   guest who has waited longest.
-- The relay's file server knows html, js, json, png, webm and the icon types, so a room app opens
-  as a page rather than as a download.
-- The core suite reads 296 tests, all passing, with `node --test core/test/*.test.mjs`.
+- The Rust axum relay (`relay/src/main.rs`) now has full parity with `spike/relay.js`:
+  per-room WebSocket fan-out with empty-room eviction, `/health`, `/stats`, `/status` (excluding
+  `panel` and `cursor` sockets from peer/people counts), HTTP `Range` (`206`/`416`) media
+  streaming under `/media/*`, landing and room apps (`/`, `/canvas`, `/notes`, `/chess`,
+  `/docs-client.js`), and token/loopback-guarded `/docs` CRUD. `host/room.mjs` auto-discovers
+  a staged `../relay/brosr-relay(.exe)` (with `RELAY_BIN` override and `spike/relay.js`
+  fallback), `app/scripts/stage-host.mjs` stages `host/trust.mjs`, `host/chrome-cdp.mjs`, and
+  `brosr-relay` into `resources/relay/` (listed in `app/src-tauri/tauri.conf.json`),
+  `.github/workflows/release.yml` compiles `brosr-relay` for every matrix target before
+  bundling, and `scripts/check-all.mjs` runs `spike/relay.test.mjs` and `core/test/wire.test.mjs`
+  against the compiled binary.
+- Generic cross-origin iframe episode handoff (`brosr:tab-url` in `bridge/background.js` plus
+  canonical episode query params in `pageKey`), HLS/DASH/blob quality-switch key persistence,
+  and deliberate 600 ms frame-delay recovery are verified at the unit and bridge boundary
+  (`core/test/iframe-handoff.test.mjs`).
+- Mid-playback rejoin against a non-restoring player at `0 s`, SPA key-swap re-seeding,
+  buffer-wait cooldown preservation, playback-rate extrapolation, rate-nudge hysteresis,
+  deterministic 10-minute three-peer cross-clock sync, and synchronous `open-room-panel`
+  (`Ctrl+Alt+B`) popup handling across MV2 and MV3 are verified at the unit and bridge boundary
+  (`core/test/media-rejoin-three-peer.test.mjs`).
+- Wheel event capture/replay (`wheelRecord`), structured pointer-lock refusal policy
+  (`pointerLockDecision`, `inputCaptureDecision`, `GrantBook.decide`, `originDecision` under
+  Guardrail #5), and BiDi/CDP action and special-key parity are verified across
+  `core/test/input-trust-parity.test.mjs`, `host/test/chrome-cdp.test.mjs`, and
+  `host/test/trust.test.mjs`, with the local-by-design pointer-lock refusal recorded in
+  [safety.md](safety.md).
+- Privacy documentation is written in [privacy.md](privacy.md), verified against
+  `core/seal.mjs`, `core/browser-entry.mjs`, `relay/src/main.rs`, `host/trust.mjs`, and
+  `bridge/background.js`.
+- Verified automated suites on 20 November 2026:
+  - Combined JS unit and boundary suites (`core/test/*.test.mjs`, `host/test/*.test.mjs`,
+    `spike/*.test.mjs`, `labs/align/test/*.test.mjs`, `handoff.test.mjs`): 555 passing, 0
+    failing (2 skipped Bend 1 align tests).
+  - Rust relay parity suite (`RELAY_BIN=relay/target/debug/brosr-relay node --test
+    spike/relay.test.mjs core/test/wire.test.mjs`): 13 passing, 0 failing.
+  - Rust relay unit/HTTP tests (`cargo test --manifest-path relay/Cargo.toml`): 4 passing.
+  - Canvas proofs (`bend landing/canvas/PROOF.bend`): `ALL PROOFS CHECK`.
 
 ### What shipped since 16 November
 
@@ -37,6 +73,12 @@ next. It is not a replacement for the plan and it is not a status claim about sh
 | 18 November | Canvas keeps its room name | `landing/canvas/canvas.js` |
 | 18 November | Zen room keeps Google sign in | `zen/live.mjs`, `zen/profile.mjs`, `d7323af` |
 | 18 November | Release `0.3.28` | `35a6531` |
+| 19–20 November | Live-tab offers, own-row listing, stop/resume, Chrome worker replay persistence, rate/nudge cleanup (`v0.3.40`–`v0.3.43`) | `bridge/background.js`, `core/media-relay.mjs`, `core/live-tabs.mjs` |
+| 20 November | Per-person cursor colours, `cursors-4u.com` cursor sets, signed bridge `0.4.10` (`v0.3.44`–`v0.3.46`) | `bridge/panel/room.js`, `dc9b4ae`, `591ccf4`, `e969ff6` |
+| 20 November | Pointer socket excluded from `/status` counts, stalled BiDi session retirement, release `v0.3.47` | `ae56e90`, `e1185f0` |
+| 20 November | Rust axum relay parity (`/status`, HTTP `Range`, landing apps, `/docs`, empty-room eviction), desktop staging (`host/trust.mjs`, `host/chrome-cdp.mjs`, `resources/relay/brosr-relay`), and release workflow build | `relay/src/main.rs`, `host/room.mjs`, `app/scripts/stage-host.mjs`, `app/src-tauri/tauri.conf.json`, `.github/workflows/release.yml`, `spike/relay.test.mjs`, `host/test/stage-host.test.mjs` |
+| 20 November | Generic cross-origin iframe episode handoff (`brosr:tab-url`), HLS/DASH quality-switch, mid-playback rejoin, 3-peer cross-clock sync, and MV2/MV3 `open-room-panel` gesture handling | `bridge/background.js`, `core/media-relay.mjs`, `core/sync.mjs`, `core/test/iframe-handoff.test.mjs`, `core/test/media-rejoin-three-peer.test.mjs` |
+| 20 November | Wheel event relay, local pointer-lock refusal policy (Guardrail #5), BiDi/CDP action & key parity, host-takeover UI offer tests, and privacy page | `core/input.mjs`, `core/trust.mjs`, `host/trust.mjs`, `host/chrome-cdp.mjs`, `core/test/input-trust-parity.test.mjs`, `core/test/host-takeover.test.mjs`, `docs/privacy.md`, `docs/safety.md` |
 
 ## The media drift, fixed on 18 November
 
@@ -69,8 +111,8 @@ report with no `at` is taken as current, so a tab from an older build behaves as
 frame keeps the anchor instant it arrived with instead of stamping a fresh one at the handoff.
 A later sample with an equal round trip replaces the best one.
 
-Five tests were added at those boundaries, and the suite now reads 296 passing. The rows are in
-[regressions](regressions.md).
+Five tests were added at those boundaries on 18 November (the combined suite has since grown to
+555 passing). The rows are in [regressions](regressions.md).
 
 ### The loopback re-measure
 
@@ -114,11 +156,15 @@ Mac guest `guest-2e76`, 141 samples over 4 min 54 s.
 The host never seeked, stalled or applied a guest action, so all 17 corrections were the guest
 correcting itself.
 
-The window was not re-run on 18 November. The Windows machine and Cinecat were not available, so
-the one second gap is diagnosed and not closed. The fix is proved at the unit boundary and on the
-loopback lane only, and both of those share one clock.
+The cross-machine window has not been re-run yet. The Windows machine and Cinecat have not been
+paired for a fresh run since the fix, so the one second gap is proved at the unit boundary and
+on the loopback lane only, and both of those share one clock.
 
 ## Open in the plan
+
+Items marked `[x]` below note whether proof is at the unit/bridge boundary or from a live run.
+Items that require a second machine, live third-party sites, or manual human testing remain open
+and are tagged explicitly.
 
 ### Media
 
@@ -127,77 +173,122 @@ loopback lane only, and both of those share one clock.
       passes one second.
 - [x] The clock offset stays out of the expected position, and the frame names the instant its
       position was read. Proved at the unit boundary on 18 November.
-- [ ] The same cross-machine window again with the fix in. This is part of the LAN hour.
-- [ ] Rejoin seek. The first applied frame seeks when the gap is over 0.25 s. Never run against
-      a host mark Cinecat does not restore by itself.
-- [ ] Three-peer run, and a 40 minute film. M2 done-when asks for 250 ms p95 and at most one
-      seek per ten minutes.
-- [ ] One deliberate 600 ms delay, to prove it causes one seek rather than a loop.
-- [ ] Cinecat cross-machine again, with the fix and a fresh room.
-- [x] Movy playback. On 18 November the title page `/movie/1561726` named the film and rendered
-      one top-page `<video>` with a blob source and no iframe. Two headless Zen browsers on one
-      Mac, joined through a loopback relay, held pause within 0.058 s, seek at 0 s and playback
-      at 0.02 s p95 with 92 applies. The key was the page URL. No cross-machine window yet.
-- [ ] Cinejoy playback. The link is recorded, nothing was probed past it.
-- [ ] Miruro. The embed URL is the same for every episode, so it needs a title and episode
-      handoff before it can join the list.
-- [ ] At least one site whose player sits inside an iframe, held in the test matrix.
-- [ ] An HLS or DASH page through a quality switch, to show the page key survives it.
-- [ ] A p-stream fork, if one is still reachable.
-- [ ] M2b done-when: three sites within 1 s on two browsers, one of them an iframe, at most one
-      seek per ten minutes and no seek loop.
-- [ ] M2c shared login. The host copies one site's login into the guest profile over the local
-      debug port. It needs a signed-in page on the guest and a relay capture that shows no
-      cookie value.
+- [x] Movy playback (loopback). On 18 November the title page `/movie/1561726` named the film
+      and rendered one top-page `<video>` with a blob source and no iframe. Two headless Zen
+      browsers on one Mac, joined through a loopback relay, held pause within 0.058 s, seek at
+      0 s and playback at 0.02 s p95 with 92 applies. The key was the page URL. No
+      cross-machine window yet.
+- [x] Miruro / generic cross-origin iframe episode handoff (unit and bridge boundary).
+      `bridge/background.js` answers `brosr:tab-url` with `sender.tab.url` and pushes URL
+      updates on SPA navigation, `framePageHref` prefers it for generic embeds while keeping
+      YouTube embeds intact, and `pageKey` keeps canonical episode query params
+      (`core/test/iframe-handoff.test.mjs`). Live two-browser Miruro playback remains open.
+- [x] HLS/DASH/blob quality-switch sync (unit boundary). Switching mid-playback across `.m3u8`,
+      `.mpd`, and `blob:` keeps the same `pageKey` with no spurious seek
+      (`core/test/iframe-handoff.test.mjs`). Live-site confirmation remains open.
+- [x] Deliberate 600 ms frame delay and deterministic 10-minute three-peer cross-clock sync
+      (unit boundary). Settled within 250 ms p95 and at most one seek per ten minutes with zero
+      seek loops (`core/test/iframe-handoff.test.mjs`,
+      `core/test/media-rejoin-three-peer.test.mjs`). Live cross-machine confirmation remains
+      part of the LAN hour.
+- [x] Rejoin seek against a non-restoring player starting at 0 s (unit boundary). Preserves
+      initial seed seek across buffer waits and SPA key swaps without looping
+      (`core/test/media-rejoin-three-peer.test.mjs`). Live third-party site verification
+      remains open.
+- [ ] **(Hardware / two-machine)** The same cross-machine window again with the clock fix in.
+      This is part of the LAN hour.
+- [ ] **(Live site)** Live rejoin seek against a host mark Cinecat does not restore by itself.
+- [ ] **(Hardware / multi-peer)** Live three-peer run over a 40 minute film on real browsers.
+- [ ] **(Hardware / live site)** Cinecat cross-machine again, with the fix and a fresh room.
+- [ ] **(Live site)** Cinejoy playback. The link is recorded, nothing was probed past it.
+- [ ] **(Live site)** Live Miruro two-browser playback and live HLS/DASH quality switch on a
+      real streaming page.
+- [ ] **(Live site)** At least one live site whose player sits inside an iframe, held in the
+      cross-browser test matrix.
+- [ ] **(Live site)** A p-stream fork, if one is still reachable.
+- [ ] **(Hardware / live sites)** M2b done-when: three live sites within 1 s on two browsers,
+      one of them an iframe, at most one seek per ten minutes and no seek loop.
+- [ ] **(Hardware / live)** M2c shared login. The host copies one site's login into the guest
+      profile over the local debug port. It needs a signed-in page on the guest and a relay
+      capture that shows no cookie value.
 
 ### Room, relay and reconnect
 
-- [ ] M1 done-when: four peers on one LAN under 80 ms p95 for an hour. A 45 s four-peer
-      rehearsal ran on one machine on 18 November at 1 to 2 ms p95, with four relay sockets and
-      zero reconnects. That checks the runner, the relay table and the peer journal. It is not an
-      hour and not a LAN, so the hour still needs the Windows box. The plan below is that run.
-- [ ] Host migration after the host closes its lid, on a live room rather than in the suite.
-- [ ] A live Zen run with the seal on, after a relay restart, with every peer back on the same
-      scroll.
-- [ ] The axum relay serves no range requests. A seeking clip still needs the Node relay.
-- [ ] Site toggle with a 15 s dwell. The 21:57 window is invalid because the guest browser
-      restarted inside it.
-- [ ] The 96 px cursor gate. Changed but never measured on a live animation.
-- [ ] A cursor on a Cinecat page. The site in a presence frame is the tab under the pointer, so
-      a count on the room tab says nothing about the film tab.
-- [ ] The fourth peer entry. The Mac peers counted four once Windows joined and the host
-      counted three. `peer.mjs` now journals `peerIds`, and the LAN hour should name the entry.
+- [x] Rust axum relay parity (`relay/src/main.rs`) and desktop bundle packaging. Now serves
+      HTTP `Range` (`206`/`416`) under `/media/*`, matches `spike/relay.js` across `/status`,
+      landing and room apps, token/loopback-guarded `/docs`, and empty-room eviction, and is
+      staged under `resources/relay/` by `app/scripts/stage-host.mjs` and
+      `.github/workflows/release.yml` with `host/room.mjs` auto-discovery. Verified by
+      `cargo test --manifest-path relay/Cargo.toml`, `host/test/stage-host.test.mjs`, and
+      `RELAY_BIN=... node --test core/test/wire.test.mjs spike/relay.test.mjs`.
+- [ ] **(Hardware / two-machine)** M1 done-when: four peers on one LAN under 80 ms p95 for an
+      hour. A 45 s four-peer rehearsal ran on one machine on 18 November at 1 to 2 ms p95, with
+      four relay sockets and zero reconnects. That checks the runner, the relay table and the
+      peer journal. It is not an hour and not a LAN, so the hour still needs the Windows box.
+      The plan below is that run.
+- [ ] **(Hardware / live)** Host migration / takeover after the host closes its lid, on a live
+      room rather than in the suite. (The landing-page takeover offer when `hosts === 0` is
+      covered at the unit boundary in `core/test/host-takeover.test.mjs`.)
+- [ ] **(Live)** A live Zen run with the seal on, after a relay restart, with every peer back on
+      the same scroll.
+- [ ] **(Live)** Site toggle with a 15 s dwell. The 21:57 window is invalid because the guest
+      browser restarted inside it.
+- [ ] **(Live)** The 96 px cursor gate. Changed but never measured on a live animation.
+- [ ] **(Live site)** A cursor on a Cinecat page. The site in a presence frame is the tab under
+      the pointer, so a count on the room tab says nothing about the film tab.
+- [ ] **(Hardware / two-machine)** The fourth peer entry. Pointer sockets are now excluded from
+      `/status` counts (`ae56e90`) and `peer.mjs` journals `peerIds`; the LAN hour should
+      confirm four entries with no extra entry across Windows and Mac.
 
 ### Input and grants
 
-- [ ] A two-machine canvas game, ten minutes, no visible desync. Both presses so far were on
-      one machine.
-- [ ] Wheel events through the relay.
-- [ ] Pointer lock, which is local by design and needs the refusal written down.
-- [ ] The grant UI in the panel end to end: grant a peer, relay a click, revoke, and show the
-      bar in both places.
+- [x] Wheel events through synthetic replay, BiDi, and CDP (unit and actuator boundary).
+      `wheelRecord` and `replayInput` handle deltas, `deltaMode`, coordinates, and modifiers;
+      `core/trust.mjs` and `host/chrome-cdp.mjs` translate wheel actions and special keys with
+      parity (`core/test/input-trust-parity.test.mjs`, `host/test/chrome-cdp.test.mjs`,
+      `host/test/trust.test.mjs`). Live two-browser confirmation remains open.
+- [x] Pointer lock refusal written down and enforced under Guardrail #5. Documented in
+      [safety.md](safety.md) and enforced with structured `{ allow: false, reason, message }`
+      decisions across capture, batching, grant checks, replay, and trusted helpers
+      (`core/test/input-trust-parity.test.mjs`).
+- [ ] **(Hardware / two-machine)** A two-machine canvas game, ten minutes, no visible desync.
+      Both presses so far were on one machine.
+- [ ] **(Live)** Wheel events through the relay on a live room.
+- [ ] **(Live)** The grant UI in the panel end to end: grant a peer, relay a click, revoke, and
+      show the bar in both places.
 
 ### App, install and onboarding
 
-- [x] The version stamp in a built release. `0.3.17` proved it and `0.3.28` carries it.
-- [ ] First run from a clean install with no checkout. The dmg path is the closest thing tested.
-- [ ] Onboarding under three minutes for a person who has not seen the app.
-- [ ] Sidebar survives ten tab switches.
-- [ ] `Ctrl+Alt+B` is declared in the manifest and no run has proved the chord.
-- [ ] A room per Zen space. Zen stores spaces in its session store, so this is still open.
-- [ ] A signed bridge on release Firefox. The Mac guest still uses a working-tree XPI because
-      Zen will not swap an unsigned build unless the version rises.
-- [ ] Hosted relay across two networks. Every test so far is loopback, LAN or tailnet.
-- [ ] A privacy page that states what the relay sees.
-- [ ] A first-run flow that survives a browser major update.
+- [x] The version stamp in a built release. `0.3.17` proved it and `0.3.47` carries it.
+- [x] A privacy page that states what the relay sees. Added in [privacy.md](privacy.md) and
+      linked from [docs/README.md](README.md) and `README.md`.
+- [x] `open-room-panel` (`Ctrl+Alt+B` / `MacCtrl+Alt+B` in MV2, `Ctrl+Shift+B` /
+      `Command+Shift+B` in MV3) synchronous user-gesture popup invocation verified at the bridge
+      boundary (`core/test/media-rejoin-three-peer.test.mjs`). Live browser chord confirmation
+      remains open.
+- [ ] **(Hardware / clean machine)** First run from a clean install with no checkout. The dmg
+      path is the closest thing tested.
+- [ ] **(User test)** Onboarding under three minutes for a person who has not seen the app.
+- [ ] **(Live)** Sidebar/panel survives ten tab switches.
+- [ ] **(Live)** `Ctrl+Alt+B` (`MacCtrl+Alt+B` on macOS) live browser chord test.
+- [ ] **(Live)** A room per Zen space. Zen stores spaces in its session store, so this is still
+      open.
+- [ ] **(Release / AMO)** A signed bridge on release Firefox. The Mac guest still needs a live
+      verification against the signed AMO build (`0.4.10` was signed in `e969ff6`; manifest is
+      now `0.4.11`).
+- [ ] **(Network)** Hosted relay across two networks. Every test so far is loopback, LAN or
+      tailnet.
+- [ ] **(Platform build)** Linux build and `.AppImage`. The release workflow currently builds
+      macOS and Windows only.
+- [ ] **(Live)** A first-run flow that survives a browser major update.
 
 ### Later
 
+- [x] Rename the room, per-person colours, custom cursors from `cursors-4u.com`, and own-cursor
+      toggle (`bridge/panel/room.html`, `bridge/panel/room.js`, `dc9b4ae`, `591ccf4`).
 - [ ] M8 Chromium variant. The plan commits to neither M8 job.
-- [ ] Voice over WebRTC.
+- [ ] M8 Voice over WebRTC.
 - [ ] Screen share viewer, as a separate tab and never the page-sync path.
-- [ ] Rename the room, per-person colours, custom cursors from `cursors-4u.com`, own-cursor
-      toggle.
 
 ## The four-peer LAN hour, step by step
 
@@ -370,8 +461,8 @@ use to reproduce it.
    moved the cross-machine gap. The plan above is written to finish in one sitting.
 2. **Fold the media annexe into the same hour.** The clip is already on the Mac and the relay
    already serves it, so the media reading costs five minutes instead of a second session.
-3. **Add Movy next in the site matrix.** Two sites, one of them a plain `<video>`, is the
-   shortest path to the M2b done-when.
+3. **Add Movy and Miruro next in the live site matrix.** Movy (plain `<video>`) plus a live
+   iframe embed (Miruro or Cinecat) is the shortest path to the M2b done-when.
 4. **Take one measurement per claim.** The plan's numbers section asks for p95 drift, seeks per
    ten minutes and relay bytes. A run that reports "it felt fine" closes nothing.
 5. **Rejoin seek against a site that restores its own mark.** Cinecat does not, and a check
@@ -382,9 +473,17 @@ use to reproduce it.
 - `core/sync.mjs`: the expected position, `sendHostMedia`, and the frame handoff.
 - `core/clock.mjs`: which sample wins.
 - `core/browser-entry.mjs`: what a film report carries and what the room passes on.
-- `core/media-relay.mjs`: `RemoteMediaSync`, the first-frame seed and the sign-off comparison.
-- `bridge/content.js` and `bridge/background.js`: the frame handoff and the room channel.
+- `core/media-relay.mjs`: `RemoteMediaSync`, `framePageHref`, `pageKey`, the first-frame seed
+  and the sign-off comparison.
+- `core/input.mjs` and `core/trust.mjs`: wheel capture/replay, local pointer-lock refusal
+  policy, and BiDi action translation.
+- `host/trust.mjs` and `host/chrome-cdp.mjs`: trusted actuator loopback agent and CDP parity.
+- `bridge/content.js` and `bridge/background.js`: the frame handoff, `brosr:tab-url`, and the
+  room channel.
 - `bridge/panel/room.js`: the panel line that shows the drift.
+- `relay/src/main.rs`: the Rust axum relay parity implementation.
+- `app/scripts/stage-host.mjs` and `app/src-tauri/tauri.conf.json`: desktop staging for the
+  host, trust runtime, and Rust relay binary.
 - `scripts/check-media-loopback.mjs`: the one-machine lane.
 - `spike/peer.mjs`, `spike/relay.js` and `spike/README.md`: the LAN hour.
 - `.runtime/`: journals and profiles. Not committed.

@@ -424,6 +424,10 @@ function handleDocs(req, res, url) {
     return;
   }
   if (req.method === 'DELETE' && id) {
+    if (!DOC_ID.test(id)) {
+      docsAnswer(res, 400, { ok: false, error: 'bad id' });
+      return;
+    }
     try {
       fs.unlinkSync(docFile(id));
     } catch {

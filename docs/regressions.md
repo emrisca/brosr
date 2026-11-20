@@ -67,6 +67,7 @@ crosses that boundary does not count.
 | The canvas asks for your name again after you join a room | The canvas read its label from the browser's storage alone and ignored the name in the room URL, so a joiner who already had a name opened blank | `scripts/check-canvas-stroke.mjs` |
 | An empty note is a narrow strip in the middle of the pane | The sheet asked for auto width with auto margins inside a grid cell, so a note with no text shrank to the width of its placeholder instead of the width of the page | `scripts/check-room-apps-layout.mjs` |
 | Two people typing in one note lose each other's words | The room carried the whole body and the host skipped a remote body while its own caret was in the page, so the later save overwrote the other hand | `scripts/check-notes-cotyping.mjs` |
+| A room stays hostless after the host page closes | The relay names a host by the role its socket joined with, and the room page only reported the missing host, so no guest could claim the role from the page it was already reading | `core/test/host-takeover.test.mjs` |
 | The chess page opens as bare HTML from the shipped relay | The relay's file server knew html, js, json, png and webm only, so the stylesheet and the icon arrived as application/octet-stream and the browser refused them | `scripts/check-relay-files.mjs` |
 | A guest plays the age of a report past the host's film | The film tab read a position and the room sent it a moment later, but the frame kept the older position and stamped the send, so every guest extrapolated from an instant after the position. On a hidden tab the gap is a whole throttled tick | `core/test/sync.test.mjs`, `core/test/entry-capture.test.mjs` |
 | A film tab freezes when the room seeks outside its buffer | The room tab waited for buffered data before a seek, but the film tab that owned the player wrote `currentTime` immediately and could wedge on an unfetched range | `core/test/media-relay.test.mjs` |
@@ -86,6 +87,20 @@ crosses that boundary does not count.
 | The Chromium lane types the room keys into the landing page search box | The lane focused the first input before every key run, and the real landing page opens with a search box, so the core recorded field values instead of key events and the host form timed out on text nobody typed | `scripts/check-two-instance.mjs` |
 | A granted guest's tab never reaches the host | The offer step read only the host's offer at the guest, so a guest that published nothing still passed | `scripts/check-two-instance.mjs` |
 | A wedged layout lane reports only a timeout | The lane kept no browser stderr and named neither the devtools socket nor the browser process, so a dead browser, a wedged renderer and a tab that went away all read the same | `core/test/lane-diagnostics.test.mjs`, `scripts/check-landing-layout.mjs` |
+| A peer with control opens a new tab and a copy opens by itself on the host and every other peer | The replay repeated the new-tab default of every `_blank` link, so an outside site the peer opened became a tab here, while that peer browser already published it as an offer | `core/test/input.test.mjs` |
+| A granted peer jumps around the film and playback sinks into slow motion | The rate a following tab reported came from its own nudged element, so each hop divided the room rate by 1.05 again and the rate decayed for the rest of the session | `core/test/media-relay.test.mjs`, `core/test/entry-capture.test.mjs` |
+| A real cursors-4u set loads only its cover in the panel | The page still wraps its default pointer in one `a.cursor-set-link`, so the legacy branch added a card and the early return skipped the CDN state scan | `core/test/cursor-states.test.mjs` |
+| A failed sign replaces a good signed XPI with an unsigned copy | AMO lists a version row before it signs the file, and the fallback copied that unreviewed package over `bridge-signed.xpi`, so the guard rejected a file that had been fine | `core/test/release-sign.test.mjs` |
+| A room never names its film and no media frame reaches a peer | The cursor echo lived in page scope and read the cursor that only `start()` holds, so the first hello threw and `start()` stopped before it registered the message listener and the media tick | `core/test/cursor-echo.test.mjs` |
+| A room says three apps are open when two apps are open | The landing page opened a room socket for cursors with no role, so the relay counted a pointer surface as an app and as a person | `spike/relay.test.mjs` |
+| A screenshot timeout wedges every later command | The BiDi client kept the timed out command in its pending map and went on sending, so Firefox held every later command behind it. A timeout now retires the client and a later command fails at once | `spike/bidi.test.mjs` |
+| The Rust relay drops `/status`, range seeks, landing apps, `/docs`, and leaks empty rooms | `relay/src/main.rs` fell behind `spike/relay.js`, never evicted empty rooms from `App.rooms`, and had no contract suite run against it | `relay/src/main.rs`, `spike/relay.test.mjs`, `host/test/room.test.mjs` |
+| `DELETE /docs/:id` accepts an unvalidated path id | `spike/relay.js` checked `DOC_ID` on `GET` and `PUT` but not `DELETE` | `spike/relay.test.mjs` |
+| Relay tests fail whenever port `8799` is busy on the machine | `spike/relay.test.mjs` hardcoded port `8799` instead of binding an ephemeral port | `spike/relay.test.mjs` |
+| Generic cross-origin embed iframes (such as Miruro `strm.cx/?embed=1`) collide across episodes | `framePageHref` relied on `document.referrer` and `pageKey` dropped title/episode query parameters; subframes now receive `sender.tab.url` via `brosr:tab-url` and `pageKey` preserves canonical episode params | `core/test/iframe-handoff.test.mjs` |
+| Packaged desktop bundles miss the path-spawned trust helper and Rust relay binary | `app/scripts/stage-host.mjs` omitted `host/trust.mjs`, `host/chrome-cdp.mjs`, and `brosr-relay`, `app/src-tauri/tauri.conf.json` omitted `resources/relay`, and `host/room.mjs` only spawned the Node relay unless `RELAY_BIN` was set | `host/test/stage-host.test.mjs`, `host/test/room.test.mjs` |
+| Mid-playback rejoin or SPA episode swap misses its seed seek, buffer wait burns seek cooldown, or rate extrapolation drifts | `RemoteMediaSync` marked `primed = true` before buffer waits and kept state across key swaps, `createRoomClient` extrapolated at `1x` regardless of `message.rate` and ticked `DriftController` before checking buffer, and `open-room-panel` lost the synchronous popup user gesture | `core/test/media-rejoin-three-peer.test.mjs` |
+| Wheel events drop or diverge between synthetic replay, BiDi, and CDP, and pointer lock is refused silently | `core/input.mjs` lacked `wheelRecord`/wheel replay and structured pointer-lock refusal reasons, while `core/trust.mjs` and `host/chrome-cdp.mjs` disagreed on wheel actions and special key names | `core/test/input-trust-parity.test.mjs`, `host/test/chrome-cdp.test.mjs`, `host/test/trust.test.mjs` |
 
 ## The rules
 
@@ -95,13 +110,6 @@ crosses that boundary does not count.
 4. Build identity travels with the room.
 5. Every policy returns allow plus a reason.
 6. Every fix gets a failing test at the boundary that failed.
-| A peer with control opens a new tab and a copy opens by itself on the host and every other peer | The replay repeated the new-tab default of every `_blank` link, so an outside site the peer opened became a tab here, while that peer browser already published it as an offer | `core/test/input.test.mjs` |
-| A granted peer jumps around the film and playback sinks into slow motion | The rate a following tab reported came from its own nudged element, so each hop divided the room rate by 1.05 again and the rate decayed for the rest of the session | `core/test/media-relay.test.mjs`, `core/test/entry-capture.test.mjs` |
-| A real cursors-4u set loads only its cover in the panel | The page still wraps its default pointer in one `a.cursor-set-link`, so the legacy branch added a card and the early return skipped the CDN state scan | `core/test/cursor-states.test.mjs` |
-| A failed sign replaces a good signed XPI with an unsigned copy | AMO lists a version row before it signs the file, and the fallback copied that unreviewed package over `bridge-signed.xpi`, so the guard rejected a file that had been fine | `core/test/release-sign.test.mjs` |
-| A room never names its film and no media frame reaches a peer | The cursor echo lived in page scope and read the cursor that only `start()` holds, so the first hello threw and `start()` stopped before it registered the message listener and the media tick | `core/test/cursor-echo.test.mjs` |
-| A room says three apps are open when two apps are open | The landing page opened a room socket for cursors with no role, so the relay counted a pointer surface as an app and as a person | `spike/relay.test.mjs` |
-| A screenshot timeout wedges every later command | The BiDi client kept the timed out command in its pending map and went on sending, so Firefox held every later command behind it. A timeout now retires the client and a later command fails at once | `spike/bidi.test.mjs` |
 
 ## Open findings
 
@@ -123,12 +131,31 @@ queued in the browser and blocks later commands.
 stall worse. A timed out command used to stay in its pending map while later
 commands queued behind it, and a per command timer stayed live after its
 answer. The client now clears that timer, and a timeout retires the session so
-a caller cannot keep sending into a queue that will not move. Whether Firefox
-stops painting or stops answering the capture command is still open. The movie
-that reproduced it is gone, so the next step is a fresh two pane run at 30 fps
-with the browser's own logs.
+a caller cannot keep sending into a queue that will not move. Which state
+Firefox reaches is still open, and the probe below separates the three that a
+later run can hit.
 
-**Reproduction note.** Drive one room in two BiDi panes and capture both at
-30 fps. After about 66 seconds, around 2000 frames, a screenshot call stops
-answering. A retry does not return, and later evaluate or navigate calls queue
-behind it. A fresh browser on the same relay captures normally.
+**Measured on 2026-11-20.** Three runs drove the landing page in a real Zen
+window over the loopback relay, with the browser's own stdout and stderr in a
+file beside the result.
+
+- The 30 fps target is not reachable through this path. Two panes took about
+  470 to 500 ms per pair and finished at 2.0 fps over 196 frames. One pane took
+  about 250 ms per capture and finished at 3.8 fps over 227 frames. The capture
+  cost is the first wall, so a run that asks for 30 fps builds a queue from its
+  first second.
+- One of three runs stalled. At frame 59, about 35 s in, a capture passed the
+  5000 ms bound and retired the session. A fresh WebSocket to the debug port
+  was then refused, so the browser process itself was gone and not only the
+  session. Its log ended at `tabs.onRemoved event fired after context unloaded`
+  and held no JavaScript crash line.
+- The stall did not reproduce. The next two pane run completed 196 frames in
+  100 s, and a 41 frame run after that, both with no frame above 1500 ms.
+
+**Reproduction note.** Run `node spike/.runtime/capture-soak.mjs` from the
+repository root. It opens two panes on the room URL, captures both at 30 fps
+for 100 s, names every frame above 1500 ms, and keeps the browser log beside
+the result. `PANES=1` gives the one pane control and `SOAK_MS` changes the
+window. A slow frame is followed by a raw protocol probe with three answers.
+The port refused means the browser is gone, a socket with no reply means the
+agent is stuck, and a reply means the browser is up.

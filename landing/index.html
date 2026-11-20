@@ -21,10 +21,13 @@
       </svg>
       <span class="brand-name">Brosr</span>
     </div>
-    <p class="room-state" id="room-state">
-      <span class="dot" aria-hidden="true"></span>
-      <span id="room-state-text">Room open on this device</span>
-    </p>
+    <div class="room-bar">
+      <p class="room-state" id="room-state">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="room-state-text">Room open on this device</span>
+      </p>
+      <button class="room-takeover" id="host-takeover" type="button" hidden>Take over as host</button>
+    </div>
   </header>
 
   <main class="page">
@@ -253,10 +256,19 @@
     // normal state, not an error, and a failed read only means the page is on
     // its own. A room whose host left still has peers, and saying so is the
     // difference between a broken join and an old invite.
+    //
+    // A room with no host offers the host role to whoever is looking. The
+    // offer is a page navigation, not a switch of the live client, because the
+    // relay reads the role a socket joined with. Any peer holding the room link
+    // could already open it with role=host, so the button adds no authority.
     (function () {
       var text = document.getElementById('room-state-text');
       var box = document.getElementById('room-state');
-      var room = new URLSearchParams(location.search).get('room') || 'default';
+      var takeover = document.getElementById('host-takeover');
+      var params = new URLSearchParams(location.search);
+      var room = params.get('room') || 'default';
+      // A host has nothing to take over, and a page with no room has no host.
+      var takeoverOffered = params.has('room') && params.get('role') !== 'host';
 
       function render(peers, hosts) {
         box.classList.toggle('is-offline', peers === null);
@@ -270,6 +282,11 @@
           text.textContent = '1 app open in this room';
         } else {
           text.textContent = peers + ' apps open in this room';
+        }
+        // A relay that sends no host count made no measurement, so a missing
+        // field never reads as a missing host.
+        if (takeover) {
+          takeover.hidden = !(takeoverOffered && peers !== null && hosts === 0);
         }
       }
 
@@ -289,6 +306,19 @@
           .catch(function () {
             render(null);
           });
+      }
+
+      // The host id is what the room names the host by, and the core falls
+      // back to "host" for a host socket. Setting both keeps the new host and
+      // its id in step. A grant belongs to the guest role, so it drops here.
+      if (takeover) {
+        takeover.addEventListener('click', function () {
+          var next = new URLSearchParams(location.search);
+          next.set('role', 'host');
+          next.set('peer', 'host');
+          next.delete('grant');
+          location.replace(location.pathname + '?' + next.toString() + location.hash);
+        });
       }
 
       read();

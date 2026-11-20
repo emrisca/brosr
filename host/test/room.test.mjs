@@ -35,7 +35,9 @@ const closed = await new Promise((resolve) => {
   });
 });
 
-const { status } = await import(pathToFileURL(path.join(here, '..', 'room.mjs')).href);
+const { status, relayLaunch } = await import(
+  pathToFileURL(path.join(here, '..', 'room.mjs')).href
+);
 
 const joinFile = path.join(state, 'join.json');
 
@@ -117,4 +119,122 @@ test('a guest whose relay cannot answer counts no peers', async () => {
   assert.equal(state.relayReady, false);
   assert.equal(state.peers, 0);
   assert.equal(state.running, true);
+});
+
+test('relayLaunch defaults to the Node relay and switches cleanly when RELAY_BIN is set', () => {
+  const fallback = relayLaunch({
+    host: '127.0.0.1',
+    port: 8787,
+    docsDir: '/tmp/docs',
+    docsToken: 'tok',
+    relayBin: '',
+  });
+  assert.equal(fallback.command, process.execPath);
+  assert.equal(fallback.args.length, 1);
+  assert.match(fallback.args[0], /spike[\\/]relay\.js$/);
+  assert.equal(fallback.env.BROSR_DOCS_DIR, '/tmp/docs');
+  assert.equal(fallback.env.BROSR_DOCS_TOKEN, 'tok');
+
+  const native = relayLaunch({
+    host: '0.0.0.0',
+    port: 8899,
+    docsDir: '/tmp/docs',
+    docsToken: 'tok',
+    relayBin: '/opt/brosr-relay',
+  });
+  assert.equal(native.command, '/opt/brosr-relay');
+  assert.deepEqual(native.args, []);
+  assert.equal(native.env.HOST, '0.0.0.0');
+  assert.equal(native.env.PORT, '8899');
+  assert.match(native.env.LANDING, /landing$/);
+  assert.match(native.env.FIXTURES, /spike[\\/]fixtures$/);
+  assert.match(native.env.ASSETS, /assets$/);
+  assert.match(native.env.MEDIA, /spike[\\/]\.runtime$/);
+});
+
+test('relayLaunch priority: explicit RELAY_BIN > auto-discovered staged binary > spike/relay.js fallback', async () => {
+  const bundleRoot = await mkdtemp(path.join(tmpdir(), 'brosr-relay-launch-'));
+  const previousRelayBin = process.env.RELAY_BIN;
+  try {
+    // 1. Neither RELAY_BIN nor staged binary present -> spike/relay.js fallback.
+    delete process.env.RELAY_BIN;
+    const fallback = relayLaunch({
+      host: '127.0.0.1',
+      port: 8787,
+      docsDir: '/tmp/docs',
+      docsToken: 'tok',
+      root: bundleRoot,
+      platform: 'darwin',
+    });
+    assert.equal(fallback.command, process.execPath);
+    assert.deepEqual(fallback.args, [path.join(bundleRoot, 'spike', 'relay.js')]);
+    assert.equal(fallback.source, 'node');
+
+    // 2. Staged binary next to host/ -> auto-discovered on Unix and Windows.
+    const relayDir = path.join(bundleRoot, 'relay');
+    fs.mkdirSync(relayDir, { recursive: true });
+    const unixBin = path.join(relayDir, 'brosr-relay');
+    const winBin = path.join(relayDir, 'brosr-relay.exe');
+    fs.writeFileSync(unixBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(winBin, 'MZ');
+
+    const stagedUnix = relayLaunch({
+      host: '127.0.0.1',
+      port: 8791,
+      docsDir: '/tmp/docs',
+      docsToken: 'tok',
+      root: bundleRoot,
+      platform: 'darwin',
+    });
+    assert.equal(stagedUnix.command, unixBin);
+    assert.deepEqual(stagedUnix.args, []);
+    assert.equal(stagedUnix.source, 'staged');
+    assert.equal(stagedUnix.env.LANDING, path.join(bundleRoot, 'landing'));
+    assert.equal(stagedUnix.env.FIXTURES, path.join(bundleRoot, 'spike', 'fixtures'));
+    assert.equal(stagedUnix.env.ASSETS, path.join(bundleRoot, 'assets'));
+    assert.equal(stagedUnix.env.MEDIA, path.join(bundleRoot, 'spike', '.runtime'));
+
+    const stagedWin = relayLaunch({
+      host: '127.0.0.1',
+      port: 8792,
+      docsDir: '/tmp/docs',
+      docsToken: 'tok',
+      root: bundleRoot,
+      platform: 'win32',
+    });
+    assert.equal(stagedWin.command, winBin);
+    assert.deepEqual(stagedWin.args, []);
+    assert.equal(stagedWin.source, 'staged');
+
+    // 3. Explicit RELAY_BIN (env or arg) beats the staged binary.
+    process.env.RELAY_BIN = '/opt/override-relay';
+    const fromEnv = relayLaunch({
+      host: '0.0.0.0',
+      port: 8899,
+      docsDir: '/tmp/docs',
+      docsToken: 'tok',
+      root: bundleRoot,
+      platform: 'darwin',
+    });
+    assert.equal(fromEnv.command, '/opt/override-relay');
+    assert.deepEqual(fromEnv.args, []);
+    assert.equal(fromEnv.source, 'env');
+
+    const fromArg = relayLaunch({
+      host: '0.0.0.0',
+      port: 8899,
+      docsDir: '/tmp/docs',
+      docsToken: 'tok',
+      relayBin: '/opt/arg-relay',
+      root: bundleRoot,
+      platform: 'darwin',
+    });
+    assert.equal(fromArg.command, '/opt/arg-relay');
+    assert.deepEqual(fromArg.args, []);
+    assert.equal(fromArg.source, 'env');
+  } finally {
+    if (previousRelayBin === undefined) delete process.env.RELAY_BIN;
+    else process.env.RELAY_BIN = previousRelayBin;
+    await rm(bundleRoot, { recursive: true, force: true });
+  }
 });
