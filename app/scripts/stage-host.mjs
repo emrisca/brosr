@@ -59,6 +59,32 @@ function resolveRelaySource() {
 
 const relaySource = resolveRelaySource();
 
+// Resolve an optional bundled Node.js binary before modifying the output folder
+// so a bad BROSR_NODE_BIN fails fast. Release builds always pass BROSR_NODE_BIN
+// (fetched by app/scripts/fetch-node.mjs) so fresh Windows and macOS installs
+// never ask the user to install Node.js separately.
+function resolveNodeSource() {
+  const explicit = String(process.env.BROSR_NODE_BIN || '').trim();
+  if (!explicit) return '';
+  const candidate = path.resolve(explicit);
+  let stat;
+  try {
+    stat = fs.statSync(candidate);
+  } catch {
+    stop(`BROSR_NODE_BIN does not exist: ${candidate}`);
+  }
+  if (!stat.isFile()) {
+    stop(`BROSR_NODE_BIN is not a file: ${candidate}`);
+  }
+  return candidate;
+}
+
+const nodeSource = resolveNodeSource();
+const nodeName =
+  process.platform === 'win32' || (nodeSource && nodeSource.toLowerCase().endsWith('.exe'))
+    ? 'node.exe'
+    : 'node';
+
 // One entry per file the host opens at run time. A missing entry stops the
 // build here, not on a user's first launch.
 const FILES = [
@@ -206,6 +232,31 @@ if (relaySource) {
   count += 1;
 }
 
+// Keep resources/node present and non-empty in every build so Tauri's
+// bundle.resources entry works both with and without a bundled Node binary.
+const nodeReadme = path.join(out, 'node', 'README.md');
+fs.mkdirSync(path.dirname(nodeReadme), { recursive: true });
+fs.writeFileSync(
+  nodeReadme,
+  'Release builds stage the target Node.js runtime beside this file so Brosr runs without a system Node install.\n'
+);
+bytes += fs.statSync(nodeReadme).size;
+count += 1;
+
+let stagedNodeRel = '';
+if (nodeSource) {
+  stagedNodeRel = path.join('node', nodeName);
+  const to = path.join(out, stagedNodeRel);
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.copyFileSync(nodeSource, to);
+  if (process.platform !== 'win32') {
+    const mode = (fs.statSync(nodeSource).mode & 0o777) | 0o111;
+    fs.chmodSync(to, mode);
+  }
+  bytes += fs.statSync(to).size;
+  count += 1;
+}
+
 // Every staged module can import another staged file or spawn a sibling script
 // by path, and the list above is kept by hand. A missed entry ships a tree that
 // only fails on a user's first launch, so each relative import and sibling
@@ -246,6 +297,7 @@ for (const required of [
   'bridge/manifest.json',
   'spike/relay.js',
   'relay/README.md',
+  'node/README.md',
   'spike/fixtures/room-b.html',
   'spike/fixtures/sync.html',
   'landing/index.html',
@@ -258,6 +310,9 @@ for (const required of [
 }
 if (stagedRelayRel && !fs.existsSync(path.join(out, stagedRelayRel))) {
   stop(`staged tree lacks ${stagedRelayRel}`);
+}
+if (stagedNodeRel && !fs.existsSync(path.join(out, stagedNodeRel))) {
+  stop(`staged tree lacks ${stagedNodeRel}`);
 }
 
 // Verify the staged runtime actually imports and spawns from the staged tree.
@@ -283,5 +338,6 @@ if (trustProbe.status !== 2 || !/--debug-port/.test(trustProbe.stderr || '')) {
 
 const kb = Math.round(bytes / 1024);
 const destLabel = outOverride ? out : 'src-tauri/resources';
-const relayNote = stagedRelayRel ? ` (with ${stagedRelayRel})` : '';
-console.log(`[stage-host] ${count} files, ${kb} KB -> ${destLabel}${relayNote}`);
+const extras = [stagedRelayRel, stagedNodeRel].filter(Boolean);
+const extraNote = extras.length ? ` (with ${extras.join(', ')})` : '';
+console.log(`[stage-host] ${count} files, ${kb} KB -> ${destLabel}${extraNote}`);

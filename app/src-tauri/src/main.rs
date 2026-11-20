@@ -19,28 +19,45 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-// A window opened from Finder inherits a short PATH, so the usual install
-// prefixes are checked before the inherited one.
-fn node_binary() -> Result<PathBuf, String> {
-    if let Ok(given) = std::env::var("BROSR_NODE") {
+#[cfg(windows)]
+const BUNDLED_NODE_NAME: &str = "node.exe";
+#[cfg(not(windows))]
+const BUNDLED_NODE_NAME: &str = "node";
+
+const SYSTEM_NODE_CANDIDATES: &[&str] = &[
+    "/opt/homebrew/bin/node",
+    "/usr/local/bin/node",
+    "/usr/bin/node",
+];
+
+// Prefer an explicit BROSR_NODE override, then the Node runtime bundled inside
+// the installed app resources (so fresh Windows and macOS machines never need
+// a separate Node.js install), and fall back to system Node for dev runs.
+fn resolve_node_binary(
+    root: &Path,
+    env_override: Option<&str>,
+    system_candidates: &[&str],
+    path_env: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf, String> {
+    if let Some(given) = env_override {
         if !given.is_empty() {
             return Ok(PathBuf::from(given));
         }
     }
-    for candidate in [
-        "/opt/homebrew/bin/node",
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-    ] {
-        if Path::new(candidate).exists() {
+    let bundled = root.join("node").join(BUNDLED_NODE_NAME);
+    if bundled.is_file() {
+        return Ok(bundled);
+    }
+    for candidate in system_candidates {
+        if Path::new(candidate).is_file() {
             return Ok(PathBuf::from(candidate));
         }
     }
-    if let Ok(path) = std::env::var("PATH") {
+    if let Some(path) = path_env {
         // Windows separates PATH entries with `;`, and its executable carries
         // the `.exe` suffix. `split_paths` handles both platforms, and trying
         // both names keeps a Windows shell and a Unix build on one path.
-        for dir in std::env::split_paths(&path) {
+        for dir in std::env::split_paths(path) {
             for name in ["node", "node.exe"] {
                 let candidate = dir.join(name);
                 if candidate.is_file() {
@@ -49,7 +66,18 @@ fn node_binary() -> Result<PathBuf, String> {
             }
         }
     }
-    Err("Node.js was not found. Install Node 20 or later, or set BROSR_NODE.".to_string())
+    Err("Node.js was not found. Reinstall Brosr, install Node 20 or later, or set BROSR_NODE.".to_string())
+}
+
+fn node_binary(root: &Path) -> Result<PathBuf, String> {
+    let env_override = std::env::var("BROSR_NODE").ok();
+    let path_env = std::env::var_os("PATH");
+    resolve_node_binary(
+        root,
+        env_override.as_deref(),
+        SYSTEM_NODE_CANDIDATES,
+        path_env.as_deref(),
+    )
 }
 
 // host/cli.mjs lives in the bundle resources, and in the repository during a
@@ -108,7 +136,8 @@ fn project_root() -> PathBuf {
 }
 
 fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
-    let cli = project_root().join("host").join("cli.mjs");
+    let root = project_root();
+    let cli = root.join("host").join("cli.mjs");
     if !cli.exists() {
         return Err(format!("The host CLI is missing at {}.", cli.display()));
     }
@@ -129,7 +158,7 @@ fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
             .map_err(|error| format!("Could not make {}: {error}", dir.display()))?;
     }
 
-    let mut command = Command::new(node_binary()?);
+    let mut command = Command::new(node_binary(&root)?);
     command
         .arg(&cli)
         .args(&args)
@@ -201,4 +230,96 @@ fn main() {
         .invoke_handler(tauri::generate_handler![host])
         .run(tauri::generate_context!())
         .expect("error while running Brosr");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "brosr-node-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&dir).expect("create temp test dir");
+        dir
+    }
+
+    #[test]
+    fn bundled_node_works_with_empty_path_and_no_system_node() {
+        let root = scratch_dir("bundled");
+        let bundled = root.join("node").join(BUNDLED_NODE_NAME);
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, b"fake-node").unwrap();
+
+        let got = resolve_node_binary(&root, None, &[], None);
+        assert_eq!(got, Ok(bundled));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bundled_node_wins_over_system_and_path_node() {
+        let root = scratch_dir("priority");
+        let bundled = root.join("node").join(BUNDLED_NODE_NAME);
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, b"bundled").unwrap();
+
+        let path_dir = root.join("path-bin");
+        fs::create_dir_all(&path_dir).unwrap();
+        fs::write(path_dir.join(BUNDLED_NODE_NAME), b"path-node").unwrap();
+        let path_env = OsString::from(path_dir.as_os_str());
+
+        let got = resolve_node_binary(&root, None, &[], Some(&path_env));
+        assert_eq!(got, Ok(bundled));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn env_override_wins_over_bundled_node() {
+        let root = scratch_dir("override");
+        let bundled = root.join("node").join(BUNDLED_NODE_NAME);
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, b"bundled").unwrap();
+
+        let got = resolve_node_binary(&root, Some("/custom/node"), &[], None);
+        assert_eq!(got, Ok(PathBuf::from("/custom/node")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn falls_back_to_path_when_bundled_node_absent() {
+        let root = scratch_dir("fallback");
+        let path_dir = root.join("bin");
+        fs::create_dir_all(&path_dir).unwrap();
+        let path_node = path_dir.join(BUNDLED_NODE_NAME);
+        fs::write(&path_node, b"path-node").unwrap();
+        let path_env = OsString::from(path_dir.as_os_str());
+
+        let got = resolve_node_binary(&root, None, &[], Some(&path_env));
+        assert_eq!(got, Ok(path_node));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn returns_clear_error_when_no_node_found() {
+        let root = scratch_dir("missing");
+        let got = resolve_node_binary(&root, None, &[], None);
+        let err = got.expect_err("expected missing Node error");
+        assert!(err.contains("Node.js was not found"));
+        assert!(err.contains("BROSR_NODE"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

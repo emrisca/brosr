@@ -9,6 +9,7 @@
 //   node host/cli.mjs status
 //   node host/cli.mjs stop
 //   node host/cli.mjs session --domain=youtube.com --from-firefox=<profile> --to=<cdp url>
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detect } from './browsers.mjs';
@@ -285,6 +286,20 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  const norm = (file) => {
+    try {
+      const real = fs.realpathSync(file);
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    } catch {
+      const resolved = path.resolve(file);
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    }
+  };
+  return norm(process.argv[1]) === norm(fileURLToPath(import.meta.url));
+}
+
+if (isDirectRun()) {
   main();
 }

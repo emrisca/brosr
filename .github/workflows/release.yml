@@ -54,12 +54,16 @@ jobs:
       - name: Build the relay
         run: cargo build --manifest-path relay/Cargo.toml --release --target ${{ matrix.target }}
 
+      - name: Fetch bundled Node runtime
+        run: node app/scripts/fetch-node.mjs --target ${{ matrix.target }} --out "${{ runner.temp }}/brosr-node/node${{ matrix.relay_ext }}"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           BROSR_RELAY_BIN: ${{ github.workspace }}/relay/target/${{ matrix.target }}/release/brosr-relay${{ matrix.relay_ext }}
+          BROSR_NODE_BIN: ${{ runner.temp }}/brosr-node/node${{ matrix.relay_ext }}
         with:
           projectPath: app
           args: --target ${{ matrix.target }}

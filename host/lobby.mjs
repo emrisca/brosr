@@ -339,6 +339,20 @@ export async function ensureLobby() {
 
 export { LOBBY_FILE };
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  const norm = (file) => {
+    try {
+      const real = fs.realpathSync(file);
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    } catch {
+      const resolved = path.resolve(file);
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    }
+  };
+  return norm(process.argv[1]) === norm(fileURLToPath(import.meta.url));
+}
+
+if (isDirectRun()) {
   start();
 }

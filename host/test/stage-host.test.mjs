@@ -23,6 +23,7 @@ const relayName = process.platform === 'win32' ? 'brosr-relay.exe' : 'brosr-rela
 function runStage(outDir, extraEnv = {}) {
   const env = { ...process.env };
   delete env.BROSR_RELAY_BIN;
+  delete env.BROSR_NODE_BIN;
   delete env.BROSR_STAGE_OUT;
   Object.assign(env, extraEnv);
   return spawnSync(process.execPath, [stageScript, '--out', outDir], {
@@ -150,4 +151,141 @@ test('release workflow and tauri.conf.json package brosr-relay under resources/r
     Array.isArray(conf.bundle?.resources) && conf.bundle.resources.includes('resources/relay'),
     'app/src-tauri/tauri.conf.json bundle.resources must include resources/relay'
   );
+});
+
+const nodeName = process.platform === 'win32' ? 'node.exe' : 'node';
+const fetchNodeScript = path.join(repo, 'app', 'scripts', 'fetch-node.mjs');
+
+test('stage-host always creates resources/node/README.md and stages BROSR_NODE_BIN with executable permissions', async () => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'brosr-stage-node-'));
+  const outDefault = path.join(scratch, 'resources-default');
+  const outWithNode = path.join(scratch, 'resources-with-node');
+  const dummyPayload = '#!/bin/sh\necho dummy-node\n';
+  const dummyNode = path.join(scratch, nodeName);
+  try {
+    const defaultRun = runStage(outDefault);
+    assert.equal(defaultRun.status, 0, defaultRun.stderr || defaultRun.stdout);
+    assert.equal(
+      fs.existsSync(path.join(outDefault, 'node', 'README.md')),
+      true,
+      'staged node/README.md must always exist so resources/node is never empty'
+    );
+
+    fs.writeFileSync(dummyNode, dummyPayload);
+    if (process.platform !== 'win32') fs.chmodSync(dummyNode, 0o755);
+
+    const nodeRun = runStage(outWithNode, { BROSR_NODE_BIN: dummyNode });
+    assert.equal(nodeRun.status, 0, nodeRun.stderr || nodeRun.stdout);
+
+    const stagedNode = path.join(outWithNode, 'node', nodeName);
+    assert.equal(fs.existsSync(stagedNode), true, `expected ${stagedNode} to be staged`);
+    assert.equal(fs.readFileSync(stagedNode, 'utf8'), dummyPayload);
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(stagedNode).mode & 0o777;
+      assert.notEqual(mode & 0o111, 0, `expected executable permissions on ${stagedNode}`);
+    }
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('stage-host fails fast when BROSR_NODE_BIN points to a nonexistent path or directory', async () => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'brosr-stage-node-missing-'));
+  const outDir = path.join(scratch, 'resources');
+  const missing = path.join(scratch, 'does-not-exist-node');
+  try {
+    const missingRun = runStage(outDir, { BROSR_NODE_BIN: missing });
+    assert.notEqual(missingRun.status, 0, 'stage-host must fail when BROSR_NODE_BIN is missing');
+    assert.match(missingRun.stderr, /BROSR_NODE_BIN/);
+
+    const dirRun = runStage(outDir, { BROSR_NODE_BIN: scratch });
+    assert.notEqual(dirRun.status, 0, 'stage-host must fail when BROSR_NODE_BIN is a directory');
+    assert.match(dirRun.stderr, /BROSR_NODE_BIN/);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('fetch-node.mjs pins all three release targets and validates binary headers', async () => {
+  const mod = await import(`${pathToFileURL(fetchNodeScript).href}?t=${Date.now()}`);
+  for (const target of [
+    'aarch64-apple-darwin',
+    'x86_64-apple-darwin',
+    'x86_64-pc-windows-msvc',
+  ]) {
+    const spec = mod.targetSpec(target);
+    assert.match(spec.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(spec.archive.includes(mod.NODE_VERSION));
+  }
+  assert.throws(() => mod.targetSpec('unknown-target'), /unsupported target/i);
+
+  // Mach-O arm64 vs x86_64 header verification catches cross-arch mix-ups.
+  const machoArm64 = Buffer.alloc(16);
+  machoArm64.writeUInt32LE(0xfeedfacf, 0);
+  machoArm64.writeUInt32LE(0x0100000c, 4);
+  assert.doesNotThrow(() => mod.verifyBinaryHeader(machoArm64, 'macho-arm64'));
+  assert.throws(() => mod.verifyBinaryHeader(machoArm64, 'macho-x64'), /cpu/i);
+
+  const machoX64 = Buffer.alloc(16);
+  machoX64.writeUInt32LE(0xfeedfacf, 0);
+  machoX64.writeUInt32LE(0x01000007, 4);
+  assert.doesNotThrow(() => mod.verifyBinaryHeader(machoX64, 'macho-x64'));
+  assert.throws(() => mod.verifyBinaryHeader(machoX64, 'macho-arm64'), /cpu/i);
+
+  // Windows PE x64 header verification.
+  const peX64 = Buffer.alloc(128);
+  peX64[0] = 0x4d;
+  peX64[1] = 0x5a;
+  peX64.writeUInt32LE(64, 60);
+  peX64.write('PE\0\0', 64, 'ascii');
+  peX64.writeUInt16LE(0x8664, 68);
+  assert.doesNotThrow(() => mod.verifyBinaryHeader(peX64, 'pe-x64'));
+  assert.throws(() => mod.verifyBinaryHeader(machoArm64, 'pe-x64'), /pe|mz/i);
+});
+
+test('release workflow and tauri.conf.json package bundled Node under resources/node', () => {
+  const yml = fs.readFileSync(releaseWorkflow, 'utf8');
+  const fetchIndex = yml.indexOf('node app/scripts/fetch-node.mjs --target ${{ matrix.target }}');
+  const tauriIndex = yml.indexOf('uses: tauri-apps/tauri-action@v0');
+  assert.notEqual(fetchIndex, -1, 'release.yml must fetch the bundled Node runtime for matrix.target');
+  assert.equal(
+    fetchIndex < tauriIndex,
+    true,
+    'bundled Node fetch must run before tauri-apps/tauri-action'
+  );
+  assert.match(yml, /BROSR_NODE_BIN:/, 'release.yml must pass BROSR_NODE_BIN to tauri-action');
+
+  const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+  assert.ok(
+    Array.isArray(conf.bundle?.resources) && conf.bundle.resources.includes('resources/node'),
+    'app/src-tauri/tauri.conf.json bundle.resources must include resources/node'
+  );
+});
+
+test('staged host/cli.mjs and host/trust.mjs execute cleanly via non-canonical/symlinked paths', async () => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'brosr-stage-symlink-'));
+  const outDir = path.join(scratch, 'resources');
+  try {
+    const res = runStage(outDir);
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+
+    // Intentionally pass outDir without fs.realpathSync (on macOS os.tmpdir()
+    // sits under /var -> /private/var), verifying direct CLI execution still runs.
+    const cliProbe = spawnSync(process.execPath, [path.join(outDir, 'host', 'cli.mjs'), 'detect'], {
+      cwd: outDir,
+      encoding: 'utf8',
+    });
+    assert.equal(cliProbe.status, 0, cliProbe.stderr || cliProbe.stdout);
+    const parsed = JSON.parse(cliProbe.stdout.trim().split('\n').at(-1));
+    assert.equal(parsed.ok, true);
+
+    const trustProbe = spawnSync(process.execPath, [path.join(outDir, 'host', 'trust.mjs')], {
+      cwd: outDir,
+      encoding: 'utf8',
+    });
+    assert.equal(trustProbe.status, 2, trustProbe.stderr || trustProbe.stdout);
+    assert.match(trustProbe.stderr, /--debug-port/);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 });

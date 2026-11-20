@@ -8,7 +8,9 @@
 // 2. Close the session with the last grant and on app exit.
 // 3. Refuse to start the agent at all when the room has no trusted grant.
 
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
@@ -501,7 +503,21 @@ const arg = (name, fallback = '') => {
   return hit ? hit.split('=').slice(1).join('=') : fallback;
 };
 
-if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  const norm = (file) => {
+    try {
+      const real = fs.realpathSync(file);
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    } catch {
+      const resolved = path.resolve(file);
+      return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+    }
+  };
+  return norm(process.argv[1]) === norm(fileURLToPath(import.meta.url));
+}
+
+if (isDirectRun()) {
   const debugPort = Number(arg('debug-port'));
   const room = arg('room');
   const token = arg('token');
