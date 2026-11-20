@@ -365,7 +365,15 @@
         var scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
         var socket;
         try {
-          socket = new WebSocket(scheme + location.host + '/room?room=' + encodeURIComponent(room));
+          // The role keeps this socket out of the app and people counts. It
+          // draws pointers, and a room should not read it as a page.
+          socket = new WebSocket(
+            scheme +
+              location.host +
+              '/room?room=' +
+              encodeURIComponent(room) +
+              '&role=cursor'
+          );
         } catch (err) {
           cursorNextAt = Date.now() + 2000;
           return;

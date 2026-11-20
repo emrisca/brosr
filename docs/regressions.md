@@ -100,33 +100,18 @@ crosses that boundary does not count.
 | A real cursors-4u set loads only its cover in the panel | The page still wraps its default pointer in one `a.cursor-set-link`, so the legacy branch added a card and the early return skipped the CDN state scan | `core/test/cursor-states.test.mjs` |
 | A failed sign replaces a good signed XPI with an unsigned copy | AMO lists a version row before it signs the file, and the fallback copied that unreviewed package over `bridge-signed.xpi`, so the guard rejected a file that had been fine | `core/test/release-sign.test.mjs` |
 | A room never names its film and no media frame reaches a peer | The cursor echo lived in page scope and read the cursor that only `start()` holds, so the first hello threw and `start()` stopped before it registered the message listener and the media tick | `core/test/cursor-echo.test.mjs` |
+| A room says three apps are open when two apps are open | The landing page opened a room socket for cursors with no role, so the relay counted a pointer surface as an app and as a person | `spike/relay.test.mjs` |
+| A screenshot timeout wedges every later command | The BiDi client kept the timed out command in its pending map and went on sending, so Firefox held every later command behind it. A timeout now retires the client and a later command fails at once | `spike/bidi.test.mjs` |
 
 ## Open findings
 
-These two were found while producing the demo tour. Neither has a failing
-test yet. They stay here until the cause is fixed and a regression test covers
-it.
-
-### A replacement browser leaves the room with no host
-
-**Symptom.** After capture moved to two warm guest browsers, both panes showed
-"The host is not in this room" and "3 apps open in this room".
-
-**Cause.** The retired host browser still held a page socket in the room,
-while its room tab, the only socket with `role=host`, had closed. `/status`
-counted three peer sockets and zero hosts. The relay reported the sockets it
-had. The session had not closed every socket of the browser it retired.
-
-**Reproduction note.** Start the relay and open a host room in browser A and a
-guest room in browser B. Open two more guest room pages in browsers C and D.
-Close A's room tab but leave A's landing page open. `GET /status?room=<name>`
-then reports `peers: 3` and `hosts: 0`, and the landing pages in C and D show
-the host notice. Closing A's landing page drops `peers` to 2, and the host
-notice remains until a page joins with `role=host`.
-
-The relay swap accounting now has a guard in `spike/relay.test.mjs`. The
-session side is open. Retiring a browser must close every room socket it
-holds, and a replacement that should host must join with `role=host`.
+The host swap that used to be listed here is closed. The landing page's cursor
+socket carried no role, so the relay counted a pointer surface as an app and as
+a person, and a room with two apps read as three. The relay now leaves a cursor
+socket out of both counts, and `spike/relay.test.mjs` asserts that the host
+notice clears when a replacement joins with `role=host`. A room with no host is
+the honest answer when the host page is closed, and no page is promoted on its
+own.
 
 ### A long capture run stops answering screenshots
 
@@ -134,9 +119,14 @@ holds, and a replacement that should host must join with `role=host`.
 out on both panes. The pane holds its last frame. The timed out command stays
 queued in the browser and blocks later commands.
 
-**Cause.** Not established. The capture loop and the BiDi session are the
-suspects. The renderer worked around it by launching replacement browsers
-mid-run, holding the last frame, and bounding the movie to the narration.
+**Cause.** Not established at the browser. The client no longer makes the
+stall worse. A timed out command used to stay in its pending map while later
+commands queued behind it, and a per command timer stayed live after its
+answer. The client now clears that timer, and a timeout retires the session so
+a caller cannot keep sending into a queue that will not move. Whether Firefox
+stops painting or stops answering the capture command is still open. The movie
+that reproduced it is gone, so the next step is a fresh two pane run at 30 fps
+with the browser's own logs.
 
 **Reproduction note.** Drive one room in two BiDi panes and capture both at
 30 fps. After about 66 seconds, around 2000 frames, a screenshot call stops

@@ -96,9 +96,11 @@ room opens it with no build step.
 
 A person can point at a tile, so a cursor travels with the room.
 
-- A landing page opened on its own holds a socket to `/room?room=`. A pointer move goes
-  out at most every 80 ms as a share of the viewport, so two window sizes put the dot in the
-  same place. A dot carries the person's name, and it leaves after three quiet seconds.
+- A landing page opened on its own holds a socket to `/room?room=&role=cursor`. A pointer
+  move goes out at most every 80 ms as a share of the viewport, so two window sizes put the
+  dot in the same place. A dot carries the person's name, and it leaves after three quiet
+  seconds. The cursor role keeps the socket out of the room's app and people counts, since a
+  pointer surface is not an app.
 - Presence on the room carries the same share. The core turns a share into pixels against its own
   window, once, before the overlay draws. That one conversion is why a cursor lands on the same
   part of the page in a small window and a large one.

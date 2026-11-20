@@ -132,6 +132,41 @@ test('a replacement host takes the room without leaving a stale host count', asy
   guest.close();
 });
 
+test('a cursor socket is not an app, and a closed host page is named', async () => {
+  await waitHealth();
+  const host = await connect('pointing', 'host', 'host-1');
+  const guest = await connect('pointing', 'peer', 'guest-1');
+  // A plain landing page draws pointers for the room from its own socket.
+  const cursors = await connect('pointing', 'cursor');
+
+  const busy = await (await fetch(`${BASE}/status?room=pointing`)).json();
+  assert.equal(busy.peers, 2, 'two room pages, not three');
+  assert.equal(busy.hosts, 1);
+  assert.equal(busy.people, 2, 'the pointer surface is not a person');
+
+  // The host page closes while the guest stays. The room says no host, which is
+  // the honest answer, and a replacement that joins as host clears it.
+  host.close();
+  let alone = null;
+  for (let i = 0; i < 40; i++) {
+    alone = await (await fetch(`${BASE}/status?room=pointing`)).json();
+    if (alone.hosts === 0) break;
+    await sleep(50);
+  }
+  assert.equal(alone.peers, 1, 'only the guest app is left');
+  assert.equal(alone.hosts, 0, 'the room has no host');
+  assert.equal(alone.people, 1);
+
+  const replacement = await connect('pointing', 'host', 'host-2');
+  const back = await (await fetch(`${BASE}/status?room=pointing`)).json();
+  assert.equal(back.peers, 2, 'the replacement is a room page');
+  assert.equal(back.hosts, 1, 'the host notice clears');
+
+  replacement.close();
+  guest.close();
+  cursors.close();
+});
+
 test('people counts each peer once across tabs, and ignores the panel socket', async () => {
   await waitHealth();
   const host = await connect('counted', 'host', 'host-1');

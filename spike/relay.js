@@ -106,8 +106,10 @@ const server = http.createServer((req, res) => {
     const people = new Set();
     if (members) {
       for (const client of members) {
-        // The app control peer is a local command channel, not a person.
-        if (client.role === 'panel') continue;
+        // The app control peer is a local command channel, not a person. A
+        // cursor socket is a landing page drawing pointers, which is not an
+        // app either, so neither one joins the app or the people count.
+        if (client.role === 'panel' || client.role === 'cursor') continue;
         peers += 1;
         if (client.role === 'host') hosts += 1;
         // An older page sends no peer id. It counts as its own socket rather
@@ -473,7 +475,14 @@ server.on('upgrade', (req, socket) => {
   // The core tags its socket with the role the room URL gave it. Any other
   // value is a guest, so an older page can never count as the host.
   const askedRole = url.searchParams.get('role');
-  const role = askedRole === 'host' ? 'host' : askedRole === 'panel' ? 'panel' : 'peer';
+  const role =
+    askedRole === 'host'
+      ? 'host'
+      : askedRole === 'panel'
+        ? 'panel'
+        : askedRole === 'cursor'
+          ? 'cursor'
+          : 'peer';
   // The room URL already names the peer, so the count can tell two tabs of one
   // person from two people without reading a frame.
   const peer = url.searchParams.get('peer') || '';
