@@ -187,9 +187,20 @@ export function createRoomClient({
   let allowedSites = cleanCursorSites(cursorSites);
   let allowedScrollSites = cleanCursorSites(scrollSites);
   let showingNames = showNames !== false;
-  // Every site a presence frame has named. The host panel offers these as
-  // toggles, so a site someone is actually on can be switched on.
-  const seenSites = new Set();
+  // The sites the room can see right now: the page this tab names and the page
+  // every live peer reports. A site leaves the list when its tab does, so a
+  // closed tab stops leaving a row behind in the host's picker.
+  function liveSites() {
+    const live = new Set();
+    const add = (href) => {
+      const key = cursorSiteOf(href);
+      if (key) live.add(key);
+    };
+    if (pageUrl) add(pageUrl());
+    add(lastPointerUrl);
+    for (const peer of state.peers.values()) add(peer.url);
+    return live;
+  }
   // Sites the host removed from the list. The panel leaves them out even while
   // people are on them, so a removal holds until the site is switched on again.
   const forgottenSites = new Set(cleanCursorSites(cursorForgot) || []);
@@ -302,10 +313,12 @@ export function createRoomClient({
     send(encode(message));
   }
 
-  // The host owns the roster. When a requested colour is already in use it
-  // sends a replacement, and every client puts that peer on the same colour.
+  // Every colour another person holds. A person's own colour only counts when
+  // the question is about someone else, so the roster can refuse a colour
+  // without taking it away from the person who already has it.
   function usedColours(exceptId = '') {
-    const used = new Set([currentColour.toLowerCase()]);
+    const used = new Set();
+    if (exceptId !== peerId) used.add(currentColour.toLowerCase());
     for (const peer of state.peers.values()) {
       if (peer.id === exceptId || !isColour(peer.colour)) continue;
       used.add(peer.colour.toLowerCase());
@@ -328,14 +341,12 @@ export function createRoomClient({
 
   function setColour(value) {
     if (!isColour(value)) return false;
-    currentColour = value;
-    if (isHost()) {
-      for (const peer of state.peers.values()) {
-        if (peer.colour && peer.colour.toLowerCase() === currentColour.toLowerCase()) {
-          reconcileColour(peer.id, peer.colour);
-        }
-      }
-    }
+    const wanted = value.trim();
+    // A colour another person holds is not a choice, with control or without.
+    // Taking it would either move that person off their colour or leave two
+    // people the same, so the room refuses it and the picker marks the swatch.
+    if (usedColours(peerId).has(wanted.toLowerCase())) return false;
+    currentColour = wanted;
     presence();
     return true;
   }
@@ -371,9 +382,7 @@ export function createRoomClient({
   }
 
   function noteSite(href) {
-    const key = cursorSiteOf(href);
-    if (key) seenSites.add(key);
-    return key;
+    return cursorSiteOf(href);
   }
 
   function sitesAllowed(url) {
@@ -1128,6 +1137,8 @@ export function createRoomClient({
       id: message.peerId,
       name: message.name,
       colour: message.colour,
+      // The site list reads this, so a peer's page has to live on the roster.
+      url: message.url,
       ...(peerBuild ? { build: peerBuild } : {}),
     });
     const point = sharePoint(message.point);
@@ -2079,9 +2090,9 @@ export function createRoomClient({
       cursor: currentCursor,
       sharePointer: sharingPointer,
       cursorSites: allowedSites === null ? null : [...allowedSites],
-      cursorSeen: [...seenSites],
+      cursorSeen: [...liveSites()],
       scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
-      scrollSeen: [...seenSites],
+      scrollSeen: [...liveSites()],
       cursorForgot: [...forgottenSites],
       cursorNames: showingNames,
       cursorDrops: { ...cursorDropCounts },

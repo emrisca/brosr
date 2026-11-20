@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Check, Loader2, RefreshCw, Save, ScrollText, Shield, Users } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  Save,
+  ScrollText,
+  Shield,
+  Users,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -100,6 +111,8 @@ export function RoomControls({ open, onOpenChange }: Props) {
   const [nameDirty, setNameDirty] = useState(false);
   const [trustUrl, setTrustUrl] = useState('');
   const [trustDirty, setTrustDirty] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
+  const [logCopied, setLogCopied] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -162,6 +175,17 @@ export function RoomControls({ open, onOpenChange }: Props) {
     if (next) setTrustDirty(false);
   }
 
+  async function copyLog() {
+    if (!state?.log) return;
+    try {
+      await navigator.clipboard.writeText(state.log);
+      setLogCopied(true);
+      window.setTimeout(() => setLogCopied(false), 1500);
+    } catch {
+      setError('Could not copy the log.');
+    }
+  }
+
   const peers = state?.peers ?? [];
   const tabs = (state?.tabs ?? []).filter((tab) => !tab.room);
   const forgottenSites = state?.cursorForgot ?? [];
@@ -182,6 +206,7 @@ export function RoomControls({ open, onOpenChange }: Props) {
       ? true
       : state.scrollSites.includes(site);
   const disabled = Boolean(busy);
+  const logPreview = (state?.log || '').split('\n').find((line) => line.trim()) || '';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -278,33 +303,6 @@ export function RoomControls({ open, onOpenChange }: Props) {
                   Control lets a person pause the film, open tabs, and use the browser. It is
                   per person and can be revoked at any time.
                 </p>
-              </section>
-
-              <Separator />
-
-              <section className="flex flex-col gap-2">
-                <p
-                  id="session-log-label"
-                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
-                >
-                  <ScrollText className="size-3.5" aria-hidden="true" />
-                  Session log
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  The host and peer readings from this room, updated in place.
-                </p>
-                {state.log ? (
-                  <pre
-                    aria-labelledby="session-log-label"
-                    className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
-                  >
-                    {state.log}
-                  </pre>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    The room has not sent a session log yet.
-                  </p>
-                )}
               </section>
 
               <Separator />
@@ -527,6 +525,57 @@ export function RoomControls({ open, onOpenChange }: Props) {
                 <p className="truncate text-xs text-muted-foreground">
                   Current: {pageLabel(state.trustTarget)}
                 </p>
+              </section>
+
+              <Separator />
+
+              {/* Last on purpose: it grows without limit, so everything a host
+                  changes sits above it. The closed form is one line, and the
+                  copy button only appears once there is room to read it. */}
+              <section className="flex flex-col gap-2">
+                <p
+                  id="session-log-label"
+                  className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+                >
+                  <ScrollText className="size-3.5" aria-hidden="true" />
+                  Session log
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  The host and peer readings from this room, updated in place.
+                </p>
+                {logOpen ? (
+                  <pre
+                    aria-labelledby="session-log-label"
+                    className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+                  >
+                    {state.log || 'The room has not sent a session log yet.'}
+                  </pre>
+                ) : (
+                  <p
+                    aria-labelledby="session-log-label"
+                    className="truncate rounded-md bg-muted px-2 py-1.5 font-mono text-[11px] whitespace-nowrap text-muted-foreground"
+                    title={state.log || undefined}
+                  >
+                    {logPreview || 'The room has not sent a session log yet.'}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    aria-expanded={logOpen}
+                    onClick={() => setLogOpen((value) => !value)}
+                  >
+                    {logOpen ? <Minimize2 /> : <Maximize2 />}
+                    {logOpen ? 'Compress' : 'Expand view'}
+                  </Button>
+                  {logOpen ? (
+                    <Button size="xs" variant="ghost" onClick={copyLog} disabled={!state.log}>
+                      {logCopied ? <Check /> : <Copy />}
+                      {logCopied ? 'Copied' : 'Copy log'}
+                    </Button>
+                  ) : null}
+                </div>
               </section>
 
               {error ? <p className="text-sm text-destructive">{error}</p> : null}

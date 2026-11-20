@@ -33,10 +33,13 @@ import { ActionNotice, CursorOverlay, mediaAction } from './overlay.mjs';
 import {
   cleanCursor,
   cleanCursorSites,
+  cleanCursorStates,
   cleanRoomName,
+  cursorNeedsFollower,
   cursorSiteOf,
   isColour,
   randomColour,
+  restoreCursor,
   siteOf,
 } from './cursor.mjs';
 import { createTrustClient, prepareRecords } from './trust.mjs';
@@ -76,15 +79,151 @@ function writeSetting(key, value) {
 // The person who picked a cursor sees it on their own screen too. The image
 // goes on the document, so every site this browser opens carries it.
 const CURSOR_HOTSPOT = 0.12;
+const CURSOR_STYLE_ID = 'brosr-own-cursor-style';
+const CURSOR_NODE_ATTR = 'data-brosr-own-cursor';
+let ownFollower = null;
+
+// A browser draws only the first frame of a cursor image, and one image cannot
+// follow the element under the point. A moving or multi-state pointer gets a
+// follower element instead, and the native arrow is hidden while it is up. The
+// follower never takes a click, so the page behaves exactly as it did.
+function clearOwnFollower() {
+  if (ownFollower) {
+    window.removeEventListener('mousemove', ownFollower.move, true);
+    window.removeEventListener('mouseout', ownFollower.out, true);
+    window.removeEventListener('blur', ownFollower.hide);
+    ownFollower = null;
+  }
+  const node = document.querySelector(`[${CURSOR_NODE_ATTR}]`);
+  if (node) node.remove();
+  const style = document.getElementById(CURSOR_STYLE_ID);
+  if (style) style.remove();
+}
+
+// The role follows the element under the point, so a link shows the set's link
+// pointer and a field shows its text beam.
+function ownRoleAt(x, y) {
+  const node = document.elementFromPoint(x, y);
+  if (!node || typeof node.closest !== 'function') return 'default';
+  if (node.closest('[aria-disabled="true"], :disabled')) return 'not-allowed';
+  const field = node.closest(
+    'textarea, input, select, [contenteditable=""], [contenteditable="true"], [role="textbox"]'
+  );
+  if (field) {
+    const type = field.tagName === 'INPUT' ? String(field.type || '').toLowerCase() : '';
+    if (
+      ['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'file', 'color'].includes(type)
+    ) {
+      return 'pointer';
+    }
+    return 'text';
+  }
+  if (
+    node.closest('a[href], area[href], button, summary, [role="link"], [role="button"], label[for]')
+  ) {
+    return 'pointer';
+  }
+  if (node.closest('[draggable="true"]')) return 'move';
+  return 'default';
+}
+
+function attachOwnFollower(cursor) {
+  const states = cursor.states || {};
+  const fallback = { src: cursor.src, w: cursor.w || 32, h: cursor.h || 32 };
+  const host = document.createElement('div');
+  host.setAttribute(CURSOR_NODE_ATTR, '');
+  Object.assign(host.style, {
+    position: 'fixed',
+    left: '0',
+    top: '0',
+    width: '0',
+    height: '0',
+    display: 'none',
+    pointerEvents: 'none',
+    zIndex: '2147483647',
+    contain: 'strict',
+  });
+  const image = document.createElement('img');
+  image.alt = '';
+  Object.assign(image.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    display: 'block',
+    pointerEvents: 'none',
+    willChange: 'transform',
+  });
+  host.appendChild(image);
+  document.documentElement.appendChild(host);
+  const style = document.createElement('style');
+  style.id = CURSOR_STYLE_ID;
+  style.textContent = 'html, html * { cursor: none !important; }';
+  document.documentElement.appendChild(style);
+
+  const follower = { role: '', roleAt: 0, size: { w: 32, h: 32 }, shown: false };
+  const show = (role) => {
+    follower.role = role;
+    const state = states[role] || fallback;
+    follower.size = {
+      w: Math.max(12, Math.min(96, Number(state.w) || 32)),
+      h: Math.max(12, Math.min(96, Number(state.h) || 32)),
+    };
+    image.style.width = `${follower.size.w}px`;
+    image.style.height = `${follower.size.h}px`;
+    if (image.getAttribute('src') !== state.src) image.src = state.src;
+  };
+  const move = (event) => {
+    const now = Date.now();
+    // The element under the point is read a few times a second, not on every
+    // mouse event, because closest() over a deep tree is not free.
+    if (!follower.role || now - follower.roleAt > 80) {
+      follower.roleAt = now;
+      show(ownRoleAt(event.clientX, event.clientY));
+    }
+    if (!follower.shown) {
+      follower.shown = true;
+      host.style.display = 'block';
+    }
+    const hotX = Math.round(follower.size.w * CURSOR_HOTSPOT);
+    const hotY = Math.round(follower.size.h * CURSOR_HOTSPOT);
+    image.style.transform = `translate(${event.clientX - hotX}px, ${event.clientY - hotY}px)`;
+  };
+  const hide = () => {
+    follower.shown = false;
+    host.style.display = 'none';
+  };
+  const out = (event) => {
+    if (!event.relatedTarget) hide();
+  };
+  window.addEventListener('mousemove', move, { capture: true, passive: true });
+  window.addEventListener('mouseout', out, true);
+  window.addEventListener('blur', hide);
+  ownFollower = { move, out, hide };
+}
+
 function applyOwnCursor(cursor) {
   const root = document.documentElement;
   if (!root) return;
-  if (cursor && cursor.src) {
-    const hotspot = Math.max(0, Math.round((Number(cursor.w) || 32) * CURSOR_HOTSPOT));
-    root.style.setProperty('cursor', `url("${cursor.src}") ${hotspot} ${hotspot}, auto`);
-  } else {
+  clearOwnFollower();
+  if (!cursor || !cursor.src) {
     root.style.removeProperty('cursor');
+    return;
   }
+  if (cursorNeedsFollower(cursor)) {
+    attachOwnFollower(cursor);
+    return;
+  }
+  const hotspot = Math.max(0, Math.round((Number(cursor.w) || 32) * CURSOR_HOTSPOT));
+  root.style.setProperty('cursor', `url("${cursor.src}") ${hotspot} ${hotspot}, auto`);
+}
+
+// The background page echoes this cursor every two seconds. The states are
+// only needed where the pointer is drawn, and the broadcast that changes the
+// cursor already delivers them, so the echo carries the room shape only.
+function wireCursor() {
+  if (!ownCursor) return null;
+  const { states: _states, ...base } = ownCursor;
+  return base;
 }
 
 // The panel button stays off unrelated pages. A room page is the landing page
@@ -579,7 +718,7 @@ export async function start() {
   })();
   const savedColour = readSetting('brosr-colour');
   const colour = isColour(savedColour) ? savedColour : randomColour();
-  const savedCursor = cleanCursor((() => {
+  const savedCursor = restoreCursor((() => {
     try {
       return JSON.parse(readSetting(`brosr-cursor:${room}`) || 'null');
     } catch {
@@ -1681,7 +1820,7 @@ export async function start() {
           type: 'brosr:room-hello',
           role,
           build: bridgeBuild,
-          cursor: showOwnCursor ? ownCursor : null,
+          cursor: showOwnCursor ? wireCursor() : null,
         })
         .catch(() => {});
     hello();
@@ -1831,11 +1970,12 @@ export async function start() {
         if (message.cursor && !next) {
           return reply({ ok: false, reason: 'bad-cursor' });
         }
-        writeSetting(
-          `brosr-cursor:${room}`,
-          next ? JSON.stringify(next) : null
-        );
-        ownCursor = next || null;
+        // The room gets one image, but this person keeps every state of the
+        // set. The states never enter a presence frame.
+        const states = cleanCursorStates(message.cursor && message.cursor.states);
+        const local = next ? { ...next, ...(states ? { states } : {}) } : null;
+        writeSetting(`brosr-cursor:${room}`, local ? JSON.stringify(local) : null);
+        ownCursor = local;
         applyOwnCursor(showOwnCursor ? ownCursor : null);
         // Every tab shows the same pointer, so the image has to leave this
         // page as well as join the room.

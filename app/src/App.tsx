@@ -364,7 +364,6 @@ export default function App() {
                 onNext={hostRoom}
                 onJoin={() => setJoinOpen(true)}
                 onJoinRoom={joinDiscovered}
-                onFriends={() => setFriendsOpen(true)}
               />
             ) : null}
 

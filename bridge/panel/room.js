@@ -141,19 +141,32 @@ function renderSettings(data) {
     ].filter(Boolean)),
   ];
   const custom = Boolean(data && data.cursor && data.cursor.src);
-  const signature = `${Boolean(data)}|${custom}|${data && data.colour}|${colours.join(',')}`;
+  // A colour another person holds cannot be picked. Control does not change
+  // that, and a colour that was assigned to them counts the same way.
+  const peers = Array.isArray(data && data.peerList)
+    ? data.peerList
+    : Array.isArray(data && data.peers)
+      ? data.peers
+      : [];
+  const taken = new Set(
+    peers
+      .filter((peer) => peer && !peer.self && typeof peer.colour === 'string')
+      .map((peer) => peer.colour.toLowerCase())
+  );
+  const signature = `${Boolean(data)}|${custom}|${data && data.colour}|${colours.join(',')}|${[...taken].sort().join(',')}`;
   if (grid.dataset.signature !== signature) {
     grid.dataset.signature = signature;
     grid.replaceChildren();
     for (const colour of colours) {
       const button = document.createElement('button');
+      const inUse = taken.has(colour.toLowerCase());
       button.type = 'button';
       button.className = 'colour-swatch';
       button.style.background = colour;
-      button.title = colour;
-      button.setAttribute('aria-label', `Use ${colour}`);
+      button.title = inUse ? `${colour} is already in use` : colour;
+      button.setAttribute('aria-label', inUse ? `${colour} is already in use` : `Use ${colour}`);
       button.setAttribute('aria-pressed', String(Boolean(data && data.colour === colour)));
-      button.disabled = !data || custom;
+      button.disabled = !data || custom || inUse;
       button.addEventListener('click', () => setRoomColour(colour, button));
       grid.append(button);
     }
@@ -422,6 +435,22 @@ function cursorSetUrl(value) {
   return url;
 }
 
+// The set link names the set: /cursor/scuba-cat-cursor-set. The room shows
+// that name instead of one state's file name.
+function cursorSetName(value) {
+  try {
+    const part = new URL(String(value || '')).pathname.split('/').filter(Boolean).pop() || '';
+    const words = part
+      .replace(/-cursor-set$/i, '')
+      .replace(/-cursor$/i, '')
+      .split('-')
+      .filter(Boolean);
+    return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ').slice(0, 40);
+  } catch {
+    return '';
+  }
+}
+
 function parseCursorSet(html, base) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const cards = [];
@@ -442,6 +471,20 @@ function parseCursorSet(html, base) {
       .trim();
     seen.add(href);
     cards.push({ name: text || 'Cursor', href, preview });
+  }
+  // A single cursor page lists no set. It still names its own preview, so the
+  // page offers that one pointer instead of failing.
+  if (!cards.length) {
+    const meta = doc.querySelector('meta[property="og:image"], link[rel="image_src"]');
+    try {
+      const raw = meta ? meta.getAttribute('content') || meta.getAttribute('href') || '' : '';
+      const preview = raw ? new URL(raw, base).toString() : '';
+      if (/^https?:/i.test(preview)) {
+        cards.push({ name: cursorSetName(String(base)) || 'Cursor', href: String(base), preview });
+      }
+    } catch {
+      // A page with no readable preview stays empty.
+    }
   }
   return cards.slice(0, 40);
 }
@@ -557,6 +600,50 @@ async function chooseCursor(card, button) {
   }
 }
 
+// A set is one pointer per Windows role. Loading every preview keeps the
+// states this person will use on their own page, and the default one is what
+// the room draws for everyone else.
+async function useWholeSet(button) {
+  if (!cursorCards.length) return;
+  cursorBusy = true;
+  button.disabled = true;
+  setCursorStatus(`Loading all ${cursorCards.length} pointers...`);
+  try {
+    const loaded = await Promise.all(
+      cursorCards.map(async (card) => {
+        try {
+          const image = await cursorImage(card.preview);
+          return { ...image, name: card.name };
+        } catch {
+          // One state that will not load does not sink the set.
+          return null;
+        }
+      })
+    );
+    const states = loaded.filter(Boolean);
+    if (!states.length) throw new Error('No pointer in that set would load.');
+    const base =
+      states.find((state) => /(^|\s)(normal|default|arrow)(\s|$)/i.test(state.name)) || states[0];
+    const reply = await roomMessage({
+      type: 'brosr:cursor',
+      cursor: {
+        ...base,
+        name: cursorSetName($('cursor-set').value) || base.name,
+        states,
+      },
+    });
+    if (!reply || !reply.ok) throw new Error('The room did not accept that set.');
+    notice(`Using all ${states.length} pointer states.`);
+    await refresh();
+  } catch (error) {
+    setCursorStatus(String((error && error.message) || error), true);
+    notice('That set did not load.', true);
+  } finally {
+    cursorBusy = false;
+    button.disabled = false;
+  }
+}
+
 // A challenged request can hang instead of failing, so every read of the site
 // carries a deadline and the tab fallback takes over when it expires.
 async function fetchWithDeadline(url, ms, options) {
@@ -648,7 +735,8 @@ async function loadCursorSet() {
     if (!cards.length) throw new Error('That page does not list a cursor set.');
     cursorCards = cards;
     renderCursorCards(cards);
-    setCursorStatus(`${cards.length} pointers. Pick one for the room.`);
+    $('cursor-use-set').hidden = false;
+    setCursorStatus(`${cards.length} pointers. Use the whole set for every state, or pick one.`);
     notice('Cursor set loaded.');
   } catch (error) {
     setCursorStatus(String((error && error.message) || error), true);
@@ -1498,6 +1586,7 @@ for (const button of tabButtons) {
 selectTab('tab-room');
 
 $('cursor-load').addEventListener('click', loadCursorSet);
+$('cursor-use-set').addEventListener('click', () => useWholeSet($('cursor-use-set')));
 $('cursor-set').addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();

@@ -149,6 +149,97 @@ export function nextColour(used = []) {
   return ROOM_COLOURS[0];
 }
 
+// A cursors-4u set carries one pointer per Windows role. Only the default
+// role travels to the room, because a remote cursor is drawn at a point and
+// has no element under it to choose a state from. The person holding the
+// cursor uses every state on their own page.
+export const CURSOR_ROLES = [
+  'default',
+  'pointer',
+  'text',
+  'wait',
+  'progress',
+  'help',
+  'not-allowed',
+  'move',
+  'crosshair',
+  'ns-resize',
+  'ew-resize',
+  'nwse-resize',
+  'nesw-resize',
+];
+
+// A set names its files after the Windows pointer roles, often with the set
+// name in front ("Scuba Cat Link Select"). Matching the role words keeps a
+// renamed file in its role, and an unknown name falls back to the arrow.
+export function cursorRole(value) {
+  const text = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  if (!text) return 'default';
+  if (text.includes('unavailable') || text.includes('not allowed')) return 'not-allowed';
+  if (text.includes('busy') || text.includes('wait')) return 'wait';
+  if (text.includes('working') || text.includes('app starting') || text.includes('background')) {
+    return 'progress';
+  }
+  if (text.includes('help')) return 'help';
+  // Diagonal 2 comes first, because its name contains Diagonal 1's word too.
+  if (text.includes('diagonal') && /\b(2|two)\b/.test(text)) return 'nesw-resize';
+  if (text.includes('diagonal')) return 'nwse-resize';
+  if (text.includes('vertical') || text.includes('north south')) return 'ns-resize';
+  if (text.includes('horizontal') || text.includes('east west')) return 'ew-resize';
+  // Handwriting holds the word hand, so the text roles are read first.
+  if (text.includes('handwriting') || text.includes('text') || text.includes('beam')) return 'text';
+  if (text.includes('link') || text.includes('hand')) return 'pointer';
+  if (text.includes('crosshair') || text.includes('precision')) return 'crosshair';
+  if (text.includes('move')) return 'move';
+  return 'default';
+}
+
+// A set arrives from the panel as a list of named images, and from storage as
+// a role map. One image per role is enough, and the first one wins so a set
+// with two Normal files still has one arrow.
+export function cleanCursorStates(value) {
+  let entries = [];
+  if (Array.isArray(value)) {
+    entries = value;
+  } else if (value && typeof value === 'object') {
+    entries = CURSOR_ROLES.filter((role) => value[role]).map((role) => ({
+      ...value[role],
+      role,
+    }));
+  }
+  const states = {};
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const state = cleanCursor(entry);
+    if (!state) continue;
+    const role = CURSOR_ROLES.includes(entry.role) ? entry.role : cursorRole(entry.name);
+    if (states[role]) continue;
+    states[role] = { src: state.src, w: state.w, h: state.h };
+  }
+  return Object.keys(states).length ? states : null;
+}
+
+// The stored cursor keeps every state. cleanCursor still describes the wire
+// shape, so a room frame never carries fifteen images.
+export function restoreCursor(value) {
+  const base = cleanCursor(value);
+  if (!base) return null;
+  const states = cleanCursorStates(value.states);
+  return states ? { ...base, states } : base;
+}
+
+// A browser draws the first frame of a cursor image and never animates it, so
+// a moving pointer needs a follower element. A set with more than one state
+// needs one too, because the image changes with the element under the point.
+export function cursorNeedsFollower(cursor) {
+  if (!cursor || typeof cursor.src !== 'string' || !cursor.src) return false;
+  if (cursor.states && Object.keys(cursor.states).length > 1) return true;
+  return /^data:image\/gif;base64,/i.test(cursor.src);
+}
+
 // A custom pointer is a small, self-contained image. Refusing anything else
 // keeps a remote frame from making a page fetch an arbitrary address.
 export function cleanCursor(value) {

@@ -1,4 +1,4 @@
-import { ArrowRight, ChevronRight, Loader2, Radar, RotateCw, UserPlus } from 'lucide-react';
+import { ArrowRight, ChevronRight, Loader2, Radar, RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import type { Browser, DiscoveredRoom } from '@/lib/host';
@@ -20,7 +20,6 @@ type Props = {
   onNext: () => void;
   onJoin: () => void;
   onJoinRoom: (room: DiscoveredRoom) => void;
-  onFriends: () => void;
 };
 
 export function Welcome({
@@ -40,7 +39,6 @@ export function Welcome({
   onNext,
   onJoin,
   onJoinRoom,
-  onFriends,
 }: Props) {
   const hasSupported = browsers.some((entry) => entry.supported);
 
@@ -188,11 +186,6 @@ export function Welcome({
           Join a room
         </Button>
       </div>
-
-      <Button variant="ghost" size="sm" onClick={onFriends} className="self-start">
-        <UserPlus />
-        Add a friend
-      </Button>
     </div>
   );
 }

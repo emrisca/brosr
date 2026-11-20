@@ -152,7 +152,7 @@
 
         <section class="card" aria-labelledby="custom-cursor-label">
           <p class="section-title" id="custom-cursor-label">Custom cursor</p>
-          <p class="note">Paste a cursors-4u set link, then choose one of its pointers.</p>
+          <p class="note">Paste a cursors-4u set link, then use every state or choose one pointer.</p>
           <label for="cursor-set">Set link</label>
           <div class="invite-row">
             <input
@@ -167,6 +167,9 @@
           <p class="note" id="cursor-status" role="status" aria-live="polite"></p>
           <p class="note" id="cursor-drop" role="status" aria-live="polite" hidden></p>
           <ul class="cursor-results" id="cursor-results"></ul>
+          <button class="peer-control" id="cursor-use-set" type="button" hidden>
+            Use the whole set
+          </button>
           <button class="peer-control" id="cursor-clear" type="button" hidden>
             Use colour instead
           </button>
