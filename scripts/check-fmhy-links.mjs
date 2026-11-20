@@ -57,11 +57,28 @@ export function parseFmhy(markdown) {
     for (const line of section(markdown, title).split(/\r?\n/)) {
       if (!/^\*\s+[🌟⭐]/u.test(line)) continue;
       const sitePart = line.split(' - ')[0];
+      let current = null;
       for (const hit of sitePart.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
         const name = cleanName(hit[1]);
         const url = hit[2];
-        if (!name || /^\d+$/.test(name) || name === 'P-Stream Forks') continue;
-        rows.push({ group, name, url, key: nameKey(name), urlKey: normalizeUrl(url) });
+        if (!name || name === 'P-Stream Forks') continue;
+        if (/^\d+$/.test(name)) {
+          if (current) {
+            current.mirrors.push(url);
+            current.mirrorUrlKeys.push(normalizeUrl(url));
+          }
+          continue;
+        }
+        current = {
+          group,
+          name,
+          url,
+          key: nameKey(name),
+          urlKey: normalizeUrl(url),
+          mirrors: [],
+          mirrorUrlKeys: [],
+        };
+        rows.push(current);
       }
     }
   }
@@ -110,7 +127,8 @@ export function compare(expected, actual) {
     }
     for (const row of want) {
       const found = have.find((entry) => entry.key === row.key);
-      if (found && found.urlKey !== row.urlKey) {
+      const allowed = [row.urlKey, ...(row.mirrorUrlKeys || [])];
+      if (found && !allowed.includes(found.urlKey)) {
         problems.push({ kind: 'changed', ...row, landing: found.url });
       }
     }

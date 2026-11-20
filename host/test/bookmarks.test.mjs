@@ -115,3 +115,27 @@ test('clearing Zen sessions removes the welcome tab-group state', () => {
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
+
+test('Chromium profile seeds Cloudflare DoH in Local State without overriding user settings', () => {
+  const profile = tempProfile();
+  try {
+    pinChromeExtension(profile, []);
+    const localStatePath = path.join(profile, 'Local State');
+    const first = JSON.parse(fs.readFileSync(localStatePath, 'utf8'));
+    assert.deepEqual(first.dns_over_https, {
+      mode: 'secure',
+      templates: 'https://cloudflare-dns.com/dns-query',
+    });
+
+    // Respect an explicit user override already written in Local State.
+    fs.writeFileSync(
+      localStatePath,
+      JSON.stringify({ dns_over_https: { mode: 'off' } })
+    );
+    pinChromeExtension(profile, []);
+    const second = JSON.parse(fs.readFileSync(localStatePath, 'utf8'));
+    assert.deepEqual(second.dns_over_https, { mode: 'off' });
+  } finally {
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});

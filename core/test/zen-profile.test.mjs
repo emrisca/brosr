@@ -56,3 +56,19 @@ test('the room profile still keeps the prefs a room needs', () => {
     fs.rmSync(made.dir, { recursive: true, force: true });
   }
 });
+
+test('the room profile enables DNS-over-HTTPS with native fallback and ECH', () => {
+  const made = written();
+  try {
+    for (const line of [
+      'user_pref("network.trr.mode", 2);',
+      'user_pref("network.trr.uri", "https://mozilla.cloudflare-dns.com/dns-query");',
+      'user_pref("network.dns.echconfig.enabled", true);',
+      'user_pref("network.dns.http3_echconfig.enabled", true);',
+    ]) {
+      assert.ok(made.prefs.includes(line), `the profile lost ${line}`);
+    }
+  } finally {
+    fs.rmSync(made.dir, { recursive: true, force: true });
+  }
+});

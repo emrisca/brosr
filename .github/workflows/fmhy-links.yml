@@ -23,5 +23,4 @@ jobs:
         with:
           node-version: 24.x
       - name: Compare the FMHY source with landing/index.html
-        working-directory: apps/brosr
         run: node scripts/check-fmhy-links.mjs

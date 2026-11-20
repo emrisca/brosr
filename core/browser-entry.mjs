@@ -858,10 +858,9 @@ export async function start() {
 
   const viewport = () => {
     const root = document.documentElement;
-    const max = Math.max(1, root.scrollHeight - window.innerHeight);
     return {
       url: cleanUrl(location.href),
-      scroll: Math.max(0, Math.min(1, window.scrollY / max)),
+      scroll: 0,
       fingerprint: {
         innerWidth: window.innerWidth,
         innerHeight: window.innerHeight,
@@ -873,11 +872,6 @@ export async function start() {
 
   const navigate = (url) => {
     if (url && url !== location.href) location.assign(url);
-  };
-
-  const scrollTo = (ratio) => {
-    const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    window.scrollTo(0, Math.round(ratio * max));
   };
 
   // The IFrame API player lives in page scope, so a bridge hands it in on the
@@ -951,7 +945,6 @@ export async function start() {
     // shows that same page.
     pageUrl: () => cursorKey(location.href),
     navigate,
-    scrollTo,
     // A tile names a new tab. This page has no user gesture to open one with,
     // so its browser opens the page beside the room tab instead.
     openTab: (href) => {

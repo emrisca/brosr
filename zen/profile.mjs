@@ -227,6 +227,12 @@ const PREFS = [
   // the two pages a room opens first, so the strip is filled on the first
   // start and a reused profile keeps whatever the room put there.
   ['brosr.sites', JSON.stringify(['https://www.youtube.com/', 'https://fmhy.net/'])],
+  // DNS-over-HTTPS (mode 2 falls back to native DNS for local/LAN hosts) plus
+  // Encrypted Client Hello keeps ISP DNS/SNI filters from breaking Watch links.
+  ['network.trr.mode', 2],
+  ['network.trr.uri', 'https://mozilla.cloudflare-dns.com/dns-query'],
+  ['network.dns.echconfig.enabled', true],
+  ['network.dns.http3_echconfig.enabled', true],
 ];
 
 function userJs(signaturesRequired, native) {

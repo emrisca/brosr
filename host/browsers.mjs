@@ -658,6 +658,23 @@ export function pinChromeExtension(profile, extensionDir) {
   const ids = dirs.map((dir) => chromeExtensionId(dir));
   prefs.extensions.pinned_extensions = ids;
   fs.writeFileSync(prefsPath, JSON.stringify(prefs));
+  // Seed Cloudflare DNS-over-HTTPS so Chromium enables Encrypted Client Hello
+  // and resolves Watch sites cleanly even behind ISP DNS/SNI filters, while
+  // preserving any explicit user override already in Local State.
+  const localStatePath = path.join(profile, 'Local State');
+  let localState = {};
+  try {
+    localState = JSON.parse(fs.readFileSync(localStatePath, 'utf8'));
+  } catch {
+    localState = {};
+  }
+  if (!localState.dns_over_https || typeof localState.dns_over_https !== 'object') {
+    localState.dns_over_https = {
+      mode: 'secure',
+      templates: 'https://cloudflare-dns.com/dns-query',
+    };
+    fs.writeFileSync(localStatePath, JSON.stringify(localState));
+  }
   return { id: ids[0] || null, ids, pinned: ids };
 }
 

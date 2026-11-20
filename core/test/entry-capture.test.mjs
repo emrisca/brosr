@@ -223,3 +223,8 @@ test('a room frame keeps the anchor instant it arrived with', () => {
   assert.match(body, /const at = Number\(message\.at\) \|\| Date\.now\(\)/);
   assert.doesNotMatch(body, /at: Date\.now\(\)/);
 });
+
+test('the room entry does not mirror host scrolling to guests', () => {
+  assert.doesNotMatch(source, /window\.scrollTo\(/);
+  assert.doesNotMatch(source, /\bscrollTo\b/);
+});

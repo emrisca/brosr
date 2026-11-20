@@ -676,19 +676,19 @@ test('the host announces its page once, then only when the url changes', () => {
   assert.equal(navs[1].url, 'http://x/b.html');
 });
 
-test('the host publishes a scroll ratio when it moves', () => {
+test('the host does not broadcast scroll frames when it scrolls', () => {
   let view = { url: 'http://x/a.html', scroll: 0, fingerprint };
   const { sent, at } = hostWithView(() => view);
   at(1000);
   view = { ...view, scroll: 0.5 };
   at(1100);
+  view = { ...view, scroll: 0.9 };
+  at(1200);
   const views = sent.filter((message) => message.type === 'view');
-  assert.equal(views.length, 1);
-  assert.equal(views[0].scroll, 0.5);
-  assert.deepEqual(views[0].fingerprint, fingerprint);
+  assert.equal(views.length, 0);
 });
 
-test('a peer follows the host url and scroll, and reports a layout mismatch', () => {
+test('a peer follows the host url and reports layout mismatch without mirroring host scroll', () => {
   const navigated = [];
   const scrolled = [];
   const client = createRoomClient({
@@ -704,8 +704,9 @@ test('a peer follows the host url and scroll, and reports a layout mismatch', ()
 
   client.receive(encode({ type: 'nav', url: 'http://x/b.html', roomTime: 1 }), 0);
   client.receive(encode({ type: 'view', scroll: 0.75, fingerprint, roomTime: 1 }), 0);
+  client.receive(encode({ type: 'snapshot', sequence: 1, url: 'http://x/a.html', scroll: 0.6, roomTime: 2 }), 0);
   assert.deepEqual(navigated, ['http://x/b.html']);
-  assert.deepEqual(scrolled, [0.75]);
+  assert.deepEqual(scrolled, []);
   assert.equal(client.publish().layoutMismatch, false);
 
   client.receive(
@@ -717,10 +718,11 @@ test('a peer follows the host url and scroll, and reports a layout mismatch', ()
     }),
     0
   );
+  assert.deepEqual(scrolled, []);
   assert.equal(client.publish().layoutMismatch, true);
 });
 
-test('a view only moves the page it names and a site the host allows', () => {
+test('a view frame checks page and mirror-site policy without scrolling the guest', () => {
   const scrolled = [];
   const client = createRoomClient({
     role: 'peer',
@@ -734,15 +736,15 @@ test('a view only moves the page it names and a site the host allows', () => {
   const frame = (url, scroll = 0.7) =>
     encode({ type: 'view', url, scroll, fingerprint, roomTime: 1 });
 
-  // The host is on another page. Its scroll must not follow here.
+  // The host is on another page.
   const other = client.receive(frame('http://x/b.html'), 0);
   assert.equal(other.ignored, 'other-page');
   assert.deepEqual(scrolled, []);
 
-  // The matching page takes the scroll.
+  // The matching page accepts the view for layout checks without scrolling.
   const same = client.receive(frame('http://x/a.html'), 0);
   assert.equal(same.ok, true);
-  assert.deepEqual(scrolled, [0.7]);
+  assert.deepEqual(scrolled, []);
 
   // A site the host switched off is refused even on the same page.
   client.receive(
@@ -751,14 +753,14 @@ test('a view only moves the page it names and a site the host allows', () => {
   );
   const off = client.receive(frame('http://x/a.html', 0.4), 0);
   assert.equal(off.ignored, 'site-off');
-  assert.deepEqual(scrolled, [0.7]);
+  assert.deepEqual(scrolled, []);
 });
 
-test('the host publishes scroll only for an allowed site and a late guest gets the rule', () => {
+test('setScrollSites broadcasts the mirror-site rule to late joiners without sending scroll views', () => {
   const view = { url: 'http://x/a.html', scroll: 0.2, fingerprint };
   const { client, sent, at } = hostWithView(() => view);
   at(1000);
-  assert.equal(sent.filter((message) => message.type === 'view').length, 1);
+  assert.equal(sent.filter((message) => message.type === 'view').length, 0);
 
   sent.length = 0;
   client.setScrollSites([]);
@@ -767,7 +769,9 @@ test('the host publishes scroll only for an allowed site and a late guest gets t
 
   client.setScrollSites(['http://x']);
   at(1200);
-  assert.equal(sent.filter((message) => message.type === 'view').length, 1);
+  assert.equal(sent.filter((message) => message.type === 'view').length, 0);
+  const policies = sent.filter((message) => message.type === 'scrollpolicy');
+  assert.deepEqual(policies.at(-1).sites, ['http://x']);
 
   client.receive(encode({ type: 'hello', peerId: 'p2', name: 'P', roomTime: 1200 }), 1200);
   const snapshot = sent.filter((message) => message.type === 'snapshot').pop();
@@ -983,14 +987,14 @@ test('two peers in a room report their ids, so a count is never a guess', () => 
   assert.equal(listed.find((peer) => peer.id === 'p2').self, false);
 });
 
-test('a late joiner gets the page and the scroll from the host', () => {
+test('a late joiner gets the page url from the host without inheriting host scroll', () => {
   const view = { url: 'http://x/a.html', scroll: 0.4, fingerprint };
   const { client, sent, at } = hostWithView(() => view);
   at(1000);
   client.receive(encode({ type: 'hello', peerId: 'p2', name: 'P', roomTime: 1000 }), 1000);
   const snapshot = sent.filter((message) => message.type === 'snapshot').pop();
   assert.equal(snapshot.url, 'http://x/a.html');
-  assert.equal(snapshot.scroll, 0.4);
+  assert.equal(snapshot.scroll, 0);
 });
 
 test('presence latency lands in the published sample list', () => {

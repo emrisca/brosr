@@ -29,16 +29,14 @@ control drives playback from its own copy, and the room follows it. A copy this 
 the room panel's stopped list, the panel header shows how many are waiting, and Resume puts that
 same tab back in the room without opening a second copy.
 
-**Layer 2 detail.** Scroll travels as a ratio of document height, and the receiver clamps it
-to its own maximum. The receiver sends back a fingerprint of `innerWidth`, `innerHeight`,
-`devicePixelRatio` and `scrollWidth`. When the fingerprint differs by more than 5%, the room
-shows a notice. The layouts are not the same, so a relayed click may hit a different element.
+**Layer 2 detail.** Host scrolling is kept local and is not mirrored to guests, so each
+person scrolls independently. Viewport fingerprints (`innerWidth`, `innerHeight`,
+`devicePixelRatio`, and `scrollWidth`) still detect layout mismatches (> 5% drift) so a
+relayed click does not land on the wrong element.
 
-Each view names the page it came from, and a guest ignores a view for another page. The host
-also names the sites the room mirrors. The list gates scroll, and it gates relayed clicks,
-keys, wheel and text on both the sender and the receiver. No list means every site, and an
-empty list means none, so a room that never edits the setting behaves as it did before it
-existed.
+The host also names the mirror sites where relayed clicks, keys, wheel (when granted), and
+text are allowed on both sender and receiver. No list means every site, and an empty list
+means none.
 
 **Layer 4 detail.** Pointer positions travel in two forms. Page coordinates for ordinary
 pages, and canvas-relative fractions when the event target sits inside a `<canvas>`. The

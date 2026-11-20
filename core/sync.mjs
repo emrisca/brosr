@@ -430,10 +430,9 @@ export function createRoomClient({
     return [...next];
   }
 
-  // The scroll list is separate from the pointer list. A room can follow the
-  // host on an article while leaving the pointer off, and the reverse is true
-  // as well. A null list means every site, so a room that never edits it
-  // behaves exactly as it did before this setting existed.
+  // The mirror site list is separate from the pointer list and gates relayed
+  // clicks, keys, wheel and typing. Host scroll is never mirrored to guests.
+  // A null list means every site, and an empty list means none.
   function setScrollSites(value) {
     if (!isHost()) return null;
     const next = value === null ? null : cleanCursorSites(value) || [];
@@ -441,21 +440,6 @@ export function createRoomClient({
     // A record queued before the change must not cross a site just switched off.
     batcher?.clear();
     sendMessage({ type: 'scrollpolicy', peerId, sites: next, roomTime: roomTimeOf() });
-    // Turning a site back on should land its current position at once. A host
-    // that scrolls before the next poll would otherwise leave the guest on the
-    // position it had when the site was switched off.
-    const view = viewport ? viewport() : null;
-    if (view && typeof view.scroll === 'number' && scrollAllowed(view.url)) {
-      state.applyView({ scroll: view.scroll });
-      stats.scroll = state.scroll;
-      sendMessage({
-        type: 'view',
-        url: view.url,
-        scroll: state.scroll,
-        fingerprint: view.fingerprint,
-        roomTime: roomTimeOf(),
-      });
-    }
     return next === null ? null : [...next];
   }
 
@@ -1543,18 +1527,8 @@ export function createRoomClient({
       const here = viewport ? viewport().url : null;
       if (!isHost() && navigate && here && here !== message.url) navigate(message.url);
     }
-    if (typeof message.scroll === 'number') {
-      state.scroll = message.scroll;
-      // A snapshot names its page too. A guest that has moved elsewhere must
-      // not take the host's scroll with it.
-      if (
-        !isHost() &&
-        scrollTo &&
-        (!message.url || scrollAllowed(message.url))
-      ) {
-        scrollTo(message.scroll);
-      }
-    }
+    // Host scroll is never mirrored to guests, even if an older host sends a
+    // non-zero scroll ratio in its snapshot.
   }
 
   function receive(frame, local = now()) {
@@ -1667,12 +1641,12 @@ export function createRoomClient({
           return { ok: true, ignored: 'site-off' };
         }
         const applied = state.applyView({ scroll: message.scroll, fingerprint: message.fingerprint });
-        stats.scroll = applied.scroll;
         stats.layoutMismatch = applied.mismatch;
         // The notice belongs to the mismatch that caused it. Once the pages
         // line up again the banner has nothing to say.
         if (!applied.mismatch) stats.layoutNotice = null;
-        if (!isHost() && scrollTo) scrollTo(applied.scroll);
+        // Host scroll is never mirrored to guests; view frames only update
+        // layout-mismatch checks for relayed clicks.
         return { ok: true, ...applied };
       }
       case 'presence':
@@ -1841,8 +1815,8 @@ export function createRoomClient({
     sendMessage(message);
   }
 
-  // Layer 1 and 2 on the host: it is the only side that publishes a URL or a
-  // scroll ratio, so a relayed view cannot fight the host's page.
+  // Layer 1 on the host: publishes URL changes and tracks visited sites.
+  // Host scroll position is kept local and never broadcast to guests.
   function pollViewport(local) {
     if (!viewport || local - lastViewTick < VIEW_TICK_MS) return;
     lastViewTick = local;
@@ -1854,26 +1828,6 @@ export function createRoomClient({
       state.applyNav({ url: view.url });
       sendMessage({ type: 'nav', url: view.url, roomTime: local });
     }
-    if (typeof view.scroll !== 'number') return;
-    const moved = Math.abs(view.scroll - state.scroll) > SCROLL_EPSILON;
-    if (moved) {
-      // This tab is the reference the peer follows. Its own resize is not a
-      // mismatch with a peer, and treating it as one would drop every click the
-      // peer sends from then on.
-      state.applyView({ scroll: view.scroll });
-      stats.scroll = state.scroll;
-    }
-    if (!moved) return;
-    // A site the host switched off still tracks its own position here, so a
-    // later switch back on can send the current place without another scroll.
-    if (!scrollAllowed(view.url)) return;
-    sendMessage({
-      type: 'view',
-      url: view.url,
-      scroll: state.scroll,
-      fingerprint: view.fingerprint,
-      roomTime: local,
-    });
   }
 
   // A resize changes what a share means in pixels. This page's pointer keeps

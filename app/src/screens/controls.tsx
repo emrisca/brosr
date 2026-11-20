@@ -395,7 +395,7 @@ export function RoomControls({ open, onOpenChange }: Props) {
               <section className="flex flex-col gap-2">
                 <p className="text-xs font-medium text-muted-foreground">Mirror sites</p>
                 <p className="text-xs text-muted-foreground">
-                  Choose where the room follows scroll and accepts clicks and typing. A site
+                  Choose where the room accepts relayed clicks and typing. A site
                   joins the list after someone visits it.
                 </p>
                 {scrollSites.length ? (
