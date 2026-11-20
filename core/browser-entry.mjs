@@ -1477,8 +1477,29 @@ export async function start() {
       if (!peer || peer.id === peerId) continue;
       live.add(peer.id);
     }
-    // A peer that leaves is forgotten, so a rejoin is greeted at once.
-    for (const id of [...greeted]) if (!live.has(id)) greeted.delete(id);
+    // A peer that leaves is forgotten, so a rejoin is greeted at once. Any
+    // offers that peer published leave Live tabs too, so a disconnected
+    // browser does not leave stale rows behind.
+    let prunedTabs = false;
+    for (const id of [...greeted]) {
+      if (live.has(id)) continue;
+      greeted.delete(id);
+      const before = sharedTabs.length;
+      const dropped = [];
+      sharedTabs = sharedTabs.filter((entry) => {
+        if (!entry || entry.ownerId !== id) return true;
+        dropped.push(entry.key);
+        return false;
+      });
+      if (sharedTabs.length !== before) {
+        prunedTabs = true;
+        for (const key of dropped) joinedTabs.delete(key);
+      }
+    }
+    if (prunedTabs) {
+      saveJoinedTabs();
+      publishSharedTabs();
+    }
     let fresh = false;
     for (const id of live) {
       if (greeted.has(id)) continue;

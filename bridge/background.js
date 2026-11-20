@@ -122,51 +122,56 @@ api.tabs.query({}).then((tabs) => {
   if (found) save({ roomTabId: found.id });
 }).catch(() => {});
 
-api.tabs.onRemoved.addListener((id) => {
+async function handleTabRemoved(id, remotelyClosed) {
+  // A Chrome MV3 worker wakes on tabs.onRemoved before the startup session
+  // restores finish. Wait for the books (with a short deadline) so a closed
+  // tab is still recognized as a published offer or a remote copy.
+  await restoreBooks();
+  handledRemovals.add(id);
   // A tab this browser published is the room's offer. Closing it withdraws
   // that offer. A copy that arrived from the room is not the offer, so closing
   // it only leaves the sync and returns the row to Open.
   const remoteKey = remoteOrigins.get(id);
   const shared = announced.has(id) && remoteKey === undefined;
   const key = remoteKey ?? id;
-  const remotelyClosed = closing.delete(id);
-  for (const [key, entry] of [...stoppedTabs]) {
-    if (entry.tabId === id) stoppedTabs.delete(key);
+  for (const [entryKey, entry] of [...stoppedTabs]) {
+    if (entry.tabId === id) stoppedTabs.delete(entryKey);
   }
-  forgetAnnounced(id);
+  await forgetAnnounced(id);
   remoteTabs.delete(id);
   remoteOrigins.delete(id);
   mediaTabs.delete(id);
   // A closed tab frees its id, so a later tab must not inherit the stop.
   detachedTabs.delete(id);
   publishedPlaying.delete(String(remoteKey ?? id));
-  save({ mediaTabKeys: mediaBook() });
+  await save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
-  for (const [key, tabId] of [...remoteKeys]) {
+  for (const [entryKey, tabId] of [...remoteKeys]) {
     if (tabId !== id) continue;
-    remoteKeys.delete(key);
+    remoteKeys.delete(entryKey);
     unkeyed = true;
   }
-  if (unkeyed) save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
-  state().then((seen) => {
-    if (id === seen.roomTabId) {
-      save({ roomTabId: null, roomRole: null });
-    }
-  });
+  if (unkeyed) await save({ remoteKeyTabs: Object.fromEntries(remoteKeys) });
+  const seen = await state();
+  if (id === seen.roomTabId) {
+    await save({ roomTabId: null, roomRole: null });
+  }
   // A copy closing is a peer leaving that tab, not the publisher closing it.
   if (remoteKey !== undefined && !shared && !remotelyClosed) {
     notifyLeft(remoteKey).catch(() => {});
   }
-  // A published tab closing closes the same tab everywhere. A close this
-  // browser just applied from the room is already accounted for, so it does
-  // not echo back.
+  // A published tab closing withdraws its offer everywhere, even if control
+  // was revoked after the tab was shared. A close this browser just applied
+  // from the room is already accounted for, so it does not echo back.
   if (shared && !remotelyClosed) {
-    mayShare()
-      .then((allowed) => {
-        if (allowed) announceClose(key);
-      })
-      .catch(() => {});
+    announceClose(key).catch(() => {});
   }
+}
+
+api.tabs.onRemoved.addListener((id) => {
+  removedTabs.add(id);
+  const remotelyClosed = closing.delete(id);
+  handleTabRemoved(id, remotelyClosed).catch(() => {});
 });
 
 // Sharing is host-led. A guest opens what the host announces and never sends
@@ -244,6 +249,10 @@ const announced = new Map();
 // replay is the only frame a late guest gets, so the announced book lives in
 // session storage too, or a host that shared before the restart replays
 // nothing and the newcomer waits for a second share that never comes.
+// Tabs that closed during this worker lifetime. An in-flight sweep or tab
+// update must never resurrect a tab that already closed.
+const removedTabs = new Set();
+const handledRemovals = new Set();
 const announcedBook = () => Object.fromEntries(announced);
 const announcedRestored = state()
   .then((saved) => {
@@ -251,18 +260,18 @@ const announcedRestored = state()
     if (!book || typeof book !== 'object') return;
     for (const [raw, url] of Object.entries(book)) {
       const id = Number(raw);
-      if (validId(id) && typeof url === 'string' && url) announced.set(id, url);
+      if (
+        validId(id) &&
+        typeof url === 'string' &&
+        url &&
+        !handledRemovals.has(id) &&
+        !announced.has(id)
+      ) {
+        announced.set(id, url);
+      }
     }
   })
   .catch(() => {});
-async function rememberAnnounced(id, url) {
-  announced.set(id, url);
-  await save({ announcedTabs: announcedBook() });
-}
-async function forgetAnnounced(id) {
-  if (!announced.delete(id)) return;
-  await save({ announcedTabs: announcedBook() });
-}
 // A shared tab keeps the host tab id that opened it. A later navigation in
 // that tab moves the copy here instead of opening another tab.
 const remoteKeys = new Map();
@@ -277,17 +286,44 @@ const detachedTabs = new Set();
 // offer key and the tab it names until the tab closes or someone resumes it.
 const stoppedTabs = new Map();
 
-state()
+const remoteRestored = state()
   .then((saved) => {
     const book = saved && saved.remoteKeyTabs;
     if (!book || typeof book !== 'object') return;
     for (const [key, id] of Object.entries(book)) {
-      if (!validId(id)) continue;
-      remoteKeys.set(key, id);
-      remoteOrigins.set(id, key);
+      if (!validId(id) || handledRemovals.has(id)) continue;
+      if (!remoteKeys.has(key)) remoteKeys.set(key, id);
+      if (!remoteOrigins.has(id)) remoteOrigins.set(id, key);
     }
   })
   .catch(() => {});
+
+async function restoreBooks() {
+  let timer = null;
+  try {
+    await Promise.race([
+      Promise.all([announcedRestored, remoteRestored]),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 250);
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+async function rememberAnnounced(id, url) {
+  await restoreBooks();
+  if (removedTabs.has(id)) return false;
+  announced.set(id, url);
+  await save({ announcedTabs: announcedBook() });
+  return true;
+}
+async function forgetAnnounced(id) {
+  await restoreBooks();
+  if (!announced.delete(id)) return;
+  await save({ announcedTabs: announcedBook() });
+}
 // Tabs with a player, keyed by the film each one shows. The room tab drives
 // playback through this map, because the film is usually in another tab.
 const mediaTabs = new Map();
@@ -442,8 +478,26 @@ async function mayShare() {
 // A tab that was already open when the room started never loads again, so the
 // navigation events cannot offer it. The room's start and a fresh grant sweep
 // the open tabs once, so a guest sees the pages the host already had.
+async function reconcileClosedAnnounced(all) {
+  await restoreBooks();
+  const liveIds = new Set(all.filter((tab) => validId(tab.id)).map((tab) => tab.id));
+  for (const [raw] of [...announced]) {
+    const id = Number(raw);
+    if (liveIds.has(id) || remoteOrigins.has(id)) continue;
+    publishedPlaying.delete(String(id));
+    await forgetAnnounced(id);
+    await announceClose(id);
+  }
+}
+
 async function sweepTabs() {
-  const all = await api.tabs.query({}).catch(() => []);
+  let all;
+  try {
+    all = await api.tabs.query({});
+  } catch {
+    return;
+  }
+  await reconcileClosedAnnounced(all);
   for (const tab of all) considerTab(tab).catch(() => {});
 }
 
@@ -454,11 +508,14 @@ const announcing = new Set();
 const closing = new Set();
 async function shareTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return false;
+  if (removedTabs.has(tab.id)) return false;
   if (announcing.has(tab.id)) return false;
   announcing.add(tab.id);
   try {
+    await restoreBooks();
+    if (removedTabs.has(tab.id)) return false;
     if (announced.get(tab.id) === tab.url) return false;
-    await rememberAnnounced(tab.id, tab.url);
+    if (!(await rememberAnnounced(tab.id, tab.url))) return false;
     // A tab that arrived from another browser goes out under the key it came
     // with, so the other side navigates that same tab. A tab from this browser
     // names itself.
@@ -468,7 +525,13 @@ async function shareTab(tab) {
     // the remote book made the offer look like a copy, so a replay skipped it
     // and closing it reported a peer leaving instead of withdrawing the offer.
     if (arrived !== undefined && arrived !== null) await mapRemoteKey(key, tab.id);
-    return await announce(tab.url, key, tab.title, mediaTabs.get(tab.id));
+    const sent = await announce(tab.url, key, tab.title, mediaTabs.get(tab.id));
+    if (removedTabs.has(tab.id)) {
+      await forgetAnnounced(tab.id);
+      if (sent && arrived === undefined) await announceClose(key);
+      return false;
+    }
+    return sent;
   } finally {
     announcing.delete(tab.id);
   }
@@ -476,7 +539,11 @@ async function shareTab(tab) {
 
 async function considerTab(tab) {
   if (!tab || !validId(tab.id) || !shareable(tab.url)) return;
+  if (removedTabs.has(tab.id)) return;
+  await restoreBooks();
+  if (removedTabs.has(tab.id)) return;
   if (!(await mayShare())) return;
+  if (removedTabs.has(tab.id)) return;
   // A copy that arrived from the room is this browser's copy, not this
   // person's tab. Navigating it never moves the publisher's offer.
   if (remoteOrigins.has(tab.id)) return;
@@ -484,12 +551,14 @@ async function considerTab(tab) {
   // puts it on a shareable page.
   if (detachedTabs.has(tab.id)) return;
   const seen = await state();
+  if (removedTabs.has(tab.id)) return;
   if (tab.id === seen.roomTabId || isRoomPage(tab.url)) return;
   // A mirrored tab is this browser's copy of another tab. Its navigation is
   // still news to that browser, so it goes out under the key it arrived with.
   // The per-tab URL record below stops the two copies from echoing.
   if (announced.get(tab.id) === tab.url) return;
   await loadPrefs();
+  if (removedTabs.has(tab.id)) return;
   // A ticked tab goes out even when new tabs are off, which is what the panel
   // offers for one tab at a time.
   if (prefs.muted[String(tab.id)]) return;
@@ -582,6 +651,14 @@ async function handle(message, sender) {
         // The room just started on this browser. Tabs that were open before it
         // have no navigation left to announce them, so they are offered here.
         if (roomRole === 'host') sweepTabs().catch(() => {});
+        else {
+          restoreBooks()
+            .then(() => {
+              if (!announced.size) return;
+              return api.tabs.query({}).then((all) => reconcileClosedAnnounced(all));
+            })
+            .catch(() => {});
+        }
       }
     }
     // A tab that opens later still gets the cursor this person picked. The
@@ -779,6 +856,7 @@ async function handle(message, sender) {
     const tabId = Number(message.tabId);
     if (!validId(tabId)) return { ok: false, reason: 'bad-tab' };
     if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    await restoreBooks();
     await loadPrefs();
     const muted = { ...prefs.muted };
     const shared = { ...prefs.shared };
@@ -799,7 +877,9 @@ async function handle(message, sender) {
         await shareTab(tab);
       }
     } else {
+      const wasShared = announced.has(tabId) && !remoteOrigins.has(tabId);
       await forgetAnnounced(tabId);
+      if (wasShared) await announceClose(tabId);
     }
     return { ok: true, shared: Boolean(message.shared) };
   }
@@ -811,10 +891,16 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tabs-replay') {
     if (!(await mayShare())) return { ok: false, reason: 'no-control' };
     // The book restore runs at startup and the ask can beat it.
-    await announcedRestored;
-    const all = await api.tabs.query({}).catch(() => []);
+    await restoreBooks();
+    let all = null;
+    try {
+      all = await api.tabs.query({});
+    } catch {
+      all = null;
+    }
+    if (all) await reconcileClosedAnnounced(all);
     const shown = new Map(
-      all.filter((tab) => validId(tab.id)).map((tab) => [tab.id, tab])
+      (all || []).filter((tab) => validId(tab.id)).map((tab) => [tab.id, tab])
     );
     let sent = 0;
     for (const [raw, url] of announced) {
@@ -894,6 +980,7 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tab-close-local') {
     const key = String(message.key || '');
     if (!key) return { ok: false, reason: 'key' };
+    await restoreBooks();
     const id = remoteKeys.get(key);
     if (!validId(id)) return { ok: true, closed: 0 };
     closing.add(id);

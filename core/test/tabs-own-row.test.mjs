@@ -71,3 +71,13 @@ test('a close drops this browser own row only', () => {
 test('the landing page draws a Sharing row for a tab this browser published', () => {
   assert.match(landing, /textContent = 'Sharing';/);
 });
+
+test('a peer that leaves drops its shared tabs from Live tabs', () => {
+  const start = source.indexOf('const greeted = new Set();');
+  const end = source.indexOf("if (fresh && api && api.runtime && api.runtime.sendMessage)", start);
+  assert.ok(start > 0 && end > start, 'the peer greet loop is missing');
+  const block = source.slice(start, end);
+  assert.match(block, /greeted\.delete\(id\)/);
+  assert.match(block, /entry\.ownerId !== id/);
+  assert.match(block, /publishSharedTabs\(\)/);
+});

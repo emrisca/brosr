@@ -16,10 +16,22 @@ const source = fs.readFileSync(
   'utf8'
 );
 
-function loadBackground({ sessionGet, tabs: seed = [], store = {} } = {}) {
+function loadBackground({
+  sessionGet,
+  localGet,
+  tabs: seed = [],
+  store = {},
+  localStore = {},
+  onSendMessage,
+} = {}) {
   const tabs = seed.slice();
   const saved = store;
+  const localSaved = localStore;
   const created = [];
+  const removedIds = [];
+  const sentMessages = [];
+  const removedListeners = [];
+  const updatedListeners = [];
   let nextId = 10;
   let listener = null;
   let releaseCreate = () => {};
@@ -35,13 +47,13 @@ function loadBackground({ sessionGet, tabs: seed = [], store = {} } = {}) {
         set: async (changes) => Object.assign(saved, changes),
       },
       local: {
-        get: async () => ({}),
-        set: async () => {},
+        get: localGet || (async () => ({ ...localSaved })),
+        set: async (changes) => Object.assign(localSaved, changes),
       },
     },
     tabs: {
-      onUpdated: { addListener: () => {} },
-      onRemoved: { addListener: () => {} },
+      onUpdated: { addListener: (fn) => updatedListeners.push(fn) },
+      onRemoved: { addListener: (fn) => removedListeners.push(fn) },
       onActivated: { addListener: () => {} },
       query: async () => tabs.slice(),
       get: async (id) => tabs.find((tab) => tab.id === id) || null,
@@ -54,8 +66,16 @@ function loadBackground({ sessionGet, tabs: seed = [], store = {} } = {}) {
         return tab;
       },
       update: async () => {},
-      remove: async () => {},
-      sendMessage: async () => ({ ok: true }),
+      remove: async (id) => {
+        removedIds.push(id);
+        const index = tabs.findIndex((tab) => tab.id === id);
+        if (index !== -1) tabs.splice(index, 1);
+      },
+      sendMessage: async (tabId, message) => {
+        sentMessages.push({ tabId, message });
+        if (onSendMessage) return await onSendMessage(tabId, message);
+        return { ok: true };
+      },
     },
     runtime: {
       onMessage: {
@@ -79,10 +99,22 @@ function loadBackground({ sessionGet, tabs: seed = [], store = {} } = {}) {
   vm.runInContext(source, ctx);
 
   return {
+    tabs,
     created,
+    removedIds,
+    sentMessages,
     saved,
+    localSaved,
     listener,
     release: () => releaseCreate(),
+    fireRemoved: (id) => {
+      const index = tabs.findIndex((tab) => tab.id === id);
+      if (index !== -1) tabs.splice(index, 1);
+      for (const fn of removedListeners) fn(id);
+    },
+    fireUpdated: (id, info, tab) => {
+      for (const fn of updatedListeners) fn(id, info, tab);
+    },
   };
 }
 
@@ -273,4 +305,278 @@ test('a stopped copy is not reused for a later offer', async () => {
   assert.equal(second.ok, true);
   assert.notEqual(second.tabId, first.tabId, 'the stopped tab stays out of the room');
   assert.equal(created.length, 2, 'the offer opens its own copy');
+});
+
+test('closing a shared tab right after a worker restart still withdraws it from Live tabs', async () => {
+  // Chrome wakes an idle MV3 service worker on tabs.onRemoved before the async
+  // session storage restores settle. Reading announced synchronously missed the
+  // tab, skipped announceClose, and left the closed tab in session storage and
+  // Live tabs.
+  const store = {
+    roomTabId: 1,
+    roomRole: 'host',
+    announcedTabs: { '2': 'https://example.test/watch' },
+  };
+  let releaseRestore = () => {};
+  const restoreGate = new Promise((resolve) => {
+    releaseRestore = resolve;
+  });
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true },
+      { id: 2, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    sessionGet: async () => {
+      await restoreGate;
+      return { ...store };
+    },
+  });
+
+  bg.fireRemoved(2);
+  releaseRestore();
+
+  await until(
+    () =>
+      bg.sentMessages.some(
+        (entry) =>
+          entry.tabId === 1 &&
+          entry.message &&
+          entry.message.type === 'brosr:tabs-announce' &&
+          entry.message.action === 'close' &&
+          entry.message.key === '2'
+      ),
+    'close announcement sent to room tab'
+  );
+  await until(
+    () => !store.announcedTabs || store.announcedTabs['2'] === undefined,
+    'closed tab removed from session storage'
+  );
+});
+
+test('closing a guest copy right after a worker restart notifies the room tab', async () => {
+  const store = {
+    roomTabId: 1,
+    roomRole: 'peer',
+    remoteKeyTabs: { '7': 12 },
+  };
+  let releaseRestore = () => {};
+  const restoreGate = new Promise((resolve) => {
+    releaseRestore = resolve;
+  });
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=guest', active: true },
+      { id: 12, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    sessionGet: async () => {
+      await restoreGate;
+      return { ...store };
+    },
+  });
+
+  bg.fireRemoved(12);
+  releaseRestore();
+
+  await until(
+    () =>
+      bg.sentMessages.some(
+        (entry) =>
+          entry.tabId === 1 &&
+          entry.message &&
+          entry.message.type === 'brosr:tab-left' &&
+          entry.message.key === '7'
+      ),
+    'tab-left sent to room tab'
+  );
+  assert.equal(store.remoteKeyTabs['7'], undefined, 'closed copy key removed from storage');
+  assert.equal(
+    bg.sentMessages.some(
+      (entry) =>
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        entry.message.action === 'close'
+    ),
+    false,
+    'closing a guest copy does not withdraw the publisher offer'
+  );
+});
+
+test('closing a shared tab after control is revoked still withdraws its offer', async () => {
+  const store = { roomTabId: 1, roomRole: 'peer' };
+  const localStore = { granted: true };
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=guest', active: true },
+      { id: 2, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    localStore,
+  });
+
+  const shared = await ask(bg.listener, { type: 'brosr:tab-share', tabId: 2, shared: true });
+  assert.equal(shared.ok, true);
+  assert.equal(store.announcedTabs['2'], 'https://example.test/watch');
+
+  await ask(bg.listener, {
+    type: 'brosr:room-status',
+    room: 'two',
+    peerId: 'guest',
+    role: 'peer',
+    granted: false,
+  });
+
+  bg.fireRemoved(2);
+
+  await until(
+    () =>
+      bg.sentMessages.some(
+        (entry) =>
+          entry.tabId === 1 &&
+          entry.message &&
+          entry.message.type === 'brosr:tabs-announce' &&
+          entry.message.action === 'close' &&
+          entry.message.key === '2'
+      ),
+    'revoked peer still withdraws its closed tab'
+  );
+});
+
+test('closing a tab while a sweep announcement is in flight does not resurrect it', async () => {
+  const store = {};
+  let releasePrefs = () => {};
+  let prefsStarted = () => {};
+  const prefsGate = new Promise((resolve) => {
+    releasePrefs = resolve;
+  });
+  const prefsReached = new Promise((resolve) => {
+    prefsStarted = resolve;
+  });
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true },
+      { id: 2, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    localGet: async () => {
+      prefsStarted();
+      await prefsGate;
+      return {};
+    },
+  });
+
+  await ask(bg.listener, { type: 'brosr:room-hello', role: 'host' }, { tab: { id: 1 } });
+  await prefsReached;
+  bg.fireRemoved(2);
+  releasePrefs();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(
+    store.announcedTabs && store.announcedTabs['2'],
+    undefined,
+    'closed tab is not resurrected in announcedTabs'
+  );
+  assert.equal(
+    bg.sentMessages.some(
+      (entry) =>
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        !entry.message.action &&
+        String(entry.message.key) === '2'
+    ),
+    false,
+    'closed tab is never announced as open after removal'
+  );
+});
+
+test('unsharing a tab via brosr:tab-share withdraws it from Live tabs', async () => {
+  const store = {};
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true },
+      { id: 2, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+  });
+
+  await ask(bg.listener, { type: 'brosr:room-hello', role: 'host' }, { tab: { id: 1 } });
+  await until(
+    () => store.announcedTabs && store.announcedTabs['2'] === 'https://example.test/watch',
+    'tab 2 announced'
+  );
+
+  const unshared = await ask(bg.listener, { type: 'brosr:tab-share', tabId: 2, shared: false });
+  assert.equal(unshared.ok, true);
+  assert.equal(store.announcedTabs['2'], undefined, 'unshared tab removed from announcedTabs');
+  assert.ok(
+    bg.sentMessages.some(
+      (entry) =>
+        entry.tabId === 1 &&
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        entry.message.action === 'close' &&
+        entry.message.key === '2'
+    ),
+    'unsharing sends a close announcement'
+  );
+});
+
+test('sweepTabs withdraws an announced tab whose close event was missed', async () => {
+  const store = {
+    roomTabId: 1,
+    roomRole: 'host',
+    announcedTabs: { '2': 'https://example.test/closed' },
+  };
+  const bg = loadBackground({
+    tabs: [{ id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true }],
+    store,
+  });
+
+  await ask(bg.listener, { type: 'brosr:room-hello', role: 'host' }, { tab: { id: 1 } });
+
+  await until(
+    () =>
+      bg.sentMessages.some(
+        (entry) =>
+          entry.tabId === 1 &&
+          entry.message &&
+          entry.message.type === 'brosr:tabs-announce' &&
+          entry.message.action === 'close' &&
+          entry.message.key === '2'
+      ),
+    'sweep reconciles missing announced tab'
+  );
+  assert.equal(store.announcedTabs['2'], undefined, 'reconciled tab removed from storage');
+});
+
+test('brosr:tab-close-local waits for remote key restore after a worker restart', async () => {
+  const store = {
+    roomTabId: 1,
+    roomRole: 'peer',
+    remoteKeyTabs: { '7': 12 },
+  };
+  let releaseRestore = () => {};
+  const restoreGate = new Promise((resolve) => {
+    releaseRestore = resolve;
+  });
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=guest', active: true },
+      { id: 12, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    sessionGet: async () => {
+      await restoreGate;
+      return { ...store };
+    },
+  });
+
+  const pending = ask(bg.listener, { type: 'brosr:tab-close-local', key: '7' });
+  releaseRestore();
+  const reply = await pending;
+
+  assert.equal(reply.ok, true);
+  assert.equal(reply.closed, 1);
+  assert.deepEqual(bg.removedIds, [12]);
 });
