@@ -613,12 +613,17 @@ async function startPageMedia() {
   // other's corrections forever. A different act is this person's, even when
   // it comes just after a correction.
   const act = (action) => {
-    if (mediaEchoMatches(remoteEcho, action)) {
+    const isEcho =
+      action === 'seek'
+        ? remote.isEcho(action)
+        : remote.isEcho(action) || mediaEchoMatches(remoteEcho, action);
+    if (isEcho) {
       relay.localDrops.echo = (relay.localDrops.echo || 0) + 1;
       relay.lastLocalDrop = { at: Date.now(), action, reason: 'echo' };
       publishRelay();
       return;
     }
+    remote.noteLocalAct(action);
     reportMedia(action);
   };
   for (const [type, action] of [
@@ -946,19 +951,6 @@ export async function start() {
     // shows that same page.
     pageUrl: () => cursorKey(location.href),
     navigate,
-    // A tile names a new tab. This page has no user gesture to open one with,
-    // so its browser opens the page beside the room tab instead.
-    openTab: (href) => {
-      // A tile lives on the room's own page. A same-site link on a film page
-      // is the sender's own visit, and it reaches this browser as an offer,
-      // so a replayed click opens no copy of it here.
-      if (!isRoomPage(location.href)) return false;
-      if (!api || !api.runtime || !api.runtime.sendMessage) return false;
-      api.runtime
-        .sendMessage({ type: 'brosr:tab-open-local', url: href, key: null })
-        .catch(() => {});
-      return true;
-    },
     mediaAdapter,
     onApp: (message) => {
       // The host app's control panel uses a private app channel. A guest has no
@@ -1049,7 +1041,12 @@ export async function start() {
         if (!joinedTabs.has(offer.key)) return;
         if (api && api.runtime && api.runtime.sendMessage) {
           api.runtime
-            .sendMessage({ type: 'brosr:tab-open-local', url: offer.url, key: offer.key })
+            .sendMessage({
+              type: 'brosr:tab-open-local',
+              url: offer.url,
+              key: offer.key,
+              updateOnly: true,
+            })
             .catch(() => {});
         }
         return;
@@ -1198,6 +1195,7 @@ export async function start() {
           // The ad belongs to the host's film. A viewer tab has to know, so it
           // can wait instead of seeking to the ad's own clock.
           ad: Boolean(message.ad),
+          ...(Number.isFinite(Number(message.rev)) ? { rev: Number(message.rev) } : {}),
           at,
         })
         .catch(() => {});
@@ -1536,7 +1534,7 @@ export async function start() {
     if (Date.now() - lastFilmReportAt < 2000) return;
     const state = mediaStateFromDocument(document, location.href, location.hostname);
     if (!state || !state.key) return;
-    if (relayedMedia.set(state)) client.sendHostMedia(state);
+    if (client.sendHostMedia(state)) relayedMedia.set(state);
   }, 500);
 
   // A greeting runs for every new peer, whatever this browser's role. Two
@@ -1997,6 +1995,7 @@ export async function start() {
     const button = document.createElement('button');
     button.id = 'brosr-panel-button';
     button.type = 'button';
+    button.setAttribute('data-brosr-local', '1');
     button.textContent = 'Room panel';
     button.setAttribute('aria-label', 'Open the Brosr room panel');
     button.addEventListener('click', async () => {
@@ -2210,10 +2209,12 @@ export async function start() {
           client.presence();
         }
         if (client.stats.role === 'host') {
-          const stored = relayedMedia.set(state);
-          lastFilmReportAt = Date.now();
-          if (stored) client.sendHostMedia(state);
-          return reply({ ok: stored });
+          const sent = client.sendHostMedia(state);
+          if (sent) {
+            relayedMedia.set(state);
+            lastFilmReportAt = Date.now();
+          }
+          return reply({ ok: sent });
         }
         // A granted peer drives the room from its own film tab. The background
         // already stopped this report when playback sync is off, so the room
@@ -2296,6 +2297,7 @@ export async function start() {
               url: offer.url,
               key,
               foreground: false,
+              updateOnly: true,
             })
             .catch(() => {});
         }

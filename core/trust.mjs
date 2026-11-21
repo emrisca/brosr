@@ -7,7 +7,14 @@
 // another window has no viewport point here. The receiver resolves it against
 // its own layout, then sends the number.
 
-import { isSensitiveField, pointerLockDecision, resolvePath } from './input.mjs';
+import {
+  isLocalControl,
+  isSensitiveField,
+  isTabOpeningClick,
+  isTabOpeningKey,
+  pointerLockDecision,
+  resolvePath,
+} from './input.mjs';
 
 export { pointerLockDecision };
 
@@ -152,6 +159,12 @@ export function trustDecision(record, doc = null) {
 
   const targetNode = doc && record.path ? resolvePath(doc, record.path) : null;
   if (['click', 'down', 'up'].includes(record.kind)) {
+    if (targetNode && isLocalControl(targetNode)) {
+      return { allow: false, reason: 'local-control' };
+    }
+    if (targetNode && isTabOpeningClick(targetNode, record)) {
+      return { allow: false, reason: 'new-tab' };
+    }
     if (targetNode && isSensitiveField(targetNode)) {
       return { allow: false, reason: 'sensitive' };
     }
@@ -173,11 +186,14 @@ export function trustDecision(record, doc = null) {
   }
   if (record.kind === 'key') {
     const node = targetNode || (doc && doc.activeElement);
+    if (node && isLocalControl(node)) return { allow: false, reason: 'local-control' };
+    if (node && isTabOpeningKey(node, record)) return { allow: false, reason: 'new-tab' };
     if (node && isSensitiveField(node)) return { allow: false, reason: 'sensitive' };
     return keyValue(record) ? { allow: true, reason: 'ok' } : { allow: false, reason: 'key' };
   }
   if (record.kind === 'text') {
     const node = targetNode || (doc && doc.activeElement);
+    if (node && isLocalControl(node)) return { allow: false, reason: 'local-control' };
     if (node && isSensitiveField(node)) return { allow: false, reason: 'sensitive' };
     return String(record.value || '')
       ? { allow: true, reason: 'ok' }
@@ -187,8 +203,9 @@ export function trustDecision(record, doc = null) {
 }
 
 // The page side of the channel. It resolves each record and focuses the field
-// before the keys arrive. Records refused by pointer lock, sensitive-field
-// guards, invalid deltas, or missing layout points are dropped.
+// before the keys arrive. Records refused by pointer lock, local controls,
+// new-tab links, sensitive-field guards, invalid deltas, or missing layout
+// points are dropped.
 export function prepareRecords(records, doc) {
   if (!pointerLockDecision({ doc }).allow) return [];
   const out = [];
@@ -197,8 +214,10 @@ export function prepareRecords(records, doc) {
     if (!pointerLockDecision({ doc, record }).allow) continue;
     const next = { ...record };
     const targetNode = doc && record.path ? resolvePath(doc, record.path) : null;
-    if (['click', 'down', 'up'].includes(record.kind) && targetNode && isSensitiveField(targetNode)) {
-      continue;
+    if (['click', 'down', 'up'].includes(record.kind)) {
+      if (targetNode && isLocalControl(targetNode)) continue;
+      if (targetNode && isTabOpeningClick(targetNode, record)) continue;
+      if (targetNode && isSensitiveField(targetNode)) continue;
     }
     if (record.kind === 'wheel' && !wheelDeltas(record)) continue;
     if (['move', 'click', 'down', 'up', 'wheel'].includes(record.kind)) {
@@ -208,6 +227,8 @@ export function prepareRecords(records, doc) {
     }
     if (record.kind === 'key' || record.kind === 'text') {
       const node = targetNode || (doc && doc.activeElement);
+      if (node && isLocalControl(node)) continue;
+      if (record.kind === 'key' && node && isTabOpeningKey(node, record)) continue;
       if (node && isSensitiveField(node)) continue;
       if (node && typeof node.focus === 'function') {
         try {

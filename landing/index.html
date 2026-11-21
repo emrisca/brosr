@@ -26,12 +26,12 @@
         <span class="dot" aria-hidden="true"></span>
         <span id="room-state-text">Room open on this device</span>
       </p>
-      <button class="room-takeover" id="host-takeover" type="button" hidden>Take over as host</button>
+      <button class="room-takeover" id="host-takeover" type="button" hidden data-brosr-local="1">Take over as host</button>
     </div>
   </header>
 
   <main class="page">
-    <section class="live" id="live-tabs" aria-labelledby="live-title" hidden>
+    <section class="live" id="live-tabs" aria-labelledby="live-title" data-brosr-local="1" hidden>
       <div class="live-head">
         <div class="live-heading">
           <h2 class="live-title" id="live-title">Live tabs</h2>
@@ -657,7 +657,8 @@
           stop.dataset.key = tab.key;
           stop.textContent = 'Stop';
           stop.title = 'Stop syncing and leave the tab open';
-          stop.addEventListener('click', function () {
+          stop.addEventListener('click', function (event) {
+            if (!event.isTrusted) return;
             stopTab(tab.key);
           });
           item.append(synced, stop);
@@ -671,7 +672,8 @@
         button.setAttribute('aria-pressed', 'false');
         if (waiting) button.disabled = true;
         button.textContent = waiting ? 'Opening' : 'Open';
-        button.addEventListener('click', function () {
+        button.addEventListener('click', function (event) {
+          if (!event.isTrusted) return;
           pending = tab.key;
           button.textContent = 'Opening';
           button.disabled = true;

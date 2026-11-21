@@ -109,17 +109,16 @@ test('a room that starts after tabs were opened offers them', () => {
   assert.match(background, /async function sweepTabs\(\) \{/);
 });
 
-test('a replay opens a copy only on the room page', () => {
-  // A room tab keeps its socket after the room follows a film to another site.
-  // The old gate compared the link with that film page, so a same-site new tab
-  // passed and every browser opened a copy nobody asked for. Only a page of
-  // the room itself has tiles.
-  const start = source.indexOf('openTab: (href) => {');
-  assert.ok(start > 0, 'the open hook is missing');
-  const hook = source.slice(start, source.indexOf('mediaAdapter,', start));
-  assert.match(hook, /if \(!isRoomPage\(location\.href\)\) return false;/);
-  assert.ok(
-    hook.indexOf('isRoomPage') < hook.indexOf("type: 'brosr:tab-open-local'"),
-    'the room page guard sits before the browser is asked'
+test('replayed clicks and remote tab updates never auto-open new tabs on another peer', () => {
+  // Tabs never relay open: browser-entry must not pass an openTab callback to
+  // createRoomClient, remote TAB_APP follow updates must pass updateOnly: true,
+  // and background.js must refuse to call api.tabs.create when updateOnly is set.
+  assert.doesNotMatch(source, /openTab\s*:/, 'browser-entry must not wire an openTab relay hook');
+  const joinedFollow = source.slice(
+    source.indexOf('if (!joinedTabs.has(offer.key)) return;'),
+    source.indexOf('if (!joinedTabs.has(offer.key)) return;') + 320
   );
+  assert.match(joinedFollow, /updateOnly:\s*true/);
+  assert.match(background, /const updateOnly = message\.updateOnly === true;/);
+  assert.match(background, /if \(updateOnly\)\s*\{\s*return \{ ok: false, reason: 'no-copy' \};\s*\}/);
 });

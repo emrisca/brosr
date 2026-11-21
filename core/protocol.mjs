@@ -63,6 +63,9 @@ export function validate(message) {
       if (!MEDIA_ACTIONS.has(message.action)) fail(`media action ${message.action} is unknown`);
       if (!isNumber(message.position)) fail('media needs a position in seconds');
       if (!isNumber(message.roomTime)) fail('media needs a roomTime');
+      if (message.rev !== undefined && (!isNumber(message.rev) || message.rev < 0)) {
+        fail('media rev must be a non-negative number');
+      }
       break;
     case 'input':
       if (!Array.isArray(message.records) || !message.records.length) fail('input needs records');

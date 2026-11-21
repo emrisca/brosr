@@ -31,6 +31,9 @@ export const RELAY_BUFFER_WAIT_MS = 2500;
 // large, so the seek branch would win every tick and the film would sit at the
 // old point for the whole room. A fresh seek is what frees it.
 export const RELAY_SEEK_TIMEOUT_MS = 8000;
+// A local seek or play/pause needs a brief grace window against an already
+// in-flight routine tick from the room tab before the room acknowledges it.
+export const RELAY_LOCAL_ACT_GUARD_MS = 1500;
 export const RELAY_NUDGE_RATE = 1.05;
 // The report keeps the recent shape of a stall without growing for a long
 // session. Five entries are enough to see whether a problem is repeating; the
@@ -410,7 +413,6 @@ export class RelayMediaAdapter {
     if (this.handle) return this.handle;
     const adapter = this;
     const read = () => adapter.state();
-    const spot = () => adapter.latest;
     this.handle = {
       adapter,
       get currentTime() {
@@ -489,6 +491,21 @@ export class RemoteMediaSync {
     this.lastSeekAt = -Infinity;
     this.seekIssuedAt = -Infinity;
     this.lastSeekTarget = null;
+    this.lastSeekRev = null;
+    this.lastAppliedRev = null;
+    // True while handle() is mutating the video element so synchronous events
+    // (such as pause/seeked) never escape echo suppression.
+    this.applying = false;
+    // Independent per-action echo expiries so a rate or pause mutation never
+    // clobbers an in-flight seek echo guard.
+    this.echoUntil = { play: -Infinity, pause: -Infinity, seek: -Infinity, rate: -Infinity };
+    // Tracks an in-flight remote seek until seeked lands (even when segment
+    // fetch takes longer than MEDIA_ECHO_MS), while still letting a deliberate
+    // human jump to a different timestamp pass through.
+    this.pendingSeek = null;
+    // Tracks a recent local user act on this tab so an already-in-flight
+    // routine room tick cannot snap the local user back before the room sees it.
+    this.localAct = null;
     // The first tick that wanted a seek outside the buffered range. The wait
     // has a deadline, so a player that never fetches still catches up.
     this.waitingSince = null;
@@ -539,6 +556,83 @@ export class RemoteMediaSync {
     this.rateTrace = [];
     this.bufferWait = null;
     this.holdEvent = null;
+  }
+
+  markEcho(action, now = this.now()) {
+    if (!action || !Object.prototype.hasOwnProperty.call(this.echoUntil, action)) return;
+    this.echoUntil[action] = Math.max(this.echoUntil[action], now + MEDIA_ECHO_MS);
+  }
+
+  // Returns true when a DOM media event belongs to a remote mutation we
+  // applied (synchronous inside handle(), async seeked landing near our remote
+  // seek target, or within the per-action echo window).
+  isEcho(action, now = this.now()) {
+    if (this.applying) return true;
+    if (action === 'seek') {
+      const video = this.video();
+      if (this.pendingSeek) {
+        const pending = this.pendingSeek;
+        if (now - pending.at < RELAY_SEEK_TIMEOUT_MS) {
+          if (video) {
+            const pos = Number(video.currentTime || 0);
+            const elapsed = Math.max(0, (now - pending.at) / 1000);
+            const projected = clamp(
+              pending.target + (pending.playing ? elapsed * pending.rate : 0),
+              Number(video.duration)
+            );
+            if (Math.abs(pos - pending.target) <= 2.5 || Math.abs(pos - projected) <= 2.5) {
+              this.pendingSeek = null;
+              this.markEcho('seek', now);
+              return true;
+            }
+            // The element landed far from our remote seek target, so the user
+            // jumped somewhere else while the seek was in flight.
+            this.pendingSeek = null;
+            this.echoUntil.seek = -Infinity;
+            return false;
+          }
+        } else {
+          this.pendingSeek = null;
+        }
+      }
+      if (now < (this.echoUntil.seek || -Infinity)) {
+        if (video && this.lastSeekTarget !== null) {
+          const pos = Number(video.currentTime || 0);
+          const elapsed = Math.max(0, (now - this.lastSeekAt) / 1000);
+          const projected = clamp(
+            this.lastSeekTarget + (!video.paused ? elapsed * (this.roomRate || 1) : 0),
+            Number(video.duration)
+          );
+          if (Math.abs(pos - this.lastSeekTarget) > 2.5 && Math.abs(pos - projected) > 2.5) {
+            this.echoUntil.seek = -Infinity;
+            return false;
+          }
+        }
+        return true;
+      }
+      return false;
+    }
+    return now < (this.echoUntil[action] || -Infinity);
+  }
+
+  // Record a genuine local user act so an already-in-flight stale routine tick
+  // from the room tab cannot snap the player back before the room processes it.
+  noteLocalAct(action, now = this.now()) {
+    const video = this.video();
+    if (action === 'seek') {
+      this.pendingSeek = null;
+      this.waitingSince = null;
+      this.waitingTarget = null;
+      this.bufferHeld = false;
+      this.bufferReady = false;
+      this.nudging = false;
+    }
+    this.localAct = {
+      action,
+      target: video ? Number(video.currentTime || 0) : null,
+      playing: video ? !video.paused && !video.ended : null,
+      at: now,
+    };
   }
 
   recordEvent(kind, event) {
@@ -684,6 +778,15 @@ export class RemoteMediaSync {
   }
 
   handle(frame) {
+    this.applying = true;
+    try {
+      return this._handle(frame);
+    } finally {
+      this.applying = false;
+    }
+  }
+
+  _handle(frame) {
     const now = this.now();
     const video = this.video();
     if (!video || !frame || !frame.key) return { ok: false, reason: 'no-video' };
@@ -701,7 +804,22 @@ export class RemoteMediaSync {
       this.lastSeekTarget = null;
       this.lastSeekAt = -Infinity;
       this.seekIssuedAt = -Infinity;
+      this.lastSeekRev = null;
+      this.lastAppliedRev = null;
+      this.pendingSeek = null;
+      this.localAct = null;
+      this.echoUntil = { play: -Infinity, pause: -Infinity, seek: -Infinity, rate: -Infinity };
     }
+    const incomingRev =
+      frame.rev !== undefined && frame.rev !== null && Number.isFinite(Number(frame.rev))
+        ? Number(frame.rev)
+        : null;
+    const explicitSeek = frame.action === 'seek';
+    const noteRev = () => {
+      if (incomingRev !== null && (this.lastAppliedRev === null || incomingRev > this.lastAppliedRev)) {
+        this.lastAppliedRev = incomingRev;
+      }
+    };
     // The rate the room asked this tab to follow. Everything below corrects
     // against that rate and never against the corrected element.
     const asked = Number(frame.rate);
@@ -711,7 +829,10 @@ export class RemoteMediaSync {
     // paused until the room sends the release that carries the source's
     // position. A normal tick during that window must not resume the film.
     if (frame.hold === true) {
-      if (!video.paused) video.pause();
+      if (!video.paused) {
+        this.markEcho('pause', now);
+        video.pause();
+      }
       // A hold can be the room's answer to this very buffer wait. Keep the
       // wait, or the release starts the film at the old point and the hold
       // begins again. A hold that came from another source also keeps the
@@ -730,7 +851,10 @@ export class RemoteMediaSync {
     }
     if (this.held && frame.hold !== false) {
       if (now - this.heldAt < RELAY_HOLD_MAX_MS) {
-        if (!video.paused) video.pause();
+        if (!video.paused) {
+          this.markEcho('pause', now);
+          video.pause();
+        }
         // The room hold may be the answer to this buffer wait. Once the range
         // arrives or the wait deadline passes, stop reporting buffering so the
         // room can release; the release frame then seeks instead of waiting.
@@ -771,6 +895,30 @@ export class RemoteMediaSync {
       Number(frame.position || 0) + ahead,
       Number(video.duration)
     );
+
+    // Protect a recent local user act from being reverted by an already
+    // in-flight stale routine tick before the room acknowledges or supersedes it.
+    if (this.localAct) {
+      const expired = now - this.localAct.at >= RELAY_LOCAL_ACT_GUARD_MS;
+      const newerRev =
+        incomingRev !== null &&
+        (this.lastAppliedRev === null || incomingRev > this.lastAppliedRev);
+      const matchedSeek =
+        this.localAct.action === 'seek' &&
+        this.localAct.target !== null &&
+        Math.abs(expected - this.localAct.target) <= 2.0;
+      const matchedPlay =
+        (this.localAct.action === 'play' && Boolean(frame.playing) === true) ||
+        (this.localAct.action === 'pause' && Boolean(frame.playing) === false);
+      if (expired || explicitSeek || newerRev || matchedSeek || matchedPlay) {
+        this.localAct = null;
+      } else {
+        this.stats.skips += 1;
+        this.stats.last = 'local-act';
+        return { ok: true, skipped: 'local-act' };
+      }
+    }
+
     const actual = Number(video.currentTime || 0);
     const drift = actual - expected;
 
@@ -781,8 +929,12 @@ export class RemoteMediaSync {
     // every tick returned from the seek. So the room change lands first, and
     // the seek follows it.
     if (!frame.playing) {
-      if (!video.paused) video.pause();
+      if (!video.paused) {
+        this.markEcho('pause', now);
+        video.pause();
+      }
     } else if (video.paused && !this.bufferHeld) {
+      this.markEcho('play', now);
       startPlayback(video);
     }
 
@@ -805,7 +957,10 @@ export class RemoteMediaSync {
       this.bufferReady = false;
       if (this.bufferHeld) {
         this.bufferHeld = false;
-        if (frame.playing && video.paused) startPlayback(video);
+        if (frame.playing && video.paused) {
+          this.markEcho('play', now);
+          startPlayback(video);
+        }
       }
     }
     // A seek that never lands keeps the drift large, and this branch would win
@@ -821,24 +976,32 @@ export class RemoteMediaSync {
       this.waitingTarget = null;
       this.bufferHeld = false;
       this.bufferReady = false;
+      this.pendingSeek = { target: expected, at: now, playing: Boolean(frame.playing), rate: roomRate };
+      this.markEcho('seek', now);
       video.currentTime = expected;
       // A seek puts the playhead where the room is, so the correction that
       // was closing the old gap no longer applies. Leaving it on the element
       // runs the rest of the film at a rate nobody asked for.
       const rateChanged = setRate(video, roomRate);
       if (rateChanged) {
+        this.markEcho('rate', now);
         this.noteRate(now, 'seek-reset', roomRate, video, drift);
       }
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
+      if (incomingRev !== null) this.lastSeekRev = incomingRev;
       this.recordSeek(now, expected, 'retry');
       this.primed = true;
       this.nudging = false;
       this.stats.stuckSeeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek-retry';
-      if (frame.playing && video.paused) startPlayback(video);
+      noteRev();
+      if (frame.playing && video.paused) {
+        this.markEcho('play', now);
+        startPlayback(video);
+      }
       return {
         ok: true,
         action: 'seek',
@@ -847,15 +1010,21 @@ export class RemoteMediaSync {
         drift: Math.round(drift * 1000) / 1000,
       };
     }
+    // An explicit human seek to a distinct target preempts an in-flight seek
+    // or settle cooldown so rapid jumps converge immediately instead of waiting.
+    const newSeekTarget =
+      explicitSeek &&
+      (this.lastSeekTarget === null || Math.abs(expected - this.lastSeekTarget) > RELAY_DRIFT_SECONDS) &&
+      (incomingRev === null || this.lastSeekRev === null || incomingRev > this.lastSeekRev);
     if (
       Math.abs(drift) > seekLimit &&
-      !video.seeking &&
-      now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS
+      (newSeekTarget || (!video.seeking && now - this.lastSeekAt > RELAY_SEEK_SETTLE_MS))
     ) {
-      // The range check belongs on the element that owns the player. A seek
-      // outside the fetched data is the long stall this path used to take.
-      const rangeReady = this.bufferReady || bufferedAround(video, expected);
-      if (!this.bufferReady && !rangeReady) {
+      // An explicit seek jumps immediately so the player starts fetching the
+      // requested range instead of stalling paused at the old timestamp.
+      // Routine drift ticks still check the buffered range first.
+      const rangeReady = explicitSeek || this.bufferReady || bufferedAround(video, expected);
+      if (!explicitSeek && !this.bufferReady && !rangeReady) {
         if (this.waitingSince === null) {
           this.beginBufferWait(now, expected);
         } else if (this.bufferWait) {
@@ -865,11 +1034,13 @@ export class RemoteMediaSync {
         if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
           const rateChanged = setRate(video, roomRate);
           if (rateChanged) {
+            this.markEcho('rate', now);
             this.noteRate(now, 'buffer-rate', roomRate, video, drift);
           }
           // Stop the film while it waits, or it keeps moving away from the
           // target and the seek has to cover a larger gap when data arrives.
           if (frame.playing && !video.paused) {
+            this.markEcho('pause', now);
             video.pause();
             this.bufferHeld = true;
             this.stats.bufferHolds += 1;
@@ -890,24 +1061,32 @@ export class RemoteMediaSync {
       this.waitingTarget = null;
       this.bufferHeld = false;
       this.bufferReady = false;
+      this.pendingSeek = { target: expected, at: now, playing: Boolean(frame.playing), rate: roomRate };
+      this.markEcho('seek', now);
       video.currentTime = expected;
       // The jump landed, so the nudge that was closing the old gap ends with
       // it. Without this the film keeps the five percent correction until the
       // next tick, and a room that jumps often adds that error every time.
       const rateChanged = setRate(video, roomRate);
       if (rateChanged) {
+        this.markEcho('rate', now);
         this.noteRate(now, 'seek-reset', roomRate, video, drift);
       }
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
+      if (incomingRev !== null) this.lastSeekRev = incomingRev;
       this.recordSeek(now, expected, 'seek');
       this.primed = true;
       this.nudging = false;
       this.stats.seeks += 1;
       this.stats.applied += 1;
       this.stats.last = 'seek';
-      if (frame.playing && video.paused) startPlayback(video);
+      noteRev();
+      if (frame.playing && video.paused) {
+        this.markEcho('play', now);
+        startPlayback(video);
+      }
       return {
         ok: true,
         action: 'seek',
@@ -928,17 +1107,24 @@ export class RemoteMediaSync {
       this.nudging = true;
       const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
       rateChanged = setRate(video, nudge);
-      if (rateChanged) this.noteRate(now, 'nudge', roomRate, video, drift);
+      if (rateChanged) {
+        this.markEcho('rate', now);
+        this.noteRate(now, 'nudge', roomRate, video, drift);
+      }
     } else {
       this.nudging = false;
       rateChanged = setRate(video, roomRate);
-      if (rateChanged) this.noteRate(now, 'room-rate', roomRate, video, drift);
+      if (rateChanged) {
+        this.markEcho('rate', now);
+        this.noteRate(now, 'room-rate', roomRate, video, drift);
+      }
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need
     // a shared volume, and one viewer's headphones are not another's.
     this.stats.applied += 1;
     this.stats.last = 'tick';
+    noteRev();
     return {
       ok: true,
       action: 'tick',

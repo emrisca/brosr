@@ -1033,10 +1033,11 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tab-open-local') {
     if (!shareable(message.url)) return { ok: false, reason: 'url' };
     const key = message.key === undefined || message.key === null ? null : String(message.key);
-    // A click on the landing page brings the copy forward. An automatic open
-    // keeps the tab in the background, so a person is not pulled away from
-    // whatever they were reading.
+    // A click on the landing page brings the copy forward. Remote navigation
+    // updates pass updateOnly so they only update an existing joined copy and
+    // never open a new tab on another peer.
     const foreground = message.foreground === true;
+    const updateOnly = message.updateOnly === true;
     const slot = key === null ? `url:${message.url}` : `key:${key}`;
     if (opening.has(slot)) return { ok: true, opening: true };
     // A shared announcement and a mirrored click can name the same URL at the
@@ -1081,6 +1082,9 @@ async function handle(message, sender) {
           if (key !== null) remoteKeys.delete(key);
           remoteTabs.delete(known);
         }
+      }
+      if (updateOnly) {
+        return { ok: false, reason: 'no-copy' };
       }
       // A tab this browser already shows needs no copy. A second player on the
       // film the host is watching cannot start, and YouTube reports that as an
@@ -1288,6 +1292,7 @@ async function handle(message, sender) {
             rate: message.rate,
             volume: message.volume,
             ad: Boolean(message.ad),
+            ...(Number.isFinite(Number(message.rev)) ? { rev: Number(message.rev) } : {}),
             ...(typeof message.hold === 'boolean' ? { hold: message.hold } : {}),
             at: message.at,
           })

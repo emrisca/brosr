@@ -158,6 +158,65 @@ function attribute(element, name) {
   return String(element[name] || '');
 }
 
+// Local browser controls (overlays, Live Tabs Open/Stop rows, host takeover,
+// panel button) belong strictly to the local reader and never cross the room.
+export function isLocalControl(element) {
+  if (!element || typeof element !== 'object') return false;
+  if (typeof element.closest === 'function') {
+    if (
+      element.closest('[data-brosr-overlay]') ||
+      element.closest('[data-brosr-local]') ||
+      element.closest('#live-tabs') ||
+      element.closest('#brosr-panel-button') ||
+      element.closest('#host-takeover')
+    ) {
+      return true;
+    }
+  }
+  const id = attribute(element, 'id');
+  if (id === 'live-tabs' || id === 'brosr-panel-button' || id === 'host-takeover') return true;
+  return Boolean(attribute(element, 'data-brosr-overlay') || attribute(element, 'data-brosr-local'));
+}
+
+// A link interaction that opens a new tab or window (target="_blank", named
+// target, middle-click, or Cmd/Ctrl/Shift-click) is local only; tabs never
+// relay open across peers.
+export function isTabOpeningClick(element, record = {}) {
+  if (!element || typeof element !== 'object') return false;
+  const link =
+    typeof element.closest === 'function'
+      ? element.closest('a[href]') || element.closest('area[href]')
+      : null;
+  const anchor =
+    link ||
+    (['a', 'area'].includes(String(element.tagName || '').toLowerCase()) &&
+    (element.href || attribute(element, 'href'))
+      ? element
+      : null);
+  if (!anchor) return false;
+  const targetName = String(anchor.target || attribute(anchor, 'target') || '')
+    .trim()
+    .toLowerCase();
+  if (targetName && targetName !== '_self') return true;
+  const button = Number(record && record.button);
+  if (button === 1) return true;
+  if (
+    Boolean(record && (record.ctrl || record.ctrlKey)) ||
+    Boolean(record && (record.meta || record.metaKey)) ||
+    Boolean(record && (record.shift || record.shiftKey))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isTabOpeningKey(element, record = {}) {
+  if (!element || typeof element !== 'object') return false;
+  const key = String((record && record.key) || '');
+  if (key !== 'Enter' && key !== 'Return' && key !== 'NumpadEnter') return false;
+  return isTabOpeningClick(element, record);
+}
+
 // Password fields, credential hints and payment fields never receive relayed
 // input, whatever the sender asks for.
 export function isSensitiveField(element) {
@@ -187,8 +246,14 @@ export function inputCaptureDecision({
   if (event && event.isTrusted === false) {
     return { allow: false, reason: 'untrusted' };
   }
+  if (event && event.target && isLocalControl(event.target)) {
+    return { allow: false, reason: 'local-control' };
+  }
   if (event && event.target && isSensitiveField(event.target)) {
     return { allow: false, reason: 'sensitive' };
+  }
+  if (event && event.target && (isTabOpeningClick(event.target, event) || isTabOpeningKey(event.target, event))) {
+    return { allow: false, reason: 'new-tab' };
   }
   return { allow: true, reason: 'ok' };
 }
@@ -366,24 +431,13 @@ function dispatch(root, element, event) {
   return true;
 }
 
-// A real click follows a link. A dispatched click does not, because a browser
-// never runs an untrusted event's default action. A room tile that opens a page
-// is a link, so the room repeats the one default it needs after the page has
-// seen the click. A room tile names a new tab. Replaying that click cannot open
-// one from the page, because a page without a gesture is refused, so the
-// receiver asks its browser through the hook the entry passes in.
-// Only a page of this room is repeated that way. A link to another site is the
-// sender's own visit, and their browser publishes that tab as an offer, so a
-// copy that opened here would be one nobody asked for.
-function sameOrigin(href, location) {
-  const page = location ? String(location.origin || location.href || '') : '';
-  const here = normalizeOrigin(page);
-  if (!here) return false;
-  return normalizeOrigin(href) === here;
-}
-
-function activateLink(target, root, record = {}, openTab = null) {
+// A real click follows a same-tab link. A dispatched click does not, because a
+// browser never runs an untrusted event's default action. Links that ask for a
+// new tab or window (target="_blank", named targets, middle/modifier clicks)
+// are never relayed open across peers.
+function activateLink(target, root, record = {}) {
   if (record.button) return false;
+  if (isTabOpeningClick(target, record)) return false;
   const link =
     target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
   if (!link) return false;
@@ -391,17 +445,8 @@ function activateLink(target, root, record = {}, openTab = null) {
   const href = String(link.href || '');
   if (!href || /^\s*javascript:/i.test(href)) return false;
   const targetName = String(link.target || '').toLowerCase();
+  if (targetName && targetName !== '_self') return false;
   const doc = root && root.location ? root : link.ownerDocument;
-  if (targetName && targetName !== '_self') {
-    // A named frame or window has no meaning on this page, so only a new tab
-    // is repeated. The room tab itself must keep its socket, which is why the
-    // page is not assigned here.
-    if (targetName !== '_blank' || !openTab) return false;
-    // A peer's tab on an outside site reaches everyone as an offer, so the
-    // click that created it is not repeated here as an unasked copy.
-    if (!sameOrigin(href, doc && doc.location)) return false;
-    return openTab(href) !== false;
-  }
   const location = doc && doc.location;
   if (!location || typeof location.assign !== 'function') return false;
   location.assign(href);
@@ -452,8 +497,8 @@ function wheelPoint(target, record) {
   return { x: 0, y: 0 };
 }
 
-// Replay one batch. Every record passes the pointer-lock, grant, target and
-// field guards before anything reaches the page.
+// Replay one batch. Every record passes the pointer-lock, grant, target,
+// local-control, new-tab and sensitive-field guards before anything reaches the page.
 export function replayInput(
   records,
   {
@@ -461,8 +506,6 @@ export function replayInput(
     allowed = () => true,
     onDrop = () => {},
     layoutMatches = true,
-    // A link that asks for a new tab. The receiver's own browser opens it.
-    openTab = null,
   } = {}
 ) {
   const view = root && root.defaultView ? root.defaultView : globalThis;
@@ -501,6 +544,14 @@ export function replayInput(
         drop('target');
         continue;
       }
+      if (isLocalControl(target)) {
+        drop('local-control');
+        continue;
+      }
+      if (isTabOpeningClick(target, record)) {
+        drop('new-tab');
+        continue;
+      }
       if (isSensitiveField(target)) {
         drop('sensitive');
         continue;
@@ -525,8 +576,8 @@ export function replayInput(
         if (name === 'click' && sent === false) canceled = true;
       }
       // The page saw the click first, so a handler that cancels it keeps its
-      // say. Only an unhandled click on a link follows the link.
-      if (record.kind === 'click' && !canceled) activateLink(target, root, record, openTab);
+      // say. Only an unhandled click on a same-tab link follows the link.
+      if (record.kind === 'click' && !canceled) activateLink(target, root, record);
       result.applied += 1;
       continue;
     }
@@ -539,6 +590,14 @@ export function replayInput(
       const node = target || (root && root.activeElement);
       if (!node) {
         drop('target');
+        continue;
+      }
+      if (isLocalControl(node)) {
+        drop('local-control');
+        continue;
+      }
+      if (isTabOpeningKey(node, record)) {
+        drop('new-tab');
         continue;
       }
       const options = {
@@ -557,6 +616,10 @@ export function replayInput(
     if (record.kind === 'text') {
       if (!target) {
         drop('target');
+        continue;
+      }
+      if (isLocalControl(target)) {
+        drop('local-control');
         continue;
       }
       if (isSensitiveField(target)) {

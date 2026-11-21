@@ -269,7 +269,7 @@ test('a granted click follows a link, because a dispatched click cannot', () => 
   assert.deepEqual(navigations, []);
 });
 
-test('a replayed click opens a copy only for a page of this room', () => {
+test('a replayed click never opens a new tab for room tiles or external links', () => {
   const opened = [];
   const navigations = [];
   function link(href) {
@@ -279,7 +279,7 @@ test('a replayed click opens a copy only for a page of this room', () => {
       target: '_blank',
       ownerDocument: null,
       closest: (selector) => (selector === 'a[href]' ? node : null),
-      getAttribute: () => null,
+      getAttribute: (name) => (name === 'target' ? '_blank' : name === 'href' ? href : null),
       hasAttribute: () => false,
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
       dispatchEvent: () => true,
@@ -317,7 +317,9 @@ test('a replayed click opens a copy only for a page of this room', () => {
     { root, openTab: (href) => opened.push(href) }
   );
 
-  assert.equal(result.applied, 2, 'both clicks still reach the page');
-  assert.deepEqual(opened, ['https://room.test/canvas/'], 'only the room tile opens a copy');
+  assert.equal(result.applied, 0, 'new-tab clicks are dropped before dispatch');
+  assert.equal(result.dropped, 2);
+  assert.equal(result.reasons['new-tab'], 2);
+  assert.deepEqual(opened, [], 'tabs never relay open');
   assert.deepEqual(navigations, [], 'a new-tab link never replaces this page');
 });
