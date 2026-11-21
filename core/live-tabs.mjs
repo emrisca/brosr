@@ -106,6 +106,15 @@ export function tabMedia(data) {
   return { key: String(data.key), playing: data.playing };
 }
 
+// A joiner (including the host) asks the publisher of a shared tab to send its
+// current playback state so the newly opened copy starts in sync with the owner.
+export function tabSyncRequest(data) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.action !== 'sync') return null;
+  if (data.key === undefined || data.key === null || String(data.key) === '') return null;
+  return { key: String(data.key) };
+}
+
 // The newest playback state for one offer. A key nobody published is ignored,
 // so a stray frame cannot add a row to the list.
 export function noteSharedMedia(list, media, { ownerId = null } = {}) {

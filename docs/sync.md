@@ -12,7 +12,7 @@ Five layers. Each one is independent, so a page can use layers 0 and 3 while ign
 | 1 Navigation | Tab offers, URL, back and forward | A person with control publishes a tab. A peer opens a copy from the landing page, and that copy follows the tab | A page needs a POST body or a login redirect chain |
 | 2 View | Scroll offset, zoom | Scroll ratio plus a viewport fingerprint | The two window sizes differ enough to change the layout |
 | 3 Media | Playhead, play and pause, rate, volume | A site adapter over `HTMLMediaElement` or the YouTube player | DRM, ads, live streams |
-| 4 Input | Pointer sequence, keys, wheel, text | Event relay through the actuator | The page needs pointer lock, or renders per user |
+| 4 Input | Pointer sequence, keys, text (never wheel or scroll) | Event relay through the actuator | The page needs pointer lock, or renders per user |
 
 **Layer 0 detail.** A cursor stays inside the room tab. A plain tab carries the film and
 nothing else, so a person's mouse never appears on a page the room did not open. Cross-tab
@@ -29,12 +29,13 @@ control drives playback from its own copy, and the room follows it. A copy this 
 the room panel's stopped list, the panel header shows how many are waiting, and Resume puts that
 same tab back in the room without opening a second copy.
 
-**Layer 2 detail.** Host scrolling is kept local and is not mirrored to guests, so each
-person scrolls independently. Viewport fingerprints (`innerWidth`, `innerHeight`,
+**Layer 2 detail.** Scrolling is kept local in both directions. Host scrolling is not
+mirrored to guests, and a granted peer's wheel or scroll is not relayed to the host or to
+any other peer, so each person scrolls independently. Viewport fingerprints (`innerWidth`, `innerHeight`,
 `devicePixelRatio`, and `scrollWidth`) still detect layout mismatches (> 5% drift) so a
 relayed click does not land on the wrong element.
 
-The host also names the mirror sites where relayed clicks, keys, wheel (when granted), and
+The host also names the mirror sites where relayed clicks, keys and
 text are allowed on both sender and receiver. No list means every site, and an empty list
 means none.
 
@@ -42,7 +43,8 @@ means none.
 pages, and canvas-relative fractions when the event target sits inside a `<canvas>`. The
 second form makes games work across different window sizes, because the game's coordinate
 space is the canvas and not the window. A site that is off the host's mirror list accepts
-no relayed click, key, wheel or text, even when the peer holds a browser-wide grant.
+no relayed click, key or text, even when the peer holds a browser-wide grant. Wheel and
+scroll records are never captured for the room, and a receiver drops any that arrive.
 
 
 ## Protocol

@@ -1178,18 +1178,55 @@ async function handle(message, sender) {
     await loadPrefs();
     if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
     // A tab that is not playing must not take the room away from the film the
-    // host is watching. The focused film may always send, playing or paused.
-    if (!media.playing && mediaFocus && mediaFocus !== String(media.key)) {
+    // host is watching. The focused film, an explicit user action, or an active
+    // joined remote tab may always send so a freshly joined paused tab can sync.
+    const joinedOrigin = remoteOrigins.get(from);
+    const activeJoined = Boolean(
+      joinedOrigin !== undefined && sender && sender.tab && sender.tab.active
+    );
+    const explicitAction = Boolean(media.action && media.action !== 'tick');
+    if (
+      !media.playing &&
+      !explicitAction &&
+      !activeJoined &&
+      mediaFocus &&
+      mediaFocus !== String(media.key)
+    ) {
       return { ok: true, skipped: 'background' };
     }
-    if (media.playing) {
+    if (media.playing || explicitAction || activeJoined) {
       mediaFocus = String(media.key);
       mediaFocusTab = from;
     }
     const id = await roomTab();
     if (!validId(id) || id === from) return { ok: false, reason: 'no-room' };
-    api.tabs.sendMessage(id, { type: 'brosr:media-state', state: media }).catch(() => {});
+    const outgoing = { type: 'brosr:media-state', state: media };
+    if (joinedOrigin !== undefined) outgoing.joinedKey = String(joinedOrigin);
+    api.tabs.sendMessage(id, outgoing).catch(() => {});
     return { ok: true };
+  }
+  // A joiner asked for the live playback state of a tab this browser published.
+  // Query that tab directly so the joiner lands at the owner's current position.
+  if (message.type === 'brosr:tab-media-state') {
+    const rawKey = String(message.key || '');
+    const tabId = Number(rawKey);
+    await restoreBooks();
+    if (!validId(tabId) || !announced.has(tabId) || remoteOrigins.has(tabId)) {
+      return { ok: false, reason: 'no-tab' };
+    }
+    try {
+      const reply = await Promise.race([
+        api.tabs.sendMessage(tabId, { type: 'brosr:media-read' }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+      if (reply && reply.ok && reply.state && reply.state.key) {
+        await rememberMediaTab(tabId, reply.state.key, reply.state.playing);
+        return { ok: true, tabId, state: reply.state };
+      }
+      return { ok: false, reason: reply ? 'no-media' : 'timeout' };
+    } catch (error) {
+      return { ok: false, reason: 'send-failed', error: text(error) };
+    }
   }
   // The panel opens the room's film here. A tab that already shows it comes to
   // the front, and only a missing film opens a new tab.

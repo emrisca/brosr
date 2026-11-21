@@ -14,6 +14,7 @@ import {
   sharedTab,
   tabActionDecision,
   tabMedia,
+  tabSyncRequest,
 } from './live-tabs.mjs';
 import { PANEL_APP, openPanelPayload, sealPanelPayload } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
@@ -303,13 +304,27 @@ async function startPageMedia() {
   // frame key on the watch page and episode rather than colliding across titles.
   const embedded = window.top !== window;
   let topUrl = '';
-  if (embedded) {
-    const reply = await Promise.race([
-      send({ type: 'brosr:tab-url' }),
-      new Promise((resolve) => setTimeout(() => resolve(null), 300)),
-    ]);
-    if (reply && reply.ok && typeof reply.url === 'string') topUrl = reply.url;
-  }
+  let topUrlChecking = false;
+  let lastTopUrlAt = 0;
+  const refreshTopUrl = async (deadlineMs = 1000) => {
+    if (!embedded || topUrlChecking) return topUrl;
+    topUrlChecking = true;
+    lastTopUrlAt = Date.now();
+    try {
+      const reply = await Promise.race([
+        send({ type: 'brosr:tab-url' }),
+        new Promise((resolve) => setTimeout(() => resolve(null), deadlineMs)),
+      ]);
+      if (reply && reply.ok && typeof reply.url === 'string' && reply.url !== topUrl) {
+        topUrl = reply.url;
+        return topUrl;
+      }
+    } finally {
+      topUrlChecking = false;
+    }
+    return topUrl;
+  };
+  if (embedded) await refreshTopUrl(1000);
   const pageHref = () =>
     framePageHref({
       href: location.href,
@@ -486,6 +501,23 @@ async function startPageMedia() {
       for (const [id, entry] of cursorPoints) placeCursor({ ...entry, id });
       return undefined;
     }
+    // A joiner asked the publisher for this tab's live playback state. Only
+    // the frame that actually holds the video answers; frames without a video
+    // stay silent so Chrome does not return an empty top-frame answer first.
+    if (message.type === 'brosr:media-read') {
+      const state = mediaStateFromDocument(document, pageHref(), location.hostname, {
+        rate: remote.reportedRate(),
+      });
+      if (!state || !state.key) return undefined;
+      state.at = Date.now();
+      if (remote.bufferWaitActive()) state.buffering = true;
+      const answer = { ok: true, state };
+      if (typeof sendResponse === 'function') {
+        sendResponse(answer);
+        return undefined;
+      }
+      return Promise.resolve(answer);
+    }
     // The panel asks the tab that holds the film what it has done with it. The
     // room status cannot carry these counts, because the room tab is a separate
     // page, so the panel reads them here through the background page.
@@ -560,6 +592,9 @@ async function startPageMedia() {
     return undefined;
   });
 
+  // Re-check the parent tab URL once the listener is registered so an early
+  // SPA rewrite (such as Anidap slug -> numeric id) during startup is never missed.
+  if (embedded) refreshTopUrl(1000).catch(() => {});
   let relayKey = '';
   // The background holds the host's site list and the name view, so a tab that
   // opens later starts with the same rule as the rest of this browser.
@@ -570,6 +605,9 @@ async function startPageMedia() {
     document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
   });
   function reportMedia(userAction = false) {
+    if (embedded && (!topUrl || Date.now() - lastTopUrlAt >= 2000)) {
+      refreshTopUrl(1000).catch(() => {});
+    }
     // A tab that follows the room runs a temporary rate correction. The report
     // names the rate the room asked for, or each hop divides that correction
     // again and the film sinks into slow motion for the rest of the session.
@@ -632,7 +670,15 @@ async function startPageMedia() {
     ['seeked', 'seek'],
     ['ratechange', 'rate'],
   ]) {
-    document.addEventListener(type, () => act(action), true);
+    document.addEventListener(
+      type,
+      (event) => {
+        const video = remote.video();
+        if (event && event.target && video && event.target !== video) return;
+        act(action);
+      },
+      true
+    );
   }
 
   return { started: true, role: 'media', room: null, peerId: null };
@@ -711,6 +757,8 @@ export async function start() {
   // peers publish what they have open, and a peer opens a copy only when it
   // clicks a row. The key names the publisher's tab, so one row follows it.
   let sharedTabs = [];
+  let pendingTabSync = null;
+  let lastPendingApplyAt = 0;
   const joinedKey = `brosr-joined-tabs:${room}`;
   const joinedTabs = new Set((() => {
     try {
@@ -999,6 +1047,44 @@ export async function start() {
           publishSharedTabs();
           return;
         }
+        // A joiner (including the host) asked the owner of a shared tab for
+        // its live playback state so the newly opened copy starts in sync.
+        const syncReq = tabSyncRequest(message.data);
+        if (syncReq) {
+          const owns = sharedTabs.some(
+            (entry) => entry && entry.key === syncReq.key && entry.ownerId === peerId
+          );
+          if (!owns) return;
+          if (role !== 'host' && !client.isGranted()) return;
+          const sendSnapshot = (state) => {
+            if (!state || typeof state !== 'object' || !state.key) return;
+            if (role === 'host') {
+              client.sendHostMedia({ ...state, action: false, at: Number(state.at) || Date.now() });
+            } else if (client.isGranted()) {
+              client.sendMedia({ ...state, action: 'seek' });
+            }
+          };
+          if (api && api.runtime && api.runtime.sendMessage) {
+            api.runtime
+              .sendMessage({ type: 'brosr:tab-media-state', key: syncReq.key })
+              .then((reply) => {
+                if (reply && reply.ok && reply.state && reply.state.key) {
+                  sendSnapshot(reply.state);
+                  return;
+                }
+                const fallback = freshState(localMedia);
+                if (fallback) sendSnapshot(fallback);
+              })
+              .catch(() => {
+                const fallback = freshState(localMedia);
+                if (fallback) sendSnapshot(fallback);
+              });
+          } else {
+            const fallback = freshState(localMedia);
+            if (fallback) sendSnapshot(fallback);
+          }
+          return;
+        }
         // A close withdraws the offer and closes a copy this browser opened.
         // It never closes a tab the publisher did not share.
         const close = tabClose(message.data);
@@ -1034,6 +1120,8 @@ export async function start() {
           list: sharedTabs,
         });
         if (!check.allow) return;
+        const previousOffer = sharedTabs.find((entry) => entry && entry.key === offer.key);
+        const urlChanged = !previousOffer || previousOffer.url !== offer.url;
         sharedTabs = rememberSharedTab(sharedTabs, offer);
         publishSharedTabs();
         // A peer still opens nothing by itself. Only a key this browser already
@@ -1048,6 +1136,18 @@ export async function start() {
               updateOnly: true,
             })
             .catch(() => {});
+        }
+        if (urlChanged && offer.ownerId && offer.ownerId !== peerId) {
+          const nowAt = Date.now();
+          pendingTabSync = {
+            key: offer.key,
+            ownerId: offer.ownerId,
+            at: nowAt,
+            until: nowAt + 12000,
+            graceUntil: nowAt + 1500,
+            lastPingAt: nowAt,
+          };
+          client.sendApp(TAB_APP, { action: 'sync', key: offer.key });
         }
         return;
       }
@@ -1157,6 +1257,9 @@ export async function start() {
       if (role === 'host' && message.peerId && message.peerId === peerId) {
         echoMedia += 1;
         return false;
+      }
+      if (role === 'host' && pendingTabSync && message.peerId === pendingTabSync.ownerId) {
+        pendingTabSync.graceUntil = 0;
       }
       // The frame carries the position this tab should have now, so the panel
       // anchor is the expected value and the moment it arrived.
@@ -1888,6 +1991,18 @@ export async function start() {
           })
           .catch(() => {});
       }
+      if (offer.ownerId && offer.ownerId !== peerId) {
+        const nowAt = Date.now();
+        pendingTabSync = {
+          key: offer.key,
+          ownerId: offer.ownerId,
+          at: nowAt,
+          until: nowAt + 12000,
+          graceUntil: nowAt + 1500,
+          lastPingAt: nowAt,
+        };
+        client.sendApp(TAB_APP, { action: 'sync', key: offer.key });
+      }
       return;
     }
     // Stop leaves the tab open. The copy drops out of the joined list here, so
@@ -2209,10 +2324,65 @@ export async function start() {
           client.presence();
         }
         if (client.stats.role === 'host') {
+          const nowAt = Date.now();
+          const joinedKey = message.joinedKey ? String(message.joinedKey) : null;
+          const hasAct = Boolean(state && state.action && state.action !== 'tick');
+          if (hasAct && pendingTabSync && (!joinedKey || pendingTabSync.key === joinedKey)) {
+            pendingTabSync = null;
+          }
+          if (pendingTabSync && nowAt >= pendingTabSync.until) {
+            pendingTabSync = null;
+          }
+          const pending =
+            !hasAct && state && state.key && client.pendingPeerMedia
+              ? client.pendingPeerMedia(state.key)
+              : null;
+          if (
+            !hasAct &&
+            !pending &&
+            pendingTabSync &&
+            joinedKey &&
+            pendingTabSync.key === joinedKey &&
+            nowAt < pendingTabSync.graceUntil
+          ) {
+            if (nowAt - pendingTabSync.lastPingAt >= 400) {
+              pendingTabSync.lastPingAt = nowAt;
+              client.sendApp(TAB_APP, { action: 'sync', key: pendingTabSync.key });
+            }
+            return reply({ ok: false, waiting: 'peer-sync' });
+          }
           const sent = client.sendHostMedia(state);
           if (sent) {
+            if (pendingTabSync && joinedKey && pendingTabSync.key === joinedKey) {
+              pendingTabSync = null;
+            }
             relayedMedia.set(state);
-            lastFilmReportAt = Date.now();
+            lastFilmReportAt = nowAt;
+          } else if (
+            pending &&
+            !state.buffering &&
+            nowAt - lastPendingApplyAt >= 500 &&
+            api &&
+            api.runtime &&
+            api.runtime.sendMessage
+          ) {
+            lastPendingApplyAt = nowAt;
+            api.runtime
+              .sendMessage({
+                type: 'brosr:media-apply',
+                from: pending.from || null,
+                name: pending.name || null,
+                action: 'seek',
+                key: pending.key,
+                position: pending.position,
+                playing: Boolean(pending.playing),
+                rate: Number(pending.rate || 1),
+                volume: Number(pending.volume ?? 1),
+                ad: false,
+                ...(Number.isFinite(Number(pending.rev)) ? { rev: Number(pending.rev) } : {}),
+                at: nowAt,
+              })
+              .catch(() => {});
           }
           return reply({ ok: sent });
         }

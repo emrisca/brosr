@@ -45,6 +45,10 @@ export const PEER_ACT_GUARD_MS = 1500;
 // suppress stale pre-seek ticks from the host film tab so they do not snap the
 // peer back to the old playhead.
 export const HOST_PEER_APPLY_MS = 2500;
+// When the host joins a peer-owned tab that has not finished loading its player
+// yet, hold the peer anchor longer so the new tab catches up instead of
+// broadcasting 0:00 back over the peer.
+export const HOST_PEER_JOIN_APPLY_MS = 12000;
 // A starved player reports every tick. One low sample is not worth holding the
 // whole room, so a stutter has to survive this long before it travels.
 export const STUTTER_GRACE_MS = 500;
@@ -445,7 +449,7 @@ export function createRoomClient({
   }
 
   // The mirror site list is separate from the pointer list and gates relayed
-  // clicks, keys, wheel and typing. Host scroll is never mirrored to guests.
+  // clicks, keys and typing. Scrolling is never mirrored in either direction.
   // A null list means every site, and an empty list means none.
   function setScrollSites(value) {
     if (!isHost()) return null;
@@ -649,12 +653,40 @@ export function createRoomClient({
   // already dropped that report when playback sync is off. The frame carries
   // this peer's id, and the host checks that id against its grants before it
   // moves its own film.
+  function pendingPeerMedia(key, local = now()) {
+    if (!pendingPeerApply) return null;
+    if (local >= pendingPeerApply.until) {
+      pendingPeerApply = null;
+      return null;
+    }
+    if (key && key !== pendingPeerApply.key) return null;
+    const age = Math.max(0, (local - pendingPeerApply.at) / 1000);
+    const position =
+      pendingPeerApply.position +
+      (pendingPeerApply.playing ? age * pendingPeerApply.rate : 0);
+    return {
+      key: pendingPeerApply.key,
+      action: pendingPeerApply.action,
+      position,
+      playing: pendingPeerApply.playing,
+      rate: pendingPeerApply.rate,
+      volume: pendingPeerApply.volume,
+      rev: pendingPeerApply.rev,
+      from: pendingPeerApply.from,
+      name: pendingPeerApply.name,
+      at: local,
+    };
+  }
+
   function peerApplyStillPending(key, position, playing, rate, local) {
     if (!pendingPeerApply) return false;
-    if (local >= pendingPeerApply.until || key !== pendingPeerApply.key) {
+    if (local >= pendingPeerApply.until) {
       pendingPeerApply = null;
       return false;
     }
+    // A routine tick from another film (e.g. a periodic greet for an earlier
+    // tab) must not wipe out the pending peer sync for a newly joined tab.
+    if (key !== pendingPeerApply.key) return false;
     const age = Math.max(0, (local - pendingPeerApply.at) / 1000);
     const targetPos =
       pendingPeerApply.position +
@@ -968,8 +1000,8 @@ export function createRoomClient({
       stats.inputReasons.origin = (stats.inputReasons.origin || 0) + message.records.length;
       return { ok: false, reason: 'origin' };
     }
-    // A site the host took off the mirror list takes no relayed click, key,
-    // wheel or text, even when the peer still holds a browser-wide grant.
+    // A site the host took off the mirror list takes no relayed click, key or
+    // text, even when the peer still holds a browser-wide grant.
     if (here && !scrollAllowed(here)) {
       stats.inputDropped += message.records.length;
       stats.inputReasons.site = (stats.inputReasons.site || 0) + message.records.length;
@@ -983,6 +1015,25 @@ export function createRoomClient({
     });
     if (!accepted.accepted) return { ok: false, reason: accepted.reason };
 
+    // Scrolling stays local for every peer. Drop wheel/scroll records before
+    // trusted actuation or synthetic replay, even from an older bridge.
+    const scrollRecords = message.records.filter(
+      (record) => record && (record.kind === 'wheel' || record.kind === 'scroll')
+    );
+    const activeRecords =
+      scrollRecords.length > 0
+        ? message.records.filter(
+            (record) => !record || (record.kind !== 'wheel' && record.kind !== 'scroll')
+          )
+        : message.records;
+    if (scrollRecords.length > 0) {
+      stats.inputDropped += scrollRecords.length;
+      stats.inputReasons.scroll = (stats.inputReasons.scroll || 0) + scrollRecords.length;
+    }
+    if (!activeRecords.length) {
+      return { ok: true, applied: 0, dropped: scrollRecords.length, reason: 'scroll' };
+    }
+
     const tabId = (input && input.tabId) || 'tab';
     const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
     const allowed = (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind });
@@ -991,7 +1042,7 @@ export function createRoomClient({
     const hasActiveGrant = () =>
       grants.decide(message.peerId, { tabId, origin, kind: 'click' }).allow;
     const trustedAllowed = (record) => hasActiveGrant() && allowed(record);
-    const replay = (records = message.records) => {
+    const replay = (records = activeRecords) => {
       const applied = replayInput(records, {
         root: doc,
         // A peer that laid out the page differently sends a point that lands
@@ -1019,8 +1070,8 @@ export function createRoomClient({
     // path is the fallback and not the first choice. A refusal replays, so a
     // closed agent or a stale token never swallows a click silently.
     if (input && typeof input.trusted === 'function') {
-      const sendable = message.records.filter(trustedAllowed);
-      const droppedNow = message.records.length - sendable.length;
+      const sendable = activeRecords.filter(trustedAllowed);
+      const droppedNow = activeRecords.length - sendable.length;
       if (droppedNow > 0) {
         stats.inputDropped += droppedNow;
         stats.inputReasons.grant = (stats.inputReasons.grant || 0) + droppedNow;
@@ -1148,19 +1199,8 @@ export function createRoomClient({
       true
     );
 
-    doc.addEventListener(
-      'wheel',
-      (event) => {
-        if (skip(event) || !remoteGrant) return;
-        batcher.push({
-          kind: 'wheel',
-          path: cssPath(event.target),
-          deltaX: event.deltaX,
-          deltaY: event.deltaY,
-        });
-      },
-      { passive: true, capture: true }
-    );
+    // Scrolling stays local for every peer; wheel events are never captured
+    // or relayed, even when a peer holds control.
 
     // A synthetic key event inserts no character, so typing travels as the
     // field value instead. The receiver writes it through the native setter,
@@ -1539,14 +1579,19 @@ export function createRoomClient({
           }
         }
         if (explicit && ['seek', 'play', 'pause', 'rate'].includes(explicit)) {
+          const applyWindow = picked ? HOST_PEER_APPLY_MS : HOST_PEER_JOIN_APPLY_MS;
           pendingPeerApply = {
             key: message.key,
             action: explicit,
             position: expected,
             playing: Boolean(message.playing),
             rate,
+            volume: Number(message.volume ?? (read ? read.volume : 1)),
+            rev: mediaRev,
+            from: message.peerId || null,
+            name: actor || null,
             at: local,
-            until: local + HOST_PEER_APPLY_MS,
+            until: local + applyWindow,
           };
           stats.key = message.key;
           stats.position = Math.round(expected * 1000) / 1000;
@@ -2393,6 +2438,7 @@ export function createRoomClient({
     setGrant,
     sendMedia,
     sendHostMedia,
+    pendingPeerMedia,
     isGranted: () => remoteGrant,
     hasGrant: (id) => {
       const target = String(id || '');
