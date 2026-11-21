@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "brosr-app"
-version = "0.3.52"
+version = "0.3.53"
 dependencies = [
  "serde",
  "serde_json",
