@@ -17,18 +17,18 @@ packs. Google Chrome 137 and later ignore the flag that loads an unpacked add-on
 room installs the three add-ons over the devtools pipe instead, with a helper process holding it
 open.
 
-Status: `v0.3.57` ships a signed macOS and Windows app (bridge `0.4.13`). Rooms run in Firefox, Zen and Brave.
+Status: `v0.3.58` ships a signed macOS and Windows app (bridge `0.4.14`). Rooms run in Firefox, Zen and Brave.
 
 ## Quick start for non-developers
 
 You do not need Node, Rust or a checkout to try Brosr. Take the build for your machine from
-[the latest release](https://github.com/emrisca/brosr/releases/latest) (currently `v0.3.57`):
+[the latest release](https://github.com/emrisca/brosr/releases/latest) (currently `v0.3.58`):
 
 | Machine | File |
 | --- | --- |
-| macOS on Apple silicon | [`Brosr_0.3.57_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.57/Brosr_0.3.57_aarch64.dmg) |
-| macOS on Intel | [`Brosr_0.3.57_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.57/Brosr_0.3.57_x64.dmg) |
-| Windows, 64-bit | [`Brosr_0.3.57_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.57/Brosr_0.3.57_x64-setup.exe) or [`Brosr_0.3.57_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.57/Brosr_0.3.57_x64_en-US.msi) |
+| macOS on Apple silicon | [`Brosr_0.3.58_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_aarch64.dmg) |
+| macOS on Intel | [`Brosr_0.3.58_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64.dmg) |
+| Windows, 64-bit | [`Brosr_0.3.58_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64-setup.exe) or [`Brosr_0.3.58_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64_en-US.msi) |
 
 The macOS build carries an ad hoc signature and no notarisation, so the first launch needs one
 extra step. Move Brosr to Applications, try to open it, then allow it in System Settings,
