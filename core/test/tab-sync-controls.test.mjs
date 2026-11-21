@@ -91,3 +91,30 @@ test('a playback report updates an offer in place', () => {
   assert.match(source, /sharedTabs = noteSharedMedia\(sharedTabs, media\);/);
   assert.match(page, /tab\.playing \? 'Playing' : 'Paused'/);
 });
+
+test('Live Tabs provides inline controller media controls, focus jump, and live title updates without forcing opens', () => {
+  const css = fs.readFileSync(path.join(here, '..', '..', 'landing', 'landing.css'), 'utf8');
+  // Wider landing real estate while keeping monochrome tokens
+  assert.match(css, /\.page\s*\{[\s\S]*?max-width:\s*1760px/);
+  assert.match(css, /\.live-media-controls\s*\{/);
+  // Landing page inline controls + Focus button, guarded by event.isTrusted
+  assert.match(page, /type:\s*'tab-media-control'/);
+  assert.match(page, /type:\s*'focus-tab'/);
+  assert.match(page, /controlMedia\(tab\.key,\s*'skip',\s*-10\)/);
+  assert.match(page, /controlMedia\(tab\.key,\s*'toggle',\s*0\)/);
+  assert.match(page, /controlMedia\(tab\.key,\s*'skip',\s*10\)/);
+  // Core enforces controller authorization and publishes canControl
+  assert.match(source, /canControl:\s*Boolean\(role === 'host' \|\| client\.isGranted\(\)\)/);
+  assert.match(source, /if \(message\.type === 'tab-media-control'\)/);
+  assert.match(source, /tabMediaControlDecision\(\{/);
+  assert.match(source, /if \(message\.type === 'brosr:media-control'\)/);
+  // Background handles focus, media-control, and live title refreshes without creating new tabs
+  const focusStart = background.indexOf("if (message.type === 'brosr:tab-focus')");
+  const stateStart = background.indexOf("if (message.type === 'brosr:tab-media-state')", focusStart);
+  assert.ok(focusStart > 0 && stateStart > focusStart);
+  const block = background.slice(focusStart, stateStart);
+  assert.match(block, /brosr:tab-media-control/);
+  assert.match(block, /brosr:media-control/);
+  assert.doesNotMatch(block, /tabs\.create/);
+  assert.match(background, /announcedTitles\.set\(id,\s*info\.title\)/);
+});

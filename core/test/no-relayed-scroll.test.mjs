@@ -1,5 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  FREE_KINDS,
+  GrantBook,
+  InputBatcher,
+  inputCaptureDecision,
+  replayInput,
+  scrollPolicyDecision,
+  wheelRecord,
+} from '../input.mjs';
+import { actionsForRecord, prepareRecords, trustDecision } from '../trust.mjs';
 import { createRoomClient } from '../sync.mjs';
 import { decode, encode } from '../protocol.mjs';
 
@@ -166,4 +176,94 @@ test('host drops incoming wheel and scroll records before trusted actuation and 
     false,
     'synthetic replay must never dispatch a wheel event'
   );
+});
+
+test('wheel and scroll are rejected defense-in-depth across input.mjs, trust.mjs, and sync.mjs', async () => {
+  const { doc, dispatched } = makeLandingDoc();
+  doc.querySelectorAll = (sel) => (sel === '#go' ? [doc.querySelector('#go')] : []);
+
+  // 1. FREE_KINDS excludes scroll/wheel; scrollPolicyDecision returns structured reason.
+  assert.equal(FREE_KINDS.has('move'), true);
+  assert.equal(FREE_KINDS.has('scroll'), false);
+  assert.equal(FREE_KINDS.has('wheel'), false);
+  assert.equal(scrollPolicyDecision({ kind: 'wheel' }).allow, false);
+  assert.equal(scrollPolicyDecision({ kind: 'wheel' }).reason, 'scroll');
+  assert.equal(scrollPolicyDecision({ kind: 'scroll' }).reason, 'scroll');
+  assert.deepEqual(scrollPolicyDecision({ kind: 'click' }), { allow: true, reason: 'ok' });
+
+  // 2. GrantBook, inputCaptureDecision, wheelRecord, and InputBatcher all refuse scroll/wheel.
+  const grants = new GrantBook();
+  grants.grant('peer-1', { tabId: '*' });
+  assert.equal(grants.decide('peer-1', { kind: 'wheel' }).reason, 'scroll');
+  assert.equal(grants.decide('peer-1', { kind: 'scroll' }).reason, 'scroll');
+  assert.equal(grants.decide('peer-1', { kind: 'click' }).allow, true);
+
+  assert.equal(inputCaptureDecision({ event: { type: 'wheel', isTrusted: true } }).reason, 'scroll');
+  assert.equal(inputCaptureDecision({ record: { kind: 'scroll' } }).reason, 'scroll');
+  assert.equal(wheelRecord({ clientX: 10, clientY: 20, deltaY: 120 }, { path: '#go' }), null);
+
+  const sent = [];
+  const batcher = new InputBatcher({ send: (frame) => sent.push(frame) });
+  assert.equal(batcher.push({ kind: 'wheel', path: '#go', deltaY: 120 }).reason, 'scroll');
+  assert.equal(batcher.push({ kind: 'scroll', path: '#go', deltaY: 120 }).reason, 'scroll');
+  assert.equal(batcher.flush(), 0);
+  assert.equal(sent.length, 0);
+
+  // 3. Direct replayInput drops wheel/scroll with reason "scroll" and dispatches zero WheelEvents.
+  const directReplay = replayInput(
+    [
+      { kind: 'wheel', path: '#go', deltaY: 240 },
+      { kind: 'scroll', path: '#go', deltaY: 120 },
+      { kind: 'click', path: '#go', button: 0 },
+    ],
+    { root: doc }
+  );
+  assert.equal(directReplay.applied, 1);
+  assert.equal(directReplay.dropped, 2);
+  assert.equal(directReplay.reasons.scroll, 2);
+  assert.equal(dispatched.some((ev) => ev.type === 'wheel'), false);
+
+  // 4. trust.mjs refuses wheel/scroll at decision, preparation, and BiDi action generation.
+  assert.equal(trustDecision({ kind: 'wheel', path: '#go', deltaY: 120 }, doc).reason, 'scroll');
+  assert.equal(trustDecision({ kind: 'scroll', path: '#go', deltaY: 120 }, doc).reason, 'scroll');
+  const prepared = prepareRecords(
+    [
+      { kind: 'wheel', path: '#go', deltaY: 120 },
+      { kind: 'scroll', path: '#go', deltaY: 120 },
+      { kind: 'click', path: '#go', button: 0 },
+    ],
+    doc
+  );
+  assert.deepEqual(
+    prepared.map((r) => r.kind),
+    ['click']
+  );
+  assert.equal(actionsForRecord({ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: 120 }), null);
+  assert.equal(actionsForRecord({ kind: 'scroll', point: { x: 10, y: 20 }, deltaY: 120 }), null);
+
+  // 5. sync.mjs never falls back to synthetic replay on trusted scroll refusal.
+  const beforeClicks = dispatched.length;
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host-1',
+    hostId: 'host-1',
+    document: doc,
+    overlay: false,
+    send: () => {},
+    input: {
+      trusted: async () => ({ ok: false, allow: false, reason: 'scroll' }),
+    },
+  });
+  host.setGrant('peer-1', true);
+  host.receive(
+    encode({
+      type: 'input',
+      peerId: 'peer-1',
+      seq: 1,
+      records: [{ kind: 'click', path: '#go', button: 0 }],
+    })
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(dispatched.length, beforeClicks);
+  assert.equal(host.stats.inputReasons.scroll, 1);
 });

@@ -49,6 +49,9 @@ export const HOST_PEER_APPLY_MS = 2500;
 // yet, hold the peer anchor longer so the new tab catches up instead of
 // broadcasting 0:00 back over the peer.
 export const HOST_PEER_JOIN_APPLY_MS = 12000;
+// Freshness window for host playhead state reported via sendHostMedia when
+// media.pick() is null on the host room tab (separate film tab).
+export const HOST_KNOWN_MEDIA_MS = 8000;
 // A starved player reports every tick. One low sample is not worth holding the
 // whole room, so a stutter has to survive this long before it travels.
 export const STUTTER_GRACE_MS = 500;
@@ -273,9 +276,17 @@ export function createRoomClient({
   let firstAt = 0;
   let lastHostTick = -Infinity;
   let lastHostActAt = -Infinity;
+  let lastHostActKey = null;
   let mediaRev = 0;
+  let lastSentRev = 0;
+  let lastMediaActor = null;
+  let lastMediaKey = null;
   let pendingLocalAct = null;
   let pendingPeerApply = null;
+  // Fresh playhead per film key reported by the host film tab via sendHostMedia.
+  // Needed when media.pick(key) is null on the host room tab so non-seek peer
+  // acts still anchor to the host playhead and use HOST_PEER_APPLY_MS.
+  const hostKnownMedia = new Map();
   let lastSeekAt = -Infinity;
   let waitingSince = null;
   let lastSeekTarget = null;
@@ -553,6 +564,7 @@ export function createRoomClient({
       ...(clientBuild ? { build: clientBuild } : {}),
       scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
       grantedPeers: grants.active().map((grant) => grant.peerId),
+      mediaRev,
     });
     snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
     sendMessage(snapshot);
@@ -627,6 +639,7 @@ export function createRoomClient({
       from: peerId,
       peerId: peer,
       allowed,
+      ...(allowed ? { mediaRev } : {}),
       tabId,
       origin,
       roomTime: roomTimeOf(),
@@ -706,6 +719,42 @@ export function createRoomClient({
     return true;
   }
 
+  function knownHostMedia(key, local = now()) {
+    if (!key) return null;
+    const entry = hostKnownMedia.get(key);
+    if (!entry) return null;
+    if (local - entry.at > HOST_KNOWN_MEDIA_MS) {
+      hostKnownMedia.delete(key);
+      return null;
+    }
+    const age = Math.max(0, (local - entry.at) / 1000);
+    const raw = entry.position + (entry.playing ? age * entry.rate : 0);
+    const position = entry.duration > 0 ? Math.min(raw, entry.duration) : raw;
+    return { ...entry, position };
+  }
+
+  function sendHostAnchor(anchor, local = now()) {
+    if (!isHost() || !anchor || !anchor.key) return false;
+    const rate = Number(anchor.rate || 1);
+    sendMessage({
+      type: 'media',
+      peerId,
+      key: anchor.key,
+      title: String(anchor.title || '').slice(0, 120),
+      music: Boolean(anchor.music),
+      action: 'tick',
+      position: Number(anchor.position || 0),
+      playing: Boolean(anchor.playing),
+      rate: Number.isFinite(rate) && rate > 0 ? rate : 1,
+      volume: Number(anchor.volume ?? 1),
+      buffering: false,
+      ad: false,
+      rev: mediaRev,
+      roomTime: local,
+    });
+    return true;
+  }
+
   function sendMedia(state) {
     if (isHost() || !remoteGrant) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
@@ -714,10 +763,15 @@ export function createRoomClient({
     const pos = localPosition(Number(state.position || 0), -alignOffset);
     const playing = Boolean(state.playing);
     const local = now();
+    const actRev =
+      action !== 'tick'
+        ? Math.max(mediaRev, lastSentRev, pendingLocalAct ? pendingLocalAct.rev : 0) + 1
+        : Math.max(mediaRev, lastSentRev);
     if (action !== 'tick') {
-      mediaRev += 1;
+      lastSentRev = actRev;
       pendingLocalAct = {
-        rev: mediaRev,
+        key: state.key,
+        rev: actRev,
         action,
         position: pos,
         playing,
@@ -737,7 +791,7 @@ export function createRoomClient({
       volume: Number(state.volume ?? 1),
       buffering: Boolean(state.buffering),
       ad: Boolean(state.ad),
-      rev: mediaRev,
+      rev: actRev,
       roomTime: roomTimeOf(local),
     });
     stats.mediaSent += 1;
@@ -779,6 +833,9 @@ export function createRoomClient({
       pendingPeerApply = null;
       mediaRev += 1;
       lastHostActAt = local;
+      lastHostActKey = state.key;
+      lastMediaActor = peerId;
+      lastMediaKey = state.key;
       stats.lastLocalMediaAction = {
         name: name || peerId,
         peerId,
@@ -789,6 +846,21 @@ export function createRoomClient({
       };
     } else if (peerApplyStillPending(state.key, position, playing, rate, local)) {
       return false;
+    }
+    hostKnownMedia.set(state.key, {
+      key: state.key,
+      position,
+      duration: limit > 0 ? limit : 0,
+      playing,
+      rate,
+      volume: Number(state.volume ?? 1),
+      title: String(state.title || '').slice(0, 120),
+      music: Boolean(state.music),
+      at: local,
+    });
+    if (hostKnownMedia.size > 16) {
+      const oldest = hostKnownMedia.keys().next().value;
+      if (oldest !== undefined) hostKnownMedia.delete(oldest);
     }
     const wireAction = ['play', 'pause', 'seek', 'rate'].includes(act) ? act : 'tick';
     stats.key = state.key;
@@ -1095,13 +1167,17 @@ export function createRoomClient({
           const answer = await input.trusted(liveSendable);
           if (!answer || !answer.ok) {
             const reason = String((answer && answer.reason) || '');
-            const pointerLockRefused =
+            const policyRefused =
               Boolean(answer) &&
-              (reason === 'pointer-lock-active' ||
+              (answer.allow === false ||
+                reason === 'pointer-lock-active' ||
                 reason === 'pointer-lock-local' ||
+                reason === 'scroll' ||
+                reason === 'new-tab' ||
+                reason === 'local-control' ||
                 answer.status === 403 ||
                 reason === 'status 403');
-            if (pointerLockRefused) {
+            if (policyRefused) {
               const key = reason || 'pointer-lock-active';
               stats.inputDropped += liveSendable.length;
               stats.inputReasons[key] = (stats.inputReasons[key] || 0) + liveSendable.length;
@@ -1194,6 +1270,7 @@ export function createRoomClient({
           ctrl: event.ctrlKey,
           alt: event.altKey,
           shift: event.shiftKey,
+          meta: event.metaKey,
         });
       },
       true
@@ -1441,46 +1518,84 @@ export function createRoomClient({
       message.rev !== undefined && message.rev !== null && Number.isFinite(Number(message.rev))
         ? Number(message.rev)
         : null;
-    // A host's own play, pause or seek wins for a short window. The granted peer
-    // can still drive the film when the host is not acting.
-    if (isHost() && local - lastHostActAt < HOST_MEDIA_PRIORITY_MS) {
-      noteMediaDrop('host-priority', message, local);
-      return { ok: true, ignored: 'host-priority' };
-    }
-    // Reject stale-revision peer acts that arrived after a newer host or peer
-    // media act (even after HOST_MEDIA_PRIORITY_MS has elapsed). Legacy frames
-    // without rev remain accepted for compatibility.
-    if (isHost() && incomingRev !== null) {
-      if (
-        (explicit !== null && incomingRev <= mediaRev) ||
-        (explicit === null && incomingRev < mediaRev)
-      ) {
-        noteMediaDrop('stale-rev', message, local);
-        return { ok: true, ignored: 'stale-rev' };
-      }
-    }
-    // Protect a granted peer's just-issued local act from already-in-flight
-    // routine host ticks until the host acknowledges or supersedes it.
-    if (!isHost() && pendingLocalAct) {
-      if (local - pendingLocalAct.at >= PEER_ACT_GUARD_MS) {
-        pendingLocalAct = null;
-      } else if (
-        (incomingRev !== null && incomingRev >= pendingLocalAct.rev) ||
-        explicit !== null
-      ) {
-        pendingLocalAct = null;
-      } else {
-        noteMediaDrop('local-act-pending', message, local);
-        return { ok: true, ignored: 'local-act-pending' };
-      }
-    }
-    if (!isHost() && incomingRev !== null && incomingRev > mediaRev) {
-      mediaRev = incomingRev;
-    }
     // The adapter owns every read and write. A player object and a media
     // element meet one interface, so the peer path never touches a field.
     const picked = media.pick(message.key);
     const read = picked ? media.state(picked) : null;
+    const known = isHost() ? knownHostMedia(message.key, local) : null;
+    const hostRead = read || known;
+    // A host's own play, pause or seek wins for a short window on that film.
+    // A host act on a different film (e.g. pausing YouTube before joining a
+    // peer's Anidap tab) must not block the joined film's sync reply.
+    if (
+      isHost() &&
+      local - lastHostActAt < HOST_MEDIA_PRIORITY_MS &&
+      (!lastHostActKey || message.key === lastHostActKey)
+    ) {
+      noteMediaDrop('host-priority', message, local);
+      return { ok: true, ignored: 'host-priority' };
+    }
+    // Reject stale-revision peer acts on the same film that arrived after a
+    // newer host or same-peer media act. When a different granted controller
+    // acts concurrently at an equal peer-created rev (multi-controller hand-off),
+    // or on a different film key the host is not actively playing, accept it as
+    // the latest explicit controller act and bump mediaRev.
+    let multiControllerBump = false;
+    if (isHost() && incomingRev !== null) {
+      const sameFilm = !lastMediaKey || message.key === lastMediaKey || Boolean(hostRead);
+      if (explicit === null) {
+        if (sameFilm && incomingRev < mediaRev) {
+          noteMediaDrop('stale-rev', message, local);
+          return { ok: true, ignored: 'stale-rev' };
+        }
+      } else if (sameFilm && incomingRev < mediaRev) {
+        noteMediaDrop('stale-rev', message, local);
+        if (hostRead) sendHostAnchor(hostRead, local);
+        return { ok: true, ignored: 'stale-rev' };
+      } else if (sameFilm && incomingRev === mediaRev) {
+        const peerHandOff =
+          lastMediaActor !== null &&
+          lastMediaActor !== peerId &&
+          message.peerId &&
+          message.peerId !== lastMediaActor;
+        if (peerHandOff) {
+          multiControllerBump = true;
+        } else {
+          noteMediaDrop('stale-rev', message, local);
+          if (hostRead) sendHostAnchor(hostRead, local);
+          return { ok: true, ignored: 'stale-rev' };
+        }
+      } else if (!sameFilm && incomingRev <= mediaRev) {
+        multiControllerBump = true;
+      }
+    }
+    // Protect a granted peer's just-issued local act from already-in-flight
+    // routine host ticks (or older rev frames) until the host acknowledges or
+    // supersedes it on that film.
+    if (!isHost() && pendingLocalAct) {
+      if (local - pendingLocalAct.at >= PEER_ACT_GUARD_MS) {
+        pendingLocalAct = null;
+      } else if (!pendingLocalAct.key || pendingLocalAct.key === message.key) {
+        if (
+          (incomingRev !== null && incomingRev >= pendingLocalAct.rev) ||
+          (incomingRev === null && explicit !== null)
+        ) {
+          pendingLocalAct = null;
+        } else {
+          noteMediaDrop('local-act-pending', message, local);
+          return { ok: true, ignored: 'local-act-pending' };
+        }
+      }
+    }
+    if (!isHost() && incomingRev !== null) {
+      if (incomingRev < mediaRev && lastMediaFrame && message.key === lastMediaFrame.key) {
+        noteMediaDrop('stale-rev', message, local);
+        return { ok: true, ignored: 'stale-rev' };
+      }
+      if (incomingRev > mediaRev) {
+        mediaRev = incomingRev;
+      }
+    }
     if (read) {
       stats.key = read.key;
       stats.position = Math.round(read.position * 1000) / 1000;
@@ -1496,21 +1611,19 @@ export function createRoomClient({
       : mediaAction(lastMediaFrame, { ...message, position: message.position }, local);
     const action = explicit || derived || null;
     // The host is the timekeeper, so only an explicit seek may move its
-    // playhead. A tick can disagree because the peer is behind, and reading
-    // that gap as a seek put the host back at the peer's old position after a
-    // pause. Legacy peers send every act as a tick; those acts still apply,
-    // but a tick never counts as a seek.
-    const hostAnchor = isHost() && read && explicit !== 'seek';
-    const base = hostAnchor ? read.position : localPosition(message.position, alignOffset);
+    // playhead. Even when media.pick() is null on the host room tab, anchor
+    // non-seek peer acts to the host's fresh known playhead for this film.
+    const hostAnchor = isHost() && Boolean(hostRead) && explicit !== 'seek';
+    const base = hostAnchor ? hostRead.position : localPosition(message.position, alignOffset);
     const frameRate = Number(message.rate);
     const rate = Number.isFinite(frameRate) && frameRate > 0 ? frameRate : 1;
-    const rawExpected =
-      base +
-      (message.playing ? ((roomTimeOf(local) - message.roomTime) / 1000) * rate : 0);
+    const rawExpected = hostAnchor
+      ? base
+      : base + (message.playing ? ((roomTimeOf(local) - message.roomTime) / 1000) * rate : 0);
     // A seek past the end is clamped by every player. Name the point that will
     // actually land, not the request, or the report looks like a jump to a
     // position neither copy ever held.
-    const duration = Number(read && read.duration);
+    const duration = Number(hostRead && hostRead.duration);
     const expected =
       duration > 0
         ? Math.max(0, Math.min(rawExpected, duration))
@@ -1547,8 +1660,9 @@ export function createRoomClient({
         noteMediaDrop('no-media', message, local);
         return { ok: false, reason: 'no-media' };
       }
-      const nextRev =
-        incomingRev !== null && incomingRev > mediaRev
+      const nextRev = multiControllerBump
+        ? Math.max(mediaRev, incomingRev || 0) + 1
+        : incomingRev !== null && incomingRev > mediaRev
           ? incomingRev
           : explicit
             ? mediaRev + 1
@@ -1568,6 +1682,10 @@ export function createRoomClient({
           return { ok: false, reason: 'no-media' };
         }
         mediaRev = nextRev;
+        if (explicit) {
+          lastMediaActor = message.peerId || null;
+          lastMediaKey = message.key;
+        }
         if (picked && explicit) {
           if (explicit === 'seek') {
             media.apply(picked, { action: 'seek', position: expected, rate });
@@ -1578,15 +1696,26 @@ export function createRoomClient({
             media.apply(picked, { action: 'tick', rate });
           }
         }
+        if (known && explicit) {
+          hostKnownMedia.set(message.key, {
+            ...known,
+            position: expected,
+            playing: Boolean(message.playing),
+            rate,
+            volume: Number(message.volume ?? known.volume),
+            at: local,
+          });
+        }
         if (explicit && ['seek', 'play', 'pause', 'rate'].includes(explicit)) {
-          const applyWindow = picked ? HOST_PEER_APPLY_MS : HOST_PEER_JOIN_APPLY_MS;
+          const activeHostTab = Boolean(picked || known);
+          const applyWindow = activeHostTab ? HOST_PEER_APPLY_MS : HOST_PEER_JOIN_APPLY_MS;
           pendingPeerApply = {
             key: message.key,
             action: explicit,
             position: expected,
             playing: Boolean(message.playing),
             rate,
-            volume: Number(message.volume ?? (read ? read.volume : 1)),
+            volume: Number(message.volume ?? (hostRead ? hostRead.volume : 1)),
             rev: mediaRev,
             from: message.peerId || null,
             name: actor || null,
@@ -1601,13 +1730,13 @@ export function createRoomClient({
             type: 'media',
             peerId,
             key: message.key,
-            title: String((read && read.title) || message.title || '').slice(0, 120),
-            music: Boolean((read && read.music) || message.music),
+            title: String((hostRead && hostRead.title) || message.title || '').slice(0, 120),
+            music: Boolean((hostRead && hostRead.music) || message.music),
             action: explicit,
             position: expected,
             playing: Boolean(message.playing),
             rate,
-            volume: Number(message.volume ?? (read ? read.volume : 1)),
+            volume: Number(message.volume ?? (hostRead ? hostRead.volume : 1)),
             buffering: false,
             ad: false,
             rev: mediaRev,
@@ -1866,6 +1995,16 @@ export function createRoomClient({
         if (message.peerId === peerId) {
           remoteGrant = allowed;
           stats.granted = remoteGrant;
+          if (
+            allowed &&
+            message.mediaRev !== undefined &&
+            message.mediaRev !== null &&
+            Number.isFinite(Number(message.mediaRev)) &&
+            Number(message.mediaRev) > mediaRev
+          ) {
+            mediaRev = Number(message.mediaRev);
+            lastSentRev = Math.max(lastSentRev, mediaRev);
+          }
         }
         if (onControl) {
           try {
@@ -1885,6 +2024,16 @@ export function createRoomClient({
         }
         if (message.build) hostBuild = cleanBuild(message.build);
         state.applySnapshot(message);
+        if (
+          message.mediaRev !== undefined &&
+          message.mediaRev !== null &&
+          Number.isFinite(Number(message.mediaRev)) &&
+          Number(message.mediaRev) >= 0
+        ) {
+          mediaRev = Number(message.mediaRev);
+          lastSentRev = mediaRev;
+          pendingLocalAct = null;
+        }
         if (Array.isArray(message.grantedPeers)) {
           const previous = new Set(remoteGrants);
           remoteGrants.clear();
@@ -1926,8 +2075,12 @@ export function createRoomClient({
         followSnapshot(message);
         return { ok: true };
       case 'nav':
+        if (isHost()) return { ok: true, ignored: 'host' };
+        if (!message.from || message.from !== currentHost) {
+          return { ok: true, ignored: 'not-host' };
+        }
         state.applyNav({ url: message.url });
-        if (!isHost() && navigate) navigate(message.url);
+        if (navigate) navigate(message.url);
         return { ok: true, url: message.url };
       case 'view': {
         // A view names the page it came from. Without that identity a host
@@ -2126,7 +2279,7 @@ export function createRoomClient({
     if (view.url && view.url !== lastUrl) {
       lastUrl = view.url;
       state.applyNav({ url: view.url });
-      sendMessage({ type: 'nav', url: view.url, roomTime: local });
+      sendMessage({ type: 'nav', from: peerId, url: view.url, roomTime: local });
     }
   }
 

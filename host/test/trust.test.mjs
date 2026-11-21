@@ -69,17 +69,25 @@ test('a key record keeps its order with BiDi code points and a text run types ev
   );
 });
 
-test('a wheel record becomes a BiDi wheel source with a scroll action at the record point', () => {
-  const actions = actionsForRecord({
-    kind: 'wheel',
-    point: { x: 10, y: 20 },
-    deltaX: 0,
-    deltaY: 120,
-  });
-  assert.equal(actions[0].type, 'wheel');
-  assert.equal(actions[0].actions[0].type, 'scroll');
-  assert.equal(actions[0].actions[0].deltaY, 120);
-  assert.equal(actions[0].actions[0].origin, 'viewport');
+test('wheel and scroll records produce no BiDi actions because scrolling stays local', () => {
+  assert.equal(
+    actionsForRecord({
+      kind: 'wheel',
+      point: { x: 10, y: 20 },
+      deltaX: 0,
+      deltaY: 120,
+    }),
+    null
+  );
+  assert.equal(
+    actionsForRecord({
+      kind: 'scroll',
+      point: { x: 10, y: 20 },
+      deltaX: 0,
+      deltaY: 120,
+    }),
+    null
+  );
 });
 
 test('a record with no place is skipped instead of sent to the origin', () => {
@@ -207,7 +215,15 @@ test('the agent refuses pointer-lock requests and active pointer lock with struc
   assert.equal(bidi.calls.length, 0);
 
   locked = false;
-  const ok = await post([{ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: 120 }]);
+  const scrollRefused = await post([{ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: 120 }]);
+  assert.equal(scrollRefused.status, 403);
+  const scrollBody = await scrollRefused.json();
+  assert.equal(scrollBody.ok, false);
+  assert.equal(scrollBody.allow, false);
+  assert.equal(scrollBody.reason, 'scroll');
+  assert.equal(bidi.calls.length, 0);
+
+  const ok = await post([{ kind: 'click', point: { x: 10, y: 20 }, button: 0 }]);
   assert.equal(ok.status, 200);
   assert.equal(bidi.calls.length, 1);
 
@@ -248,7 +264,7 @@ test('watchTrust propagates published pointerLock without tearing down the agent
   await watcher.stop();
 });
 
-test('wheel events flow through createTrustAgent onto ChromeCdp with BiDi parity', async () => {
+test('createTrustAgent refuses wheel/scroll and tab-opening records while delivering clicks to ChromeCdp', async () => {
   const socketCalls = [];
   const socket = {
     onEvent: null,
@@ -267,34 +283,53 @@ test('wheel events flow through createTrustAgent onto ChromeCdp with BiDi parity
     grant: { peerId: 'peer', active: true },
   });
 
-  const res = await fetch(`${agent.url}/action`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: 'Bearer wheel-token',
-    },
-    body: JSON.stringify({
-      records: [
-        { kind: 'wheel', point: { x: 80, y: 120 }, deltaX: 12, deltaY: -240, ctrl: true },
-      ],
-    }),
-  });
-  assert.equal(res.status, 200);
-  const wheel = socketCalls.find(
-    (call) => call.method === 'Input.dispatchMouseEvent' && call.params.type === 'mouseWheel'
-  );
-  assert.ok(wheel);
-  assert.equal(wheel.sessionId, 's-tab-1');
-  assert.deepEqual(wheel.params, {
-    type: 'mouseWheel',
-    x: 80,
-    y: 120,
-    deltaX: 12,
-    deltaY: -240,
-    modifiers: 2,
-  });
+  const post = (records) =>
+    fetch(`${agent.url}/action`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer wheel-token',
+      },
+      body: JSON.stringify({ records }),
+    });
 
-  await agent.revoke();
+  try {
+    const wheelRes = await post([
+      { kind: 'wheel', point: { x: 80, y: 120 }, deltaX: 12, deltaY: -240, ctrl: true },
+    ]);
+    assert.equal(wheelRes.status, 403);
+    assert.deepEqual(await wheelRes.json(), {
+      ok: false,
+      allow: false,
+      reason: 'scroll',
+      message: 'Scrolling is local by design and cannot be relayed remotely.',
+    });
+
+    const middleRes = await post([{ kind: 'click', point: { x: 80, y: 120 }, button: 1 }]);
+    assert.equal(middleRes.status, 403);
+    assert.deepEqual(await middleRes.json(), { ok: false, allow: false, reason: 'new-tab' });
+
+    const newTabKeyRes = await post([{ kind: 'key', key: 't', meta: true }]);
+    assert.equal(newTabKeyRes.status, 403);
+    assert.deepEqual(await newTabKeyRes.json(), { ok: false, allow: false, reason: 'new-tab' });
+
+    assert.equal(
+      socketCalls.filter((call) => call.method.startsWith('Input.')).length,
+      0,
+      'refused scroll and tab-opening records must never reach CDP'
+    );
+
+    const clickRes = await post([{ kind: 'click', point: { x: 80, y: 120 }, button: 0, ctrl: true }]);
+    assert.equal(clickRes.status, 200);
+    const press = socketCalls.find(
+      (call) => call.method === 'Input.dispatchMouseEvent' && call.params.type === 'mousePressed'
+    );
+    assert.ok(press);
+    assert.equal(press.sessionId, 's-tab-1');
+    assert.equal(press.params.modifiers, 2);
+  } finally {
+    await agent.revoke();
+  }
 });
 
 test('the watcher opens only for a granted peer and closes when the grant ends', async () => {

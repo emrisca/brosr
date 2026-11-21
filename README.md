@@ -4,9 +4,11 @@
 [![Core tests](https://github.com/emrisca/brosr/actions/workflows/core-tests.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/core-tests.yml)
 [![Lint](https://github.com/emrisca/brosr/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/lint.yml)
 
-Brosr is a room of people in one browser page. Each person's cursor, scroll, navigation and
-media controls show up in every other window. Brosr sends no video. A room costs about
-10 KB/s per peer. A screen share needs 2 Mbps on a bad link.
+Brosr is a room of people sharing one browser session. Cursors, opt-in Live tabs, synced
+media playback and granted controls stay aligned across every window while scrolling stays
+local. Brosr sends no video by default. A room costs about 10 KB/s per peer; a screen share
+needs 2 Mbps on a bad link. (For pages that cannot sync state, see the planned opt-in
+single-tab share in [docs/tab-share-plan.md](docs/tab-share-plan.md).)
 
 A room starts in a browser Brosr picks and runs with its own profile, plus a bridge extension, a
 room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. A
@@ -86,11 +88,14 @@ and open the host browser, then it reads and changes room settings through the p
 Every browser in the room holds one WebSocket to the relay. Frames are sealed with the key from
 the invite fragment, so the relay forwards bytes it cannot read.
 
-A tab someone with control opens is offered, not forced. The landing page lists the live tabs
-under the name of the person who shared each one, and a row with a player says whether it plays.
-A peer opens a copy by choice, a joined row offers Stop, and either closing the copy or stopping
-it leaves the sync and leaves the tab open. The room panel lists a stopped copy, and Resume puts
-that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detail.
+A tab someone with control opens is offered, never forced. The landing page's Live tabs
+section is the single source of truth for offers, grouped dynamically by the person who shared
+each tab (`Host` or `Control`) with live playback badges and in-place title updates. A peer
+opens a copy by choice; a joined row offers Stop, and closing or stopping it leaves the sync
+without closing anyone else's tab. Whoever holds control can play/pause, skip (`-10s` / `+10s`),
+seek or change videos right from Live tabs or their player, and late joiners sync to the live
+playhead automatically. Scrolling always stays local. The room panel lists stopped copies, and
+Resume puts that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detail.
 
 ## What the repository holds
 
@@ -259,10 +264,10 @@ The `.runtime` directory stays out of git, because a run rebuilds it.
 
 | Case | Why |
 | --- | --- |
-| Netflix, Disney+ and Prime Video | The DRM layer controls the media pipeline, so a script cannot set the playhead. |
-| Identical pixels | Each person renders the page on their own machine, so a different window size gives a different layout. |
+| Netflix, Disney+ and Prime Video | The DRM layer controls the media pipeline, so a script cannot set the playhead. See [docs/tab-share-plan.md](docs/tab-share-plan.md) for the planned single-tab share fallback. |
+| Identical pixels | Each person renders the page on their own machine, so a different window size gives a different layout. See [docs/tab-share-plan.md](docs/tab-share-plan.md) for the planned single-tab share fallback. |
 | One shared login | Each person signs in on their own copy. Cookies never cross the relay. |
-| Trusted input in v1 | v1 relays synthetic events. Typing into a native control needs the Firefox remote agent, which is M7. |
+| Trusted input by default | Rooms start with synthetic input only. Trusted native input (`--trusted`) opens a loopback remote agent only while an active control grant is held and closes it on revoke. |
 
 ## Contributing
 
@@ -276,6 +281,7 @@ and reviews.
 - [docs/design.md](docs/design.md) states what works per use case and what a room cannot do.
 - [docs/engines.md](docs/engines.md) compares the Gecko and Chromium lanes side by side.
 - [docs/sync.md](docs/sync.md) covers the layers, the protocol and the media policy.
+- [docs/tab-share-plan.md](docs/tab-share-plan.md) plans an opt-in single-tab screen-share fallback when state sync is impossible.
 - [docs/privacy.md](docs/privacy.md) states what stays sealed, what the relay sees, and what never crosses it.
 - [docs/milestones.md](docs/milestones.md) tracks M0 to M8 with the as-built notes.
 - [core/README.md](core/README.md) explains the modules and the five rules the code depends on.

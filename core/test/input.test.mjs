@@ -42,10 +42,14 @@ test('a grant names one peer, one tab and one origin', () => {
   assert.equal(book.allows('other', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }), false);
 });
 
-test('a cursor and a scroll need no grant', () => {
+test('a cursor needs no grant, while scroll and wheel are always refused', () => {
   const book = new GrantBook();
   assert.equal(book.allows('anyone', { kind: 'move' }), true);
-  assert.equal(book.allows('anyone', { kind: 'scroll' }), true);
+  assert.equal(book.allows('anyone', { kind: 'scroll' }), false);
+  assert.equal(book.decide('anyone', { kind: 'scroll' }).reason, 'scroll');
+  book.grant('peer', { tabId: '*' });
+  assert.equal(book.decide('peer', { kind: 'wheel' }).allow, false);
+  assert.equal(book.decide('peer', { kind: 'wheel' }).reason, 'scroll');
 });
 
 test('a grant expires and a closed tab revokes it', () => {

@@ -14,15 +14,13 @@ import {
   isTabOpeningKey,
   pointerLockDecision,
   resolvePath,
+  scrollPolicyDecision,
 } from './input.mjs';
 
-export { pointerLockDecision };
+export { pointerLockDecision, scrollPolicyDecision };
 
 const isPoint = (point) =>
   Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
-
-const LINE_PIXELS = 40;
-const PAGE_PIXELS = 800;
 
 // W3C WebDriver BiDi key values for non-printable/special keys. Firefox 131+
 // strictly requires a single Unicode code point per keyDown/keyUp action.
@@ -68,18 +66,6 @@ export const BIDI_KEYS = {
   F12: '\uE03C',
   Meta: '\uE03D',
 };
-
-function wheelDeltas(record) {
-  const rawX = record && record.deltaX !== undefined ? Number(record.deltaX) : 0;
-  const rawY = record && record.deltaY !== undefined ? Number(record.deltaY) : 0;
-  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
-  const mode = Number(record && record.deltaMode);
-  const scale = mode === 1 ? LINE_PIXELS : mode === 2 ? PAGE_PIXELS : 1;
-  return {
-    deltaX: Math.round(rawX * scale),
-    deltaY: Math.round(rawY * scale),
-  };
-}
 
 function keyValue(record) {
   const key = String((record && record.key) || '');
@@ -149,6 +135,15 @@ export function pointFor(record, doc) {
   };
 }
 
+function nodeAtPoint(doc, point) {
+  if (!doc || !isPoint(point) || typeof doc.elementFromPoint !== 'function') return null;
+  try {
+    return doc.elementFromPoint(point.x, point.y) || null;
+  } catch {
+    return null;
+  }
+}
+
 // Guardrail #5: explicit trusted-record policy returning allow plus a reason.
 export function trustDecision(record, doc = null) {
   if (!record || typeof record !== 'object') {
@@ -156,19 +151,26 @@ export function trustDecision(record, doc = null) {
   }
   const lock = pointerLockDecision({ doc, record });
   if (!lock.allow) return lock;
+  const scroll = scrollPolicyDecision(record);
+  if (!scroll.allow) return scroll;
 
   const targetNode = doc && record.path ? resolvePath(doc, record.path) : null;
   if (['click', 'down', 'up'].includes(record.kind)) {
-    if (targetNode && isLocalControl(targetNode)) {
-      return { allow: false, reason: 'local-control' };
-    }
-    if (targetNode && isTabOpeningClick(targetNode, record)) {
+    if (Number(record.button) === 1) {
       return { allow: false, reason: 'new-tab' };
     }
-    if (targetNode && isSensitiveField(targetNode)) {
-      return { allow: false, reason: 'sensitive' };
+    if (doc && record.path && !targetNode) {
+      return { allow: false, reason: 'target' };
     }
-    if (record.kind === 'click' && !pointFor(record, doc)) {
+    const point = pointFor(record, doc);
+    const pointNode = doc && point ? nodeAtPoint(doc, point) : null;
+    for (const node of [targetNode, pointNode]) {
+      if (!node) continue;
+      if (isLocalControl(node)) return { allow: false, reason: 'local-control' };
+      if (isTabOpeningClick(node, record)) return { allow: false, reason: 'new-tab' };
+      if (isSensitiveField(node)) return { allow: false, reason: 'sensitive' };
+    }
+    if (record.kind === 'click' && !point) {
       return { allow: false, reason: 'target' };
     }
     return { allow: true, reason: 'ok' };
@@ -178,21 +180,15 @@ export function trustDecision(record, doc = null) {
       ? { allow: true, reason: 'ok' }
       : { allow: false, reason: 'target' };
   }
-  if (record.kind === 'wheel') {
-    if (!wheelDeltas(record)) return { allow: false, reason: 'delta' };
-    return pointFor(record, doc)
-      ? { allow: true, reason: 'ok' }
-      : { allow: false, reason: 'target' };
-  }
   if (record.kind === 'key') {
-    const node = targetNode || (doc && doc.activeElement);
+    const node = targetNode || (doc && doc.activeElement) || null;
     if (node && isLocalControl(node)) return { allow: false, reason: 'local-control' };
-    if (node && isTabOpeningKey(node, record)) return { allow: false, reason: 'new-tab' };
+    if (isTabOpeningKey(node, record)) return { allow: false, reason: 'new-tab' };
     if (node && isSensitiveField(node)) return { allow: false, reason: 'sensitive' };
     return keyValue(record) ? { allow: true, reason: 'ok' } : { allow: false, reason: 'key' };
   }
   if (record.kind === 'text') {
-    const node = targetNode || (doc && doc.activeElement);
+    const node = targetNode || (doc && doc.activeElement) || null;
     if (node && isLocalControl(node)) return { allow: false, reason: 'local-control' };
     if (node && isSensitiveField(node)) return { allow: false, reason: 'sensitive' };
     return String(record.value || '')
@@ -203,33 +199,24 @@ export function trustDecision(record, doc = null) {
 }
 
 // The page side of the channel. It resolves each record and focuses the field
-// before the keys arrive. Records refused by pointer lock, local controls,
-// new-tab links, sensitive-field guards, invalid deltas, or missing layout
+// before the keys arrive. Records refused by pointer lock, scroll policy,
+// local controls, new-tab links, sensitive-field guards, or missing layout
 // points are dropped.
 export function prepareRecords(records, doc) {
   if (!pointerLockDecision({ doc }).allow) return [];
   const out = [];
   for (const record of records || []) {
     if (!record || typeof record !== 'object') continue;
-    if (!pointerLockDecision({ doc, record }).allow) continue;
+    if (!trustDecision(record, doc).allow) continue;
     const next = { ...record };
     const targetNode = doc && record.path ? resolvePath(doc, record.path) : null;
-    if (['click', 'down', 'up'].includes(record.kind)) {
-      if (targetNode && isLocalControl(targetNode)) continue;
-      if (targetNode && isTabOpeningClick(targetNode, record)) continue;
-      if (targetNode && isSensitiveField(targetNode)) continue;
-    }
-    if (record.kind === 'wheel' && !wheelDeltas(record)) continue;
-    if (['move', 'click', 'down', 'up', 'wheel'].includes(record.kind)) {
+    if (['move', 'click', 'down', 'up'].includes(record.kind)) {
       const point = pointFor(record, doc);
       if (!point) continue;
       next.point = point;
     }
     if (record.kind === 'key' || record.kind === 'text') {
       const node = targetNode || (doc && doc.activeElement);
-      if (node && isLocalControl(node)) continue;
-      if (record.kind === 'key' && node && isTabOpeningKey(node, record)) continue;
-      if (node && isSensitiveField(node)) continue;
       if (node && typeof node.focus === 'function') {
         try {
           node.focus({ preventScroll: true });
@@ -260,6 +247,7 @@ function validButton(raw) {
 export function actionsForRecord(record) {
   if (!record || typeof record !== 'object') return null;
   if (!pointerLockDecision({ record }).allow) return null;
+  if (!scrollPolicyDecision(record).allow) return null;
   const point = record.point;
   switch (record.kind) {
     case 'move':
@@ -270,6 +258,7 @@ export function actionsForRecord(record) {
     case 'click': {
       if (!isPoint(point)) return null;
       const button = validButton(record.button);
+      if (button === 1) return null;
       const source = mouseSource([
         { type: 'pointerMove', x: point.x, y: point.y, origin: 'viewport' },
         { type: 'pointerDown', button },
@@ -280,6 +269,7 @@ export function actionsForRecord(record) {
     case 'down':
     case 'up': {
       const button = validButton(record.button);
+      if (button === 1) return null;
       const actions = [];
       if (isPoint(point)) {
         actions.push({ type: 'pointerMove', x: point.x, y: point.y, origin: 'viewport' });
@@ -288,6 +278,7 @@ export function actionsForRecord(record) {
       return withModifiers(mouseSource(actions), modifierKeys(record));
     }
     case 'key': {
+      if (isTabOpeningKey(null, record)) return null;
       const value = keyValue(record);
       if (!value) return null;
       const mods = modifierKeys(record, value);
@@ -307,28 +298,6 @@ export function actionsForRecord(record) {
         actions.push({ type: 'keyDown', value: char }, { type: 'keyUp', value: char });
       }
       return [{ type: 'key', id: 'brosr-keys', actions }];
-    }
-    case 'wheel': {
-      if (!isPoint(point)) return null;
-      const deltas = wheelDeltas(record);
-      if (!deltas) return null;
-      // WebDriver BiDi requires source type "wheel" with integer coords/deltas.
-      const source = {
-        type: 'wheel',
-        id: 'brosr-wheel',
-        actions: [
-          {
-            type: 'scroll',
-            x: Math.round(point.x),
-            y: Math.round(point.y),
-            deltaX: deltas.deltaX,
-            deltaY: deltas.deltaY,
-            duration: 0,
-            origin: 'viewport',
-          },
-        ],
-      };
-      return withModifiers(source, modifierKeys(record));
     }
     default:
       return null;

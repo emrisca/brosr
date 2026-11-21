@@ -11,8 +11,9 @@ import {
   isTabOpeningKey,
   replayInput,
 } from '../input.mjs';
+import { encode } from '../protocol.mjs';
 import { createRoomClient } from '../sync.mjs';
-import { prepareRecords, trustDecision } from '../trust.mjs';
+import { actionsForRecord, prepareRecords, trustDecision } from '../trust.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(here, '..', '..');
@@ -422,10 +423,203 @@ test('background brosr:tab-open-local with updateOnly never creates a tab when c
   assert.equal(bg.created.length, 1, 'closed copy is never recreated by a remote update');
 });
 
-test('landing page marks local room controls and rejects synthetic Live tabs clicks', () => {
+test('landing page marks local room controls, tiles, Watch directory/filter, and preserves live cursors', () => {
   const html = fs.readFileSync(path.join(rootDir, 'landing', 'index.html'), 'utf8');
   assert.match(html, /id="live-tabs"[^>]*data-brosr-local="1"/);
   assert.match(html, /id="host-takeover"[^>]*data-brosr-local="1"/);
+  assert.match(html, /id="tiles"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-youtube"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-music"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-watch"[^>]*data-brosr-local="1"/);
+  assert.match(html, /id="site-filter"[^>]*data-brosr-local="1"/);
+  assert.match(html, /id="watch-sites"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-play"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-notes"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="tile tile-canvas"[^>]*data-brosr-local="1"/);
+  assert.match(html, /class="skip"[^>]*data-brosr-local="1"/);
+  assert.match(
+    html,
+    /takeover\.addEventListener\('click',\s*function \(event\)\s*\{\s*if \(event && event\.isTrusted === false\) return;/
+  );
   assert.match(html, /stop\.addEventListener\('click',\s*function \(event\)\s*\{\s*if \(!event\.isTrusted\) return;/);
   assert.match(html, /button\.addEventListener\('click',\s*function \(event\)\s*\{\s*if \(!event\.isTrusted\) return;/);
+  // Live room cursors remain wired on the landing page.
+  assert.match(html, /id="cursors"/);
+  assert.match(html, /window\.addEventListener\(\s*'pointermove'/);
+});
+
+test('point-only clicks, unresolvable paths, form/base targets, and new-tab shortcuts are refused across all layers', () => {
+  const blankLink = {
+    tagName: 'A',
+    href: 'https://www.youtube.com/',
+    target: '_blank',
+    getAttribute: (name) => (name === 'href' ? 'https://www.youtube.com/' : name === 'target' ? '_blank' : ''),
+    closest: (sel) => (sel === 'a[href]' ? blankLink : null),
+    getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+  };
+  const tilesSection = {
+    tagName: 'SECTION',
+    id: 'tiles',
+    getAttribute: (name) => (name === 'id' ? 'tiles' : ''),
+    closest: (sel) => (sel === '#tiles' ? tilesSection : null),
+    getBoundingClientRect: () => ({ left: 200, top: 200, width: 100, height: 40 }),
+  };
+  const normalBtn = {
+    tagName: 'BUTTON',
+    id: 'ok',
+    getAttribute: (name) => (name === 'id' ? 'ok' : ''),
+    closest: () => null,
+    getBoundingClientRect: () => ({ left: 400, top: 400, width: 80, height: 30 }),
+  };
+  const baseBlankDoc = {
+    querySelector: (sel) => (sel === 'base[target]' ? { getAttribute: () => '_blank' } : null),
+  };
+  const baseInheritedLink = {
+    tagName: 'A',
+    href: 'https://example.test/watch',
+    target: '',
+    ownerDocument: baseBlankDoc,
+    getAttribute: (name) => (name === 'href' ? 'https://example.test/watch' : ''),
+    closest: (sel) => (sel === 'a[href]' ? baseInheritedLink : null),
+  };
+  const formTargetBtn = {
+    tagName: 'BUTTON',
+    formTarget: '_blank',
+    getAttribute: (name) => (name === 'formtarget' ? '_blank' : ''),
+    closest: (sel) => (sel.includes('button') ? formTargetBtn : null),
+  };
+  const formParentBtn = {
+    tagName: 'BUTTON',
+    form: { target: '_blank', getAttribute: () => '_blank' },
+    getAttribute: () => '',
+    closest: (sel) => (sel.includes('button') ? formParentBtn : null),
+  };
+
+  const doc = {
+    querySelectorAll: (sel) => (sel === '#ok' ? [normalBtn] : []),
+    elementFromPoint: (x, y) => {
+      if (x === 25 && y === 25) return blankLink;
+      if (x === 225 && y === 225) return tilesSection;
+      if (x === 420 && y === 415) return normalBtn;
+      return null;
+    },
+  };
+
+  // Point-only click landing on a[target="_blank"] or #tiles cannot bypass trust guards.
+  assert.deepEqual(trustDecision({ kind: 'click', point: { x: 25, y: 25 }, button: 0 }, doc), {
+    allow: false,
+    reason: 'new-tab',
+  });
+  assert.deepEqual(trustDecision({ kind: 'click', point: { x: 225, y: 225 }, button: 0 }, doc), {
+    allow: false,
+    reason: 'local-control',
+  });
+  // Unresolvable path with a forged point is rejected as target mismatch.
+  assert.deepEqual(
+    trustDecision({ kind: 'click', path: '#missing', point: { x: 420, y: 415 }, button: 0 }, doc),
+    { allow: false, reason: 'target' }
+  );
+  // Base target, formtarget, form[target], and #tiles fallback are caught.
+  assert.equal(isTabOpeningClick(baseInheritedLink, { button: 0 }), true);
+  assert.equal(isTabOpeningClick(formTargetBtn, { button: 0 }), true);
+  assert.equal(isTabOpeningClick(formParentBtn, { button: 0 }), true);
+  assert.equal(isLocalControl(tilesSection), true);
+
+  // Browser new-tab / new-window keyboard shortcuts are blocked at every layer.
+  for (const shortcut of [
+    { kind: 'key', key: 't', ctrl: true },
+    { kind: 'key', key: 't', meta: true },
+    { kind: 'key', key: 'n', ctrl: true },
+    { kind: 'key', key: 'n', meta: true },
+  ]) {
+    assert.equal(isTabOpeningKey(null, shortcut), true);
+    assert.equal(inputCaptureDecision({ record: shortcut }).reason, 'new-tab');
+    assert.deepEqual(trustDecision(shortcut, doc), { allow: false, reason: 'new-tab' });
+    assert.equal(actionsForRecord(shortcut), null);
+  }
+  // Middle-click is blocked even without a DOM node.
+  assert.deepEqual(trustDecision({ kind: 'click', point: { x: 420, y: 415 }, button: 1 }, null), {
+    allow: false,
+    reason: 'new-tab',
+  });
+  assert.equal(actionsForRecord({ kind: 'click', point: { x: 420, y: 415 }, button: 1 }), null);
+
+  // prepareRecords filters out all of the above while keeping a normal click.
+  const prepared = prepareRecords(
+    [
+      { kind: 'click', point: { x: 25, y: 25 }, button: 0 },
+      { kind: 'click', point: { x: 225, y: 225 }, button: 0 },
+      { kind: 'click', path: '#missing', point: { x: 420, y: 415 }, button: 0 },
+      { kind: 'click', path: '#ok', button: 1 },
+      { kind: 'key', key: 't', meta: true },
+      { kind: 'click', path: '#ok', button: 0 },
+    ],
+    doc
+  );
+  assert.equal(prepared.length, 1);
+  assert.equal(prepared[0].path, '#ok');
+  assert.equal(prepared[0].button, 0);
+});
+
+test('browser-entry never wires remote room-tab navigation and sync enforces host authority on nav', async () => {
+  const entry = fs.readFileSync(path.join(rootDir, 'core', 'browser-entry.mjs'), 'utf8');
+  assert.doesNotMatch(entry, /location\.assign\(/, 'browser-entry must never call location.assign on remote frames');
+  assert.doesNotMatch(entry, /\bnavigate\b/, 'browser-entry must not pass a navigate callback to createRoomClient');
+
+  // Host ignores incoming nav frames; peer ignores non-host or unattributed nav frames.
+  const hostNavs = [];
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host-1',
+    hostId: 'host-1',
+    navigate: (url) => hostNavs.push(url),
+    send: () => {},
+  });
+  const onHost = host.receive(encode({ type: 'nav', from: 'peer-1', url: 'https://evil.test', roomTime: 1 }));
+  assert.equal(onHost.ignored, 'host');
+  assert.deepEqual(hostNavs, []);
+
+  const peerNavs = [];
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'peer-1',
+    hostId: 'host-1',
+    navigate: (url) => peerNavs.push(url),
+    send: () => {},
+  });
+  assert.equal(
+    peer.receive(encode({ type: 'nav', from: 'peer-2', url: 'https://evil.test', roomTime: 1 })).ignored,
+    'not-host'
+  );
+  assert.equal(
+    peer.receive(encode({ type: 'nav', url: 'https://evil.test', roomTime: 1 })).ignored,
+    'not-host'
+  );
+  assert.deepEqual(peerNavs, []);
+
+  // Trusted actuator 403 policy refusal (new-tab) never falls back to synthetic replay.
+  const doc = makeLandingDoc();
+  const hostWithTrust = createRoomClient({
+    role: 'host',
+    peerId: 'host-1',
+    hostId: 'host-1',
+    document: doc,
+    overlay: false,
+    send: () => {},
+    input: {
+      trusted: async () => ({ ok: false, allow: false, reason: 'new-tab' }),
+    },
+  });
+  hostWithTrust.setGrant('peer-1', true);
+  hostWithTrust.receive(
+    encode({
+      type: 'input',
+      peerId: 'peer-1',
+      seq: 1,
+      records: [{ kind: 'click', path: '#normal-btn', button: 0 }],
+    })
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(doc.clicks, [], 'policy refusal must never fall back to synthetic replay');
+  assert.equal(hostWithTrust.stats.inputReasons['new-tab'], 1);
 });

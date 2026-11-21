@@ -397,3 +397,278 @@ test('browser-entry refreshes embedded topUrl after listener registration and ig
   assert.match(entrySource, /if \(event && event\.target && video && event\.target !== video\) return;/);
   assert.match(entrySource, /client\.sendApp\(TAB_APP, \{ action: 'sync', key: offer\.key \}\)/);
 });
+
+test('host joining a paused peer tab after recent host act on another film still syncs paused position', () => {
+  let now = 20000;
+  const hostSent = [];
+  const peerSent = [];
+  const hostRelayed = [];
+
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host-1',
+    hostId: 'host-1',
+    now: () => now,
+    send: (frame) => hostSent.push(JSON.parse(frame)),
+    overlay: false,
+    onMedia: (frame) => {
+      hostRelayed.push(frame);
+      return true;
+    },
+  });
+  const peer = createRoomClient({
+    role: 'peer',
+    peerId: 'peer-1',
+    name: 'Alice',
+    hostId: 'host-1',
+    now: () => now,
+    send: (frame) => peerSent.push(JSON.parse(frame)),
+    overlay: false,
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'peer-1', name: 'Alice', roomTime: now }), now);
+  host.setGrant('peer-1', true);
+  peer.receive(encode({ type: 'control', from: 'host-1', peerId: 'peer-1', allowed: true, roomTime: now }), now);
+
+  // Host was actively watching YouTube and just paused it 100ms ago (mediaRev = 1, lastHostActAt = now).
+  host.sendHostMedia(
+    { key: 'youtube:old', position: 60, playing: false, action: 'pause', rate: 1, at: now },
+    now
+  );
+
+  // 100ms later (inside HOST_MEDIA_PRIORITY_MS for youtube:old!), Host joins Peer's paused Anidap tab.
+  // Peer has NOT seen Host's youtube:old pause yet (so Peer sends rev: 1 for ANIDAP_KEY!).
+  now += 100;
+  peer.sendMedia({
+    key: ANIDAP_KEY,
+    action: 'seek',
+    position: 255,
+    playing: false,
+    rate: 1,
+    volume: 1,
+    buffering: false,
+    ad: false,
+  });
+  const syncFrame = peerSent.find((f) => f.type === 'media');
+  const accepted = host.receive(encode(syncFrame), now);
+  assert.equal(accepted.relayed, true, 'different-film join sync must not be dropped by youtube host-priority or stale-rev');
+
+  // 5 seconds later, Host's Anidap iframe loads auto-playing at 0:00 -> must NOT clobber Peer's paused 255s!
+  now += 5000;
+  const clobbered = host.sendHostMedia(
+    { key: ANIDAP_KEY, position: 0, playing: true, rate: 1, volume: 1, buffering: false, action: false, at: now },
+    now
+  );
+  assert.equal(clobbered, false, 'host must hold paused peer anchor until joined tab pauses & seeks to 255s');
+
+  const pending = host.pendingPeerMedia(ANIDAP_KEY, now);
+  assert.ok(pending);
+  assert.equal(pending.playing, false);
+  assert.equal(pending.position, 255);
+});
+
+test('peer B joining peer A offered tab syncs even when host has not joined that tab', () => {
+  let now = 30000;
+  const hostSent = [];
+  const peerASent = [];
+  const peerBRelayed = [];
+
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host-1',
+    hostId: 'host-1',
+    now: () => now,
+    send: (frame) => hostSent.push(frame),
+    overlay: false,
+    onMedia: () => true,
+  });
+  const peerA = createRoomClient({
+    role: 'peer',
+    peerId: 'peer-a',
+    name: 'Alice',
+    hostId: 'host-1',
+    now: () => now,
+    send: (frame) => peerASent.push(frame),
+    overlay: false,
+  });
+  const peerB = createRoomClient({
+    role: 'peer',
+    peerId: 'peer-b',
+    name: 'Bob',
+    hostId: 'host-1',
+    now: () => now,
+    send: () => {},
+    overlay: false,
+    onMedia: (frame) => {
+      peerBRelayed.push(frame);
+      return true;
+    },
+  });
+
+  host.receive(encode({ type: 'hello', peerId: 'peer-a', name: 'Alice', roomTime: now }), now);
+  host.receive(encode({ type: 'hello', peerId: 'peer-b', name: 'Bob', roomTime: now }), now);
+  host.setGrant('peer-a', true);
+  while (hostSent.length) {
+    const f = hostSent.shift();
+    peerA.receive(f, now);
+    peerB.receive(f, now);
+  }
+
+  // Host is watching YouTube (never joins Anidap) and bumped mediaRev to 3.
+  for (let i = 1; i <= 3; i += 1) {
+    now += 600;
+    host.sendHostMedia({ key: 'youtube:hostOnly', position: i * 20, playing: true, action: 'seek', rate: 1, at: now }, now);
+    while (hostSent.length) {
+      const f = hostSent.shift();
+      peerB.receive(f, now);
+      // Peer A missed the last tick so Peer A rev is behind Host!
+      if (i < 3) peerA.receive(f, now);
+    }
+  }
+
+  // Peer B clicks Join on Peer A's Anidap tab -> Peer A replies with live Anidap state (playing at 330s).
+  now += 200;
+  peerA.sendMedia({
+    key: ANIDAP_KEY,
+    action: 'seek',
+    position: 330,
+    playing: true,
+    rate: 1,
+    volume: 1,
+    buffering: false,
+    ad: false,
+  });
+  while (peerASent.length) {
+    const f = peerASent.shift();
+    host.receive(f, now);
+    peerB.receive(f, now);
+  }
+  // Host relays the Anidap state even though Host has NOT opened Anidap.
+  while (hostSent.length) {
+    peerB.receive(hostSent.shift(), now);
+  }
+
+  const anidapFrame = peerBRelayed.filter((f) => f.key === ANIDAP_KEY).at(-1);
+  assert.ok(anidapFrame, 'peer B must receive Anidap playback state even when host has not joined Anidap');
+  assert.ok(Math.abs(anidapFrame.expected - 330) < 0.5, `expected ~330s, got ${anidapFrame.expected}`);
+  assert.equal(anidapFrame.playing, true);
+});
+
+test('background falls back to cached tab media state when brosr:media-read races/times out and emits brosr:media-mounted for joined tabs', async () => {
+  const peerBg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-1&role=peer', active: false },
+      { id: 42, url: ANIDAP_WATCH, active: true, title: 'Anidap Ep 8' },
+    ],
+    tabReplies: new Map([
+      // Simulate cross-origin iframe race: brosr:media-read returns null (no-media / timeout).
+      [42, () => null],
+    ]),
+  });
+
+  await ask(
+    peerBg.messageListener,
+    { type: 'brosr:room-hello', role: 'peer', granted: true },
+    { tab: { id: 1, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-1&role=peer' } }
+  );
+  await ask(peerBg.messageListener, { type: 'brosr:tab-share', tabId: 42, shared: true });
+
+  // Tab 42 previously reported live media state via brosr:media-out (paused at 255s).
+  await ask(
+    peerBg.messageListener,
+    {
+      type: 'brosr:media-out',
+      state: {
+        key: ANIDAP_KEY,
+        position: 255,
+        duration: 1442,
+        playing: false,
+        rate: 1,
+        volume: 1,
+        buffering: false,
+        ad: false,
+        at: Date.now() - 500,
+      },
+    },
+    { tab: { id: 42, active: true } }
+  );
+
+  // Even though brosr:media-read returned null, brosr:tab-media-state falls back to cached state!
+  const cachedPaused = await ask(peerBg.messageListener, {
+    type: 'brosr:tab-media-state',
+    key: '42',
+  });
+  assert.equal(cachedPaused.ok, true);
+  assert.equal(cachedPaused.cached, true);
+  assert.equal(cachedPaused.state.key, ANIDAP_KEY);
+  assert.equal(cachedPaused.state.position, 255);
+  assert.equal(cachedPaused.state.playing, false);
+
+  // Playing cached state projects position forward when brosr:media-read returns null.
+  await ask(
+    peerBg.messageListener,
+    {
+      type: 'brosr:media-out',
+      state: {
+        key: ANIDAP_KEY,
+        position: 300,
+        duration: 1442,
+        playing: true,
+        rate: 1,
+        volume: 1,
+        buffering: false,
+        ad: false,
+        at: Date.now() - 1000,
+      },
+    },
+    { tab: { id: 42, active: true } }
+  );
+  const cachedPlaying = await ask(peerBg.messageListener, {
+    type: 'brosr:tab-media-state',
+    key: '42',
+  });
+  assert.equal(cachedPlaying.ok, true);
+  assert.equal(cachedPlaying.cached, true);
+  assert.ok(cachedPlaying.state.position >= 300.8 && cachedPlaying.state.position <= 303, `expected ~301s, got ${cachedPlaying.state.position}`);
+
+  // Peer B browser joins tab key '42'; even if the joined tab is not active when its iframe mounts,
+  // brosr:media-hello notifies the room tab with brosr:media-mounted.
+  const joinerBg = loadBackground({
+    tabs: [
+      { id: 10, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-2&role=peer', active: true },
+    ],
+  });
+  await ask(
+    joinerBg.messageListener,
+    { type: 'brosr:room-hello', role: 'peer', granted: false },
+    { tab: { id: 10, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-2&role=peer' } }
+  );
+  const joined = await ask(joinerBg.messageListener, {
+    type: 'brosr:tab-open-local',
+    url: ANIDAP_WATCH,
+    key: '42',
+    foreground: false,
+  });
+  assert.equal(joined.ok, true);
+  await ask(
+    joinerBg.messageListener,
+    { type: 'brosr:media-hello', key: ANIDAP_KEY },
+    { tab: { id: joined.tabId, active: false } }
+  );
+  const mounted = joinerBg.sent.find(
+    (entry) =>
+      entry.tabId === 10 &&
+      entry.message &&
+      entry.message.type === 'brosr:media-mounted' &&
+      entry.message.key === ANIDAP_KEY &&
+      entry.message.joinedKey === '42'
+  );
+  assert.ok(mounted, 'joined tab media-hello must notify room tab with brosr:media-mounted');
+});
+
+test('browser-entry guards seeking drags, caches roomMediaByKey, and re-applies on brosr:media-mounted for peer joiners', () => {
+  assert.match(entrySource, /document\.addEventListener\(\s*'seeking'/);
+  assert.match(entrySource, /remote\.noteLocalSeeking\(\)/);
+  assert.match(entrySource, /roomMediaByKey/);
+  assert.match(entrySource, /message\.type === 'brosr:media-mounted'/);
+});

@@ -7,8 +7,10 @@ import {
   noteSharedMedia,
   rememberSharedTab,
   sharedTab,
+  MAX_TAB_SKIP_SECONDS,
   tabActionDecision,
   tabMedia,
+  tabMediaControlDecision,
 } from '../live-tabs.mjs';
 
 const film = 'https://www.youtube.com/watch?v=1';
@@ -205,5 +207,58 @@ test('rememberSharedTab, forgetSharedTab, and noteSharedMedia enforce ownerId', 
   assert.equal(
     noteSharedMedia([hostOffer], { key: '10', playing: false }, { ownerId: 'host' })[0].playing,
     false
+  );
+});
+
+test('rememberSharedTab preserves playing state and row order on same-URL title refreshes', () => {
+  const first = sharedTab(
+    { action: 'open', url: film, key: '1', title: 'YouTube', owner: 'Host', playing: true },
+    { from: 'host', hostId: 'host' }
+  );
+  const second = sharedTab(
+    { action: 'open', url: 'https://anidap.lol/watch/1', key: '2', title: 'Anidap', owner: 'Host', playing: false },
+    { from: 'host', hostId: 'host' }
+  );
+  const list = rememberSharedTab(rememberSharedTab([], first), second);
+  assert.deepEqual(list.map((t) => t.key), ['2', '1']);
+
+  const titleOnly = sharedTab(
+    { action: 'open', url: film, key: '1', title: 'Big Buck Bunny - YouTube', owner: 'Host' },
+    { from: 'host', hostId: 'host' }
+  );
+  const refreshed = rememberSharedTab(list, titleOnly);
+  assert.deepEqual(refreshed.map((t) => t.key), ['2', '1']);
+  assert.equal(refreshed[1].title, 'Big Buck Bunny - YouTube');
+  assert.equal(refreshed[1].playing, true);
+});
+
+test('tabMediaControlDecision enforces controller authority, local tab presence, and clamped skips', () => {
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'peer', granted: false, joined: true }),
+    { allow: false, reason: 'no-control' }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'host', mine: false, joined: false }),
+    { allow: false, reason: 'not-local' }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'seek', role: 'host', mine: true }),
+    { allow: false, reason: 'bad-action' }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'skip', delta: 0, role: 'host', mine: true }),
+    { allow: false, reason: 'bad-delta' }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'host', mine: true }),
+    { allow: true, reason: 'ok', key: '10', action: 'toggle', delta: 0 }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'skip', delta: -10, role: 'peer', granted: true, joined: true }),
+    { allow: true, reason: 'ok', key: '10', action: 'skip', delta: -10 }
+  );
+  assert.deepEqual(
+    tabMediaControlDecision({ key: '10', action: 'skip', delta: 9999, role: 'host', joined: true }),
+    { allow: true, reason: 'ok', key: '10', action: 'skip', delta: MAX_TAB_SKIP_SECONDS }
   );
 });

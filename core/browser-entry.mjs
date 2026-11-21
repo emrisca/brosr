@@ -14,6 +14,7 @@ import {
   sharedTab,
   tabActionDecision,
   tabMedia,
+  tabMediaControlDecision,
   tabSyncRequest,
 } from './live-tabs.mjs';
 import { PANEL_APP, openPanelPayload, sealPanelPayload } from './panel.mjs';
@@ -518,6 +519,63 @@ async function startPageMedia() {
       }
       return Promise.resolve(answer);
     }
+    // Inline media controls from Live Tabs on the landing page target the
+    // frame that actually holds the active <video>; frames without a video stay
+    // silent so cross-origin player iframes answer cleanly.
+    if (message.type === 'brosr:media-control') {
+      const video = remote.video();
+      if (!video) return undefined;
+      const requested = String(message.action || '');
+      let actName = '';
+      if (requested === 'toggle') {
+        actName = video.paused ? 'play' : 'pause';
+      } else if (requested === 'play' || requested === 'pause') {
+        actName = requested;
+      } else if (requested === 'skip') {
+        actName = 'seek';
+      } else {
+        return undefined;
+      }
+      remoteEcho = null;
+      if (remote.echoUntil && actName in remote.echoUntil) {
+        remote.echoUntil[actName] = -Infinity;
+      }
+      if (actName === 'seek') {
+        const rawDelta = Number(message.delta);
+        if (!Number.isFinite(rawDelta) || rawDelta === 0) return undefined;
+        const delta = Math.max(-600, Math.min(600, rawDelta));
+        const cur = Number(video.currentTime || 0);
+        const dur = Number(video.duration);
+        const target =
+          Number.isFinite(dur) && dur > 0
+            ? Math.max(0, Math.min(dur, cur + delta))
+            : Math.max(0, cur + delta);
+        remote.pendingSeek = null;
+        video.currentTime = target;
+        remote.noteLocalAct('seek');
+        reportMedia('seek');
+      } else if (actName === 'play') {
+        const started = video.play();
+        if (started && typeof started.catch === 'function') started.catch(() => {});
+        remote.noteLocalAct('play');
+        reportMedia('play');
+      } else if (actName === 'pause') {
+        video.pause();
+        remote.noteLocalAct('pause');
+        reportMedia('pause');
+      }
+      const answer = {
+        ok: true,
+        action: actName,
+        playing: !video.paused && !video.ended,
+        position: Number(video.currentTime || 0),
+      };
+      if (typeof sendResponse === 'function') {
+        sendResponse(answer);
+        return undefined;
+      }
+      return Promise.resolve(answer);
+    }
     // The panel asks the tab that holds the film what it has done with it. The
     // room status cannot carry these counts, because the room tab is a separate
     // page, so the panel reads them here through the background page.
@@ -605,6 +663,7 @@ async function startPageMedia() {
     document.documentElement.dataset.brosrCursorSites = JSON.stringify(allowedSites);
   });
   function reportMedia(userAction = false) {
+    if (!userAction && remote.isLocalSeeking()) return;
     if (embedded && (!topUrl || Date.now() - lastTopUrlAt >= 2000)) {
       refreshTopUrl(1000).catch(() => {});
     }
@@ -652,7 +711,7 @@ async function startPageMedia() {
   // it comes just after a correction.
   const act = (action) => {
     const isEcho =
-      action === 'seek'
+      action === 'seek' || action === 'rate'
         ? remote.isEcho(action)
         : remote.isEcho(action) || mediaEchoMatches(remoteEcho, action);
     if (isEcho) {
@@ -680,6 +739,16 @@ async function startPageMedia() {
       true
     );
   }
+  document.addEventListener(
+    'seeking',
+    (event) => {
+      const video = remote.video();
+      if (event && event.target && video && event.target !== video) return;
+      if (remote.isEcho('seek')) return;
+      remote.noteLocalSeeking();
+    },
+    true
+  );
 
   return { started: true, role: 'media', room: null, peerId: null };
 }
@@ -759,6 +828,47 @@ export async function start() {
   let sharedTabs = [];
   let pendingTabSync = null;
   let lastPendingApplyAt = 0;
+  // Latest received room media anchor per film key so a late-loading joined tab
+  // (e.g. FMHY/Anidap iframe mounting seconds after Join) still syncs even if
+  // another film ticked in the meantime.
+  const roomMediaByKey = new Map();
+  const rememberRoomMedia = (entry) => {
+    if (!entry || !entry.key) return;
+    roomMediaByKey.set(entry.key, entry);
+    if (roomMediaByKey.size > 16) {
+      const oldest = roomMediaByKey.keys().next().value;
+      if (oldest !== undefined) roomMediaByKey.delete(oldest);
+    }
+  };
+  const projectAnchorPosition = (anchor, nowAt) => {
+    if (!anchor) return 0;
+    const base = Number(anchor.position || 0);
+    if (!anchor.playing || anchor.buffering || anchor.ad) return base;
+    const rate = Number(anchor.rate);
+    const speed = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    const age = Math.max(0, (nowAt - Number(anchor.at || nowAt)) / 1000);
+    return base + age * speed;
+  };
+  const applyProjectedMedia = (anchor, nowAt = Date.now(), action = 'seek') => {
+    if (!anchor || !anchor.key || !api || !api.runtime || !api.runtime.sendMessage) return false;
+    api.runtime
+      .sendMessage({
+        type: 'brosr:media-apply',
+        from: anchor.from || null,
+        name: anchor.name || null,
+        action,
+        key: anchor.key,
+        position: projectAnchorPosition(anchor, nowAt),
+        playing: Boolean(anchor.playing),
+        rate: Number(anchor.rate || 1),
+        volume: Number(anchor.volume ?? 1),
+        ad: Boolean(anchor.ad),
+        ...(Number.isFinite(Number(anchor.rev)) ? { rev: Number(anchor.rev) } : {}),
+        at: nowAt,
+      })
+      .catch(() => {});
+    return true;
+  };
   const joinedKey = `brosr-joined-tabs:${room}`;
   const joinedTabs = new Set((() => {
     try {
@@ -924,10 +1034,7 @@ export async function start() {
     };
   };
 
-  const navigate = (url) => {
-    if (url && url !== location.href) location.assign(url);
-  };
-
+  // Tabs are offers in Live Tabs, never forced navigations of the room tab.
   // The IFrame API player lives in page scope, so a bridge hands it in on the
   // window. Without one, the entry keeps the HTML element adapter. A room page
   // usually shows no film, so it takes the relay from the tab that does.
@@ -998,7 +1105,6 @@ export async function start() {
     // Presence names the page, so another tab draws a cursor only when it
     // shows that same page.
     pageUrl: () => cursorKey(location.href),
-    navigate,
     mediaAdapter,
     onApp: (message) => {
       // The host app's control panel uses a private app channel. A guest has no
@@ -1127,7 +1233,7 @@ export async function start() {
         // A peer still opens nothing by itself. Only a key this browser already
         // joined follows the publisher to a new page in the same tab.
         if (!joinedTabs.has(offer.key)) return;
-        if (api && api.runtime && api.runtime.sendMessage) {
+        if (urlChanged && api && api.runtime && api.runtime.sendMessage) {
           api.runtime
             .sendMessage({
               type: 'brosr:tab-open-local',
@@ -1138,16 +1244,7 @@ export async function start() {
             .catch(() => {});
         }
         if (urlChanged && offer.ownerId && offer.ownerId !== peerId) {
-          const nowAt = Date.now();
-          pendingTabSync = {
-            key: offer.key,
-            ownerId: offer.ownerId,
-            at: nowAt,
-            until: nowAt + 12000,
-            graceUntil: nowAt + 1500,
-            lastPingAt: nowAt,
-          };
-          client.sendApp(TAB_APP, { action: 'sync', key: offer.key });
+          beginPendingTabSync(offer);
         }
         return;
       }
@@ -1258,8 +1355,14 @@ export async function start() {
         echoMedia += 1;
         return false;
       }
-      if (role === 'host' && pendingTabSync && message.peerId === pendingTabSync.ownerId) {
-        pendingTabSync.graceUntil = 0;
+      if (
+        pendingTabSync &&
+        (message.peerId === pendingTabSync.ownerId ||
+          (pendingTabSync.filmKey && message.key === pendingTabSync.filmKey))
+      ) {
+        pendingTabSync.receivedReply = true;
+        pendingTabSync.filmKey = message.key;
+        if (role === 'host') pendingTabSync.graceUntil = 0;
       }
       // The frame carries the position this tab should have now, so the panel
       // anchor is the expected value and the moment it arrived.
@@ -1283,6 +1386,12 @@ export async function start() {
         ad: Boolean(message.ad),
         at,
       };
+      rememberRoomMedia({
+        ...roomMedia,
+        from: message.peerId || null,
+        name: message.name || null,
+        ...(Number.isFinite(Number(message.rev)) ? { rev: Number(message.rev) } : {}),
+      });
       if (!api || !api.runtime || !api.runtime.sendMessage) return false;
       api.runtime
         .sendMessage({
@@ -1322,6 +1431,35 @@ export async function start() {
     now: () => Date.now(),
     send: (frame) => sendText(frame),
   });
+
+  const beginPendingTabSync = (offer) => {
+    if (!offer || !offer.key || !offer.ownerId || offer.ownerId === peerId) return;
+    const nowAt = Date.now();
+    pendingTabSync = {
+      key: offer.key,
+      ownerId: offer.ownerId,
+      filmKey: null,
+      at: nowAt,
+      until: nowAt + 20000,
+      graceUntil: 0,
+      pings: 1,
+      lastPingAt: nowAt,
+      receivedReply: false,
+    };
+    client.sendApp(TAB_APP, { action: 'sync', key: offer.key });
+  };
+  const pingPendingTabSync = (nowAt = Date.now()) => {
+    if (!pendingTabSync) return false;
+    if (nowAt >= pendingTabSync.until) {
+      pendingTabSync = null;
+      return false;
+    }
+    if (pendingTabSync.pings >= 5 || nowAt - pendingTabSync.lastPingAt < 600) return false;
+    pendingTabSync.pings += 1;
+    pendingTabSync.lastPingAt = nowAt;
+    client.sendApp(TAB_APP, { action: 'sync', key: pendingTabSync.key });
+    return true;
+  };
 
   // The app control panel asks for one snapshot and sends one change at a
   // time. The room tab already owns the roster, grants and media view, so this
@@ -1813,6 +1951,7 @@ export async function start() {
       role,
       peerId,
       hostId,
+      canControl: Boolean(role === 'host' || client.isGranted()),
       joined: [...joinedTabs],
       groups: groupSharedTabs(sharedTabs, { hostId }),
     };
@@ -1992,16 +2131,51 @@ export async function start() {
           .catch(() => {});
       }
       if (offer.ownerId && offer.ownerId !== peerId) {
-        const nowAt = Date.now();
-        pendingTabSync = {
-          key: offer.key,
-          ownerId: offer.ownerId,
-          at: nowAt,
-          until: nowAt + 12000,
-          graceUntil: nowAt + 1500,
-          lastPingAt: nowAt,
-        };
-        client.sendApp(TAB_APP, { action: 'sync', key: offer.key });
+        beginPendingTabSync(offer);
+      }
+      return;
+    }
+    // Jump straight to a tab this browser already published or joined.
+    if (message.type === 'focus-tab') {
+      const key = String(message.key || '');
+      if (!key) return;
+      const offer = sharedTabs.find((tab) => tab && tab.key === key);
+      const mine = Boolean(offer && offer.ownerId && offer.ownerId === peerId);
+      const joined = joinedTabs.has(key);
+      if (!mine && !joined) return;
+      if (api && api.runtime && api.runtime.sendMessage) {
+        api.runtime
+          .sendMessage({ type: 'brosr:tab-focus', key })
+          .catch(() => {});
+      }
+      return;
+    }
+    // Inline Live Tabs media controls (play/pause/skip). Authorized only for
+    // the host or a currently granted peer, and only on a tab held locally.
+    if (message.type === 'tab-media-control') {
+      const key = String(message.key || '');
+      const offer = sharedTabs.find((tab) => tab && tab.key === key);
+      const mine = Boolean(offer && offer.ownerId && offer.ownerId === peerId);
+      const joined = joinedTabs.has(key);
+      const decision = tabMediaControlDecision({
+        key,
+        action: message.action,
+        delta: message.delta,
+        role,
+        granted: Boolean(client.isGranted()),
+        mine,
+        joined,
+      });
+      if (!decision.allow) return;
+      if (api && api.runtime && api.runtime.sendMessage) {
+        api.runtime
+          .sendMessage({
+            type: 'brosr:tab-media-control',
+            key: decision.key,
+            action: decision.action,
+            delta: decision.delta,
+          })
+          .catch(() => {});
       }
       return;
     }
@@ -2310,11 +2484,49 @@ export async function start() {
         // room page that holds the socket.
         return reply({ ok: client.setPageUrl(message.url || null) });
       }
+      if (message.type === 'brosr:media-mounted') {
+        // A joined film tab (including a late-loading FMHY/Anidap cross-origin
+        // iframe) just mounted its player. Apply any cached live anchor at once
+        // and send a bounded sync re-request if we have not received fresh state.
+        const filmKey = String(message.key || '');
+        const joinedKey = message.joinedKey ? String(message.joinedKey) : null;
+        const nowAt = Date.now();
+        if (pendingTabSync && nowAt >= pendingTabSync.until) pendingTabSync = null;
+        const pending =
+          client.stats.role === 'host' && filmKey && client.pendingPeerMedia
+            ? client.pendingPeerMedia(filmKey)
+            : null;
+        const cached = filmKey ? roomMediaByKey.get(filmKey) : null;
+        const freshCached = cached && nowAt - Number(cached.at || 0) <= 30000 ? cached : null;
+        const anchor = pending || freshCached;
+        let applied = false;
+        if (anchor) {
+          lastPendingApplyAt = nowAt;
+          applied = applyProjectedMedia(anchor, nowAt, 'seek');
+        }
+        if (joinedKey) {
+          if (pendingTabSync && pendingTabSync.key === joinedKey) {
+            if (filmKey) pendingTabSync.filmKey = filmKey;
+            if (!pendingTabSync.receivedReply || !freshCached || nowAt - Number(freshCached.at || 0) >= 1000) {
+              pingPendingTabSync(nowAt);
+            }
+          } else if (!anchor) {
+            const offer = sharedTabs.find((tab) => tab && tab.key === joinedKey);
+            if (offer && offer.ownerId && offer.ownerId !== peerId) {
+              beginPendingTabSync(offer);
+              if (pendingTabSync && filmKey) pendingTabSync.filmKey = filmKey;
+            }
+          }
+        }
+        return reply({ ok: true, applied });
+      }
       if (message.type === 'brosr:media-state') {
         // A tab on this browser shows the film. The panel reads this copy as
         // the local position either way. Only the host room makes it the
         // room's media, because a peer room forwards frames instead.
         const state = message.state;
+        const nowAt = Date.now();
+        const joinedKey = message.joinedKey ? String(message.joinedKey) : null;
         if (state && typeof state === 'object' && state.key) {
           localMedia = state;
           // The room tab is usually hidden behind the film tab, and a hidden
@@ -2323,14 +2535,12 @@ export async function start() {
           // this a live host or guest is pruned and the room elects a new host.
           client.presence();
         }
+        if (pendingTabSync && nowAt >= pendingTabSync.until) {
+          pendingTabSync = null;
+        }
         if (client.stats.role === 'host') {
-          const nowAt = Date.now();
-          const joinedKey = message.joinedKey ? String(message.joinedKey) : null;
           const hasAct = Boolean(state && state.action && state.action !== 'tick');
           if (hasAct && pendingTabSync && (!joinedKey || pendingTabSync.key === joinedKey)) {
-            pendingTabSync = null;
-          }
-          if (pendingTabSync && nowAt >= pendingTabSync.until) {
             pendingTabSync = null;
           }
           const pending =
@@ -2342,14 +2552,17 @@ export async function start() {
             !pending &&
             pendingTabSync &&
             joinedKey &&
-            pendingTabSync.key === joinedKey &&
-            nowAt < pendingTabSync.graceUntil
+            pendingTabSync.key === joinedKey
           ) {
-            if (nowAt - pendingTabSync.lastPingAt >= 400) {
-              pendingTabSync.lastPingAt = nowAt;
-              client.sendApp(TAB_APP, { action: 'sync', key: pendingTabSync.key });
+            if (state && state.key) pendingTabSync.filmKey = state.key;
+            // Start the grace window when the joined tab actually begins reporting,
+            // so slow FMHY/Anidap embeds (3-10s load) still re-request sync before
+            // broadcasting 0:00 back over the owner.
+            if (!pendingTabSync.graceUntil) pendingTabSync.graceUntil = nowAt + 2000;
+            if (nowAt < pendingTabSync.graceUntil) {
+              pingPendingTabSync(nowAt);
+              return reply({ ok: false, waiting: 'peer-sync' });
             }
-            return reply({ ok: false, waiting: 'peer-sync' });
           }
           const sent = client.sendHostMedia(state);
           if (sent) {
@@ -2361,30 +2574,41 @@ export async function start() {
           } else if (
             pending &&
             !state.buffering &&
-            nowAt - lastPendingApplyAt >= 500 &&
-            api &&
-            api.runtime &&
-            api.runtime.sendMessage
+            nowAt - lastPendingApplyAt >= 500
           ) {
             lastPendingApplyAt = nowAt;
-            api.runtime
-              .sendMessage({
-                type: 'brosr:media-apply',
-                from: pending.from || null,
-                name: pending.name || null,
-                action: 'seek',
-                key: pending.key,
-                position: pending.position,
-                playing: Boolean(pending.playing),
-                rate: Number(pending.rate || 1),
-                volume: Number(pending.volume ?? 1),
-                ad: false,
-                ...(Number.isFinite(Number(pending.rev)) ? { rev: Number(pending.rev) } : {}),
-                at: nowAt,
-              })
-              .catch(() => {});
+            applyProjectedMedia(pending, nowAt, 'seek');
           }
           return reply({ ok: sent });
+        }
+        // A peer joining an offered tab (owned by host or another granted peer)
+        // applies cached room state or re-requests sync as soon as its joined
+        // tab mounts — even when ungranted and even if host has not joined it.
+        if (
+          joinedKey &&
+          state &&
+          state.key &&
+          pendingTabSync &&
+          pendingTabSync.key === joinedKey
+        ) {
+          pendingTabSync.filmKey = state.key;
+          const cached = roomMediaByKey.get(state.key);
+          const freshCached = cached && nowAt - Number(cached.at || 0) <= 30000 ? cached : null;
+          if (freshCached) {
+            const targetPos = projectAnchorPosition(freshCached, nowAt);
+            const caughtUp =
+              !state.buffering &&
+              Math.abs(Number(state.position || 0) - targetPos) <= 2.0 &&
+              Boolean(state.playing) === Boolean(freshCached.playing);
+            if (caughtUp) {
+              pendingTabSync = null;
+            } else if (!state.buffering && nowAt - lastPendingApplyAt >= 500) {
+              lastPendingApplyAt = nowAt;
+              applyProjectedMedia(freshCached, nowAt, 'seek');
+            }
+          } else if (!pendingTabSync.receivedReply) {
+            pingPendingTabSync(nowAt);
+          }
         }
         // A granted peer drives the room from its own film tab. The background
         // already stopped this report when playback sync is off, so the room
@@ -2470,6 +2694,9 @@ export async function start() {
               updateOnly: true,
             })
             .catch(() => {});
+        }
+        if (offer.ownerId && offer.ownerId !== peerId) {
+          beginPendingTabSync(offer);
         }
         return reply({ ok: true });
       }

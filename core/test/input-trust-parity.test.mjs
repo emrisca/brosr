@@ -87,40 +87,27 @@ function makeElement({
   };
 }
 
-test('wheelRecord captures deltas, coordinates, deltaMode and modifiers, and rejects non-finite deltas', () => {
-  const rec = wheelRecord(
-    {
-      clientX: 145,
-      clientY: 88,
-      deltaX: 12.5,
-      deltaY: -120,
-      deltaMode: 1,
-      ctrlKey: true,
-      altKey: false,
-      shiftKey: true,
-      metaKey: false,
-    },
-    { path: '#canvas', canvas: { x: 0.25, y: 0.5 } }
+test('wheelRecord refuses to serialize wheel events because scrolling is strictly local', () => {
+  assert.equal(
+    wheelRecord(
+      {
+        clientX: 145,
+        clientY: 88,
+        deltaX: 12.5,
+        deltaY: -120,
+        deltaMode: 1,
+        ctrlKey: true,
+        shiftKey: true,
+      },
+      { path: '#canvas', canvas: { x: 0.25, y: 0.5 } }
+    ),
+    null
   );
-  assert.deepEqual(rec, {
-    kind: 'wheel',
-    path: '#canvas',
-    point: { x: 145, y: 88 },
-    canvas: { x: 0.25, y: 0.5 },
-    deltaX: 12.5,
-    deltaY: -120,
-    deltaMode: 1,
-    ctrl: true,
-    alt: false,
-    shift: true,
-    meta: false,
-  });
-
   assert.equal(wheelRecord({ deltaX: Number.NaN, deltaY: 10 }), null);
   assert.equal(wheelRecord({ deltaX: 0, deltaY: Number.POSITIVE_INFINITY }), null);
 });
 
-test('replayInput delivers wheel coordinates, deltas, deltaMode and modifiers, and drops non-finite deltas', () => {
+test('replayInput drops wheel and scroll records while preserving non-scroll keys and clicks with modifiers', () => {
   const canvas = makeElement({
     tagName: 'CANVAS',
     rect: { left: 100, top: 40, width: 400, height: 200 },
@@ -144,7 +131,7 @@ test('replayInput delivers wheel coordinates, deltas, deltaMode and modifiers, a
         shift: true,
       },
       {
-        kind: 'wheel',
+        kind: 'scroll',
         point: { x: 50, y: 60 },
         deltaX: 0,
         deltaY: 40,
@@ -173,24 +160,12 @@ test('replayInput delivers wheel coordinates, deltas, deltaMode and modifiers, a
     { root }
   );
 
-  assert.equal(result.applied, 4);
-  assert.equal(result.dropped, 1);
-  assert.equal(result.reasons.delta, 1);
+  assert.equal(result.applied, 2);
+  assert.equal(result.dropped, 3);
+  assert.equal(result.reasons.scroll, 3);
+  assert.equal(canvas.events.length, 0);
 
-  assert.equal(canvas.events.length, 1);
-  assert.equal(canvas.events[0].clientX, 300);
-  assert.equal(canvas.events[0].clientY, 90);
-  assert.equal(canvas.events[0].deltaX, 15);
-  assert.equal(canvas.events[0].deltaY, -120);
-  assert.equal(canvas.events[0].ctrlKey, true);
-  assert.equal(canvas.events[0].shiftKey, true);
-  assert.equal(canvas.events[0].altKey, false);
-
-  const [wheelEv, keyDownEv, keyUpEv, mouseDownEv] = box.events;
-  assert.equal(wheelEv.clientX, 50);
-  assert.equal(wheelEv.clientY, 60);
-  assert.equal(wheelEv.deltaY, 40);
-  assert.equal(wheelEv.altKey, true);
+  const [keyDownEv, keyUpEv, mouseDownEv] = box.events;
   assert.equal(keyDownEv.metaKey, true);
   assert.equal(keyDownEv.shiftKey, true);
   assert.equal(keyUpEv.metaKey, true);
@@ -320,11 +295,15 @@ test('trustDecision, prepareRecords and createTrustClient preserve refusal reaso
   assert.equal(trustDecision({ kind: 'key', key: 'Dead' }, openDoc).reason, 'key');
   assert.equal(
     trustDecision({ kind: 'wheel', path: '#q', deltaY: Number.NaN }, openDoc).reason,
-    'delta'
+    'scroll'
   );
   assert.equal(
     trustDecision({ kind: 'wheel', path: '#q', deltaY: 120 }, openDoc).allow,
-    true
+    false
+  );
+  assert.equal(
+    trustDecision({ kind: 'scroll', path: '#q', deltaY: 120 }, openDoc).reason,
+    'scroll'
   );
 
   assert.deepEqual(prepareRecords([{ kind: 'click', path: '#q' }], lockedDoc), []);
@@ -333,12 +312,14 @@ test('trustDecision, prepareRecords and createTrustClient preserve refusal reaso
       { kind: 'text', path: '#pw', value: 'secret' },
       { kind: 'pointerlock' },
       { kind: 'wheel', path: '#q', deltaX: 10.4, deltaY: -120.6, ctrl: true },
+      { kind: 'scroll', path: '#q', deltaY: 120 },
+      { kind: 'click', path: '#q', ctrl: true },
     ],
     openDoc
   );
   assert.equal(password.focused, false);
   assert.equal(prepared.length, 1);
-  assert.equal(prepared[0].kind, 'wheel');
+  assert.equal(prepared[0].kind, 'click');
   assert.deepEqual(prepared[0].point, { x: 200, y: 100 });
 
   const client = createTrustClient({
@@ -356,65 +337,43 @@ test('trustDecision, prepareRecords and createTrustClient preserve refusal reaso
   assert.deepEqual(reply, { ok: false, allow: false, reason: 'pointer-lock-local' });
 });
 
-test('wheel, special keys and modifiers maintain full BiDi <-> CDP parity', () => {
-  // 1. Plain wheel -> BiDi source type "wheel" with integer coords/deltas -> CDP mouseWheel.
-  const wheelActions = actionsForRecord({
-    kind: 'wheel',
-    point: { x: 10.4, y: 20.6 },
-    deltaX: 3.2,
-    deltaY: -120.8,
-  });
-  assert.equal(wheelActions.length, 1);
-  assert.equal(wheelActions[0].type, 'wheel');
-  assert.deepEqual(wheelActions[0].actions[0], {
-    type: 'scroll',
-    x: 10,
-    y: 21,
-    deltaX: 3,
-    deltaY: -121,
-    duration: 0,
-    origin: 'viewport',
-  });
-  const wheelCdp = cdpEvents(wheelActions);
-  assert.deepEqual(wheelCdp, [
-    {
-      method: 'Input.dispatchMouseEvent',
-      params: { type: 'mouseWheel', x: 10, y: 21, deltaX: 3, deltaY: -121 },
-    },
-  ]);
+test('scroll records are refused while pointer, special keys and modifiers maintain full BiDi <-> CDP parity', () => {
+  // 1. Wheel and scroll records are never converted into BiDi actions.
+  assert.equal(
+    actionsForRecord({
+      kind: 'wheel',
+      point: { x: 10.4, y: 20.6 },
+      deltaX: 3.2,
+      deltaY: -120.8,
+    }),
+    null
+  );
+  assert.equal(
+    actionsForRecord({
+      kind: 'scroll',
+      point: { x: 50, y: 60 },
+      deltaX: 0,
+      deltaY: 120,
+    }),
+    null
+  );
 
-  // 2. Line-mode wheel (Firefox deltaMode=1) converts to pixels consistently.
-  const lineWheel = actionsForRecord({
-    kind: 'wheel',
-    point: { x: 50, y: 60 },
-    deltaX: 0,
-    deltaY: 3,
-    deltaMode: 1,
-  });
-  assert.equal(lineWheel[0].actions[0].deltaY, 120);
-  assert.equal(cdpEvents(lineWheel)[0].params.deltaY, 120);
-
-  // 3. Ctrl+Wheel (pinch zoom) produces tick-aligned BiDi key+wheel and CDP modifiers: 2.
-  const zoomActions = actionsForRecord({
-    kind: 'wheel',
+  // 2. Modified click produces tick-aligned BiDi key+pointer and CDP modifiers: 2.
+  const clickActions = actionsForRecord({
+    kind: 'click',
     point: { x: 120, y: 240 },
-    deltaX: 0,
-    deltaY: -100,
+    button: 0,
     ctrl: true,
   });
-  assert.equal(zoomActions.length, 2);
-  assert.equal(zoomActions[0].type, 'key');
-  assert.equal(zoomActions[1].type, 'wheel');
-  const zoomCdp = cdpEvents(zoomActions);
-  assert.equal(zoomCdp.length, 3);
-  assert.equal(zoomCdp[0].params.key, 'Control');
-  assert.equal(zoomCdp[0].params.modifiers, 2);
-  assert.deepEqual(zoomCdp[1], {
-    method: 'Input.dispatchMouseEvent',
-    params: { type: 'mouseWheel', x: 120, y: 240, deltaX: 0, deltaY: -100, modifiers: 2 },
-  });
-  assert.equal(zoomCdp[2].params.type, 'keyUp');
-  assert.equal(zoomCdp[2].params.modifiers, undefined);
+  assert.equal(clickActions.length, 2);
+  assert.equal(clickActions[0].type, 'key');
+  assert.equal(clickActions[1].type, 'pointer');
+  const clickCdp = cdpEvents(clickActions);
+  assert.equal(clickCdp[0].params.key, 'Control');
+  assert.equal(clickCdp[0].params.modifiers, 2);
+  const pressed = clickCdp.find((e) => e.params.type === 'mousePressed');
+  assert.ok(pressed);
+  assert.equal(pressed.params.modifiers, 2);
 
   // 4. Special keys encode as WebDriver BiDi single code points and map cleanly in CDP.
   const enterActions = actionsForRecord({ kind: 'key', key: 'Enter' });

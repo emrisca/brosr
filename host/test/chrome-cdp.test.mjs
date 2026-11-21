@@ -126,16 +126,30 @@ test('a BiDi wheel source and legacy scroll source both become a CDP mouseWheel 
 });
 
 test('multi-source BiDi ticks carry keyboard modifiers onto wheel and pointer events', () => {
-  const wheelWithMods = cdpEvents(
-    actionsForRecord({
-      kind: 'wheel',
-      point: { x: 100, y: 200 },
-      deltaX: 0,
-      deltaY: -120,
-      ctrl: true,
-      shift: true,
-    })
-  );
+  const wheelWithMods = cdpEvents([
+    {
+      type: 'key',
+      id: 'brosr-keys',
+      actions: [
+        { type: 'keyDown', value: '\uE009' },
+        { type: 'keyDown', value: '\uE008' },
+        { type: 'pause', duration: 0 },
+        { type: 'keyUp', value: '\uE008' },
+        { type: 'keyUp', value: '\uE009' },
+      ],
+    },
+    {
+      type: 'wheel',
+      id: 'brosr-wheel',
+      actions: [
+        { type: 'pause', duration: 0 },
+        { type: 'pause', duration: 0 },
+        { type: 'scroll', x: 100, y: 200, deltaX: 0, deltaY: -120, duration: 0, origin: 'viewport' },
+        { type: 'pause', duration: 0 },
+        { type: 'pause', duration: 0 },
+      ],
+    },
+  ]);
   const wheelEvent = wheelWithMods.find((e) => e.params.type === 'mouseWheel');
   assert.ok(wheelEvent);
   assert.equal(wheelEvent.params.modifiers, 2 | 8);
@@ -297,11 +311,11 @@ test('target detachment and stale sessions re-attach cleanly, and missing target
   failStaleOnce = true;
   await cdp.cmd('input.performActions', {
     context: 'room',
-    actions: actionsForRecord({ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: 120 }),
+    actions: actionsForRecord({ kind: 'click', point: { x: 10, y: 20 }, button: 0 }),
   });
   assert.equal(attachCount, 5);
-  const wheelCalls = calls.filter((c) => c.method === 'Input.dispatchMouseEvent');
-  assert.equal(wheelCalls.at(-1).sessionId, 's-room-5');
+  const mouseCalls = calls.filter((c) => c.method === 'Input.dispatchMouseEvent');
+  assert.equal(mouseCalls.at(-1).sessionId, 's-room-5');
 
   // A mid-batch detachment evicts the dead session without duplicating earlier events.
   failSecondKey = true;

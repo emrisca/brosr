@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="./landing.css">
 </head>
 <body>
-  <a class="skip" href="#tiles">Skip to the apps</a>
+  <a class="skip" href="#tiles" data-brosr-local="1">Skip to the apps</a>
 
   <header class="bar">
     <div class="brand">
@@ -35,7 +35,7 @@
       <div class="live-head">
         <div class="live-heading">
           <h2 class="live-title" id="live-title">Live tabs</h2>
-          <p class="live-note">Tabs the host and people with control have open. Open one to sync it with them, and close it to leave the sync.</p>
+          <p class="live-note">Offers from the host and anyone with control. Open a tab to join and sync, Stop or close it to leave. Controllers can play, pause, skip, or focus a tab to change video.</p>
         </div>
         <p class="live-count" id="live-count" aria-live="polite"></p>
       </div>
@@ -43,8 +43,8 @@
       <p class="live-empty" id="live-empty">Nobody has shared a tab yet. This section fills when a person with control opens one.</p>
     </section>
 
-    <section class="bento" id="tiles" aria-label="Room apps">
-      <a class="tile tile-youtube" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="youtube-title">
+    <section class="bento" id="tiles" aria-label="Room apps" data-brosr-local="1">
+      <a class="tile tile-youtube" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="youtube-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -67,7 +67,7 @@
         </span>
       </a>
 
-      <a class="tile tile-music" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="music-title">
+      <a class="tile tile-music" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="music-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -91,7 +91,7 @@
         </span>
       </a>
 
-      <article class="tile tile-watch" aria-labelledby="watch-title">
+      <article class="tile tile-watch" aria-labelledby="watch-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -108,11 +108,11 @@
         </div>
         <div class="site-filter">
           <label class="site-filter-label" for="site-filter">Filter</label>
-          <input class="site-filter-input" id="site-filter" type="search" placeholder="Name or host" autocomplete="off" spellcheck="false" aria-controls="watch-sites">
+          <input class="site-filter-input" id="site-filter" type="search" placeholder="Name or host" autocomplete="off" spellcheck="false" aria-controls="watch-sites" data-brosr-local="1">
           <span class="site-filter-count" id="site-filter-count" aria-live="polite"></span>
           <p class="site-empty" id="site-empty" hidden>No site matches that name.</p>
         </div>
-        <div class="site-groups" id="watch-sites">
+        <div class="site-groups" id="watch-sites" data-brosr-local="1">
           <section class="site-group site-group-wide" aria-labelledby="watch-aggregators">
             <h3 class="site-group-title" id="watch-aggregators">Stream Aggregators</h3>
             <div class="site-list">
@@ -178,7 +178,7 @@
         </div>
       </article>
 
-      <a class="tile tile-play" href="./chess/" target="_blank" rel="noopener" aria-labelledby="play-title">
+      <a class="tile tile-play" href="./chess/" target="_blank" rel="noopener" aria-labelledby="play-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -200,7 +200,7 @@
         </span>
       </a>
 
-      <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title">
+      <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -223,7 +223,7 @@
         </span>
       </a>
 
-      <a class="tile tile-canvas" href="./canvas/" target="_blank" rel="noopener" aria-labelledby="canvas-title">
+      <a class="tile tile-canvas" href="./canvas/" target="_blank" rel="noopener" aria-labelledby="canvas-title" data-brosr-local="1">
         <div class="tile-head">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
@@ -312,7 +312,8 @@
       // back to "host" for a host socket. Setting both keeps the new host and
       // its id in step. A grant belongs to the guest role, so it drops here.
       if (takeover) {
-        takeover.addEventListener('click', function () {
+        takeover.addEventListener('click', function (event) {
+          if (event && event.isTrusted === false) return;
           var next = new URLSearchParams(location.search);
           next.set('role', 'host');
           next.set('peer', 'host');
@@ -613,6 +614,91 @@
         return badge;
       }
 
+      function focusTab(key) {
+        window.postMessage(
+          { source: 'brosr-app', type: 'focus-tab', key: key },
+          location.origin
+        );
+      }
+
+      function controlMedia(key, action, delta) {
+        window.postMessage(
+          {
+            source: 'brosr-app',
+            type: 'tab-media-control',
+            key: key,
+            action: action,
+            delta: delta || 0,
+          },
+          location.origin
+        );
+      }
+
+      function mediaControls(tab) {
+        var bar = document.createElement('div');
+        bar.className = 'live-media-controls';
+        bar.setAttribute('role', 'group');
+        bar.setAttribute('aria-label', 'Playback controls');
+
+        var back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'live-ctrl';
+        back.dataset.key = tab.key;
+        back.dataset.action = 'skip-back';
+        back.textContent = '-10s';
+        back.title = 'Skip back 10 seconds';
+        back.setAttribute('aria-label', 'Skip back 10 seconds');
+        back.addEventListener('click', function (event) {
+          if (!event.isTrusted) return;
+          controlMedia(tab.key, 'skip', -10);
+        });
+
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'live-ctrl is-primary';
+        toggle.dataset.key = tab.key;
+        toggle.dataset.action = 'toggle';
+        toggle.textContent = tab.playing ? 'Pause' : 'Play';
+        toggle.title = tab.playing ? 'Pause for the room' : 'Play for the room';
+        toggle.setAttribute('aria-label', tab.playing ? 'Pause' : 'Play');
+        toggle.addEventListener('click', function (event) {
+          if (!event.isTrusted) return;
+          controlMedia(tab.key, 'toggle', 0);
+        });
+
+        var fwd = document.createElement('button');
+        fwd.type = 'button';
+        fwd.className = 'live-ctrl';
+        fwd.dataset.key = tab.key;
+        fwd.dataset.action = 'skip-forward';
+        fwd.textContent = '+10s';
+        fwd.title = 'Skip forward 10 seconds';
+        fwd.setAttribute('aria-label', 'Skip forward 10 seconds');
+        fwd.addEventListener('click', function (event) {
+          if (!event.isTrusted) return;
+          controlMedia(tab.key, 'skip', 10);
+        });
+
+        bar.append(back, toggle, fwd);
+        return bar;
+      }
+
+      function focusButton(tab, mine) {
+        var focus = document.createElement('button');
+        focus.type = 'button';
+        focus.className = 'live-focus';
+        focus.dataset.key = tab.key;
+        focus.textContent = 'Focus';
+        focus.title = mine
+          ? 'Switch to this tab to change video or scrub'
+          : 'Switch to your synced copy of this tab';
+        focus.addEventListener('click', function (event) {
+          if (!event.isTrusted) return;
+          focusTab(tab.key);
+        });
+        return focus;
+      }
+
       function row(tab, state, mine) {
         var item = document.createElement('li');
         item.className = 'live-row';
@@ -633,21 +719,33 @@
         text.append(title, meta);
         item.append(text);
 
-        // The publisher already has this tab, so its own row only reports.
+        var joined = (state.joined || []).indexOf(tab.key) !== -1;
+        var canControl = Boolean(state.canControl || state.role === 'host');
+        var actions = document.createElement('div');
+        actions.className = 'live-row-actions';
+
+        if (canControl && (mine || joined) && typeof tab.playing === 'boolean') {
+          actions.append(mediaControls(tab));
+        }
+
+        // The publisher already has this tab, so its own row reports Sharing
+        // and lets them jump right back to it or drive playback inline.
         if (mine) {
+          actions.append(focusButton(tab, true));
           var mark = document.createElement('span');
           mark.className = 'live-state is-mine';
           mark.textContent = 'Sharing';
-          item.append(mark);
+          actions.append(mark);
+          item.append(actions);
           return item;
         }
 
-        var joined = (state.joined || []).indexOf(tab.key) !== -1;
         var waiting = pending === tab.key;
 
-        // A joined row carries two things: the state, and a way out of it. Stop
-        // is a button because it changes what this browser syncs.
+        // A joined row carries its state, a Focus jump, and a Stop button to
+        // leave the sync without closing the tab.
         if (joined) {
+          actions.append(focusButton(tab, false));
           var synced = document.createElement('span');
           synced.className = 'live-state';
           synced.textContent = 'Synced';
@@ -661,7 +759,8 @@
             if (!event.isTrusted) return;
             stopTab(tab.key);
           });
-          item.append(synced, stop);
+          actions.append(synced, stop);
+          item.append(actions);
           return item;
         }
 
@@ -689,7 +788,8 @@
             if (current) render(current);
           }, 4000);
         });
-        item.append(button);
+        actions.append(button);
+        item.append(actions);
         return item;
       }
 
@@ -709,21 +809,32 @@
       }
 
       function group(entry, state) {
+        var mine = Boolean(state.peerId && entry.ownerId === state.peerId);
         var box = document.createElement('section');
-        box.className = 'live-group';
+        box.className = mine ? 'live-group is-mine' : 'live-group';
         var head = document.createElement('header');
         head.className = 'live-owner';
         var who = document.createElement('span');
         who.className = 'live-owner-name';
         who.textContent = entry.owner || 'Guest';
         var role = document.createElement('span');
-        role.className = 'live-role';
+        role.className = entry.role === 'host' ? 'live-role is-host' : 'live-role';
         role.textContent = roleName(entry.role);
         head.append(who, role);
+        if (mine) {
+          var you = document.createElement('span');
+          you.className = 'live-you';
+          you.textContent = 'You';
+          head.append(you);
+        }
+        var tabs = entry.tabs || [];
+        var groupCount = document.createElement('span');
+        groupCount.className = 'live-group-count';
+        groupCount.textContent = tabs.length === 1 ? '1 tab' : tabs.length + ' tabs';
+        head.append(groupCount);
         var list = document.createElement('ul');
         list.className = 'live-list';
-        var mine = Boolean(state.peerId && entry.ownerId === state.peerId);
-        (entry.tabs || []).forEach(function (tab) {
+        tabs.forEach(function (tab) {
           list.append(row(tab, state, mine));
         });
         box.append(head, list);

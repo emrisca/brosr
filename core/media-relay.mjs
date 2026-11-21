@@ -34,6 +34,10 @@ export const RELAY_SEEK_TIMEOUT_MS = 8000;
 // A local seek or play/pause needs a brief grace window against an already
 // in-flight routine tick from the room tab before the room acknowledges it.
 export const RELAY_LOCAL_ACT_GUARD_MS = 1500;
+// Bounded window for late async ratechange events matching a nudge or room-rate write.
+export const RELAY_RATE_ECHO_MS = 5000;
+// Guard window while the local user is actively dragging the scrub bar (seeking).
+export const RELAY_LOCAL_SEEK_GUARD_MS = 2500;
 export const RELAY_NUDGE_RATE = 1.05;
 // The report keeps the recent shape of a stall without growing for a long
 // session. Five entries are enough to see whether a problem is repeating; the
@@ -506,6 +510,9 @@ export class RemoteMediaSync {
     // Tracks a recent local user act on this tab so an already-in-flight
     // routine room tick cannot snap the local user back before the room sees it.
     this.localAct = null;
+    // Tracks an in-progress local scrub drag (seeking fired before seeked) so
+    // routine room ticks do not interfere while the user is dragging the bar.
+    this.localSeeking = null;
     // The first tick that wanted a seek outside the buffered range. The wait
     // has a deadline, so a player that never fetches still catches up.
     this.waitingSince = null;
@@ -526,6 +533,11 @@ export class RemoteMediaSync {
     this.lastKey = null;
     // Hysteresis flag so a rate nudge closes drift cleanly below 50 ms.
     this.nudging = false;
+    // Active/recent drift nudge and rate write tracking so late async ratechange
+    // events from YouTube/HLS never escape echo suppression into roomRate.
+    this.activeNudgeRate = null;
+    this.recentNudge = null;
+    this.recentRateWrite = null;
     // The rate the room asked for. A nudge is this tab's own correction, so it
     // never becomes the rate this tab reports back to the room.
     this.roomRate = null;
@@ -612,25 +624,147 @@ export class RemoteMediaSync {
       }
       return false;
     }
+    if (action === 'rate') {
+      const video = this.video();
+      const currentRate = video ? Number(video.playbackRate) : NaN;
+      if (Number.isFinite(currentRate) && currentRate > 0) {
+        // Active drift nudge currently on the element: any ratechange reporting
+        // this rate is our own correction, never a human speed change.
+        if (
+          this.activeNudgeRate !== null &&
+          Math.abs(currentRate - this.activeNudgeRate) < 0.005
+        ) {
+          return true;
+        }
+        // Late async ratechange from a recent nudge (even after resetting to roomRate).
+        if (
+          this.recentNudge !== null &&
+          now - this.recentNudge.at < RELAY_RATE_ECHO_MS &&
+          Math.abs(currentRate - this.recentNudge.rate) < 0.005
+        ) {
+          return true;
+        }
+        // Late async ratechange matching our own recent rate write (nudge reset or room rate).
+        if (
+          this.recentRateWrite !== null &&
+          now - this.recentRateWrite.at < RELAY_RATE_ECHO_MS &&
+          Math.abs(currentRate - this.recentRateWrite.rate) < 0.005
+        ) {
+          return true;
+        }
+        // Spurious ratechange already at roomRate while not nudging (e.g. HLS/ad switch).
+        if (
+          !this.nudging &&
+          this.roomRate !== null &&
+          Math.abs(currentRate - this.roomRate) < 0.005
+        ) {
+          return true;
+        }
+        // Element moved to a distinct user-chosen rate: let it through immediately.
+        if (
+          this.activeNudgeRate !== null ||
+          this.recentRateWrite !== null ||
+          this.roomRate !== null
+        ) {
+          this.echoUntil.rate = -Infinity;
+          return false;
+        }
+      }
+      return now < (this.echoUntil.rate || -Infinity);
+    }
     return now < (this.echoUntil[action] || -Infinity);
+  }
+
+  writeRate(video, target, kind, roomRate, drift, now) {
+    if (kind === 'nudge') {
+      this.activeNudgeRate = target;
+      this.recentNudge = { rate: target, at: now };
+    } else {
+      this.activeNudgeRate = null;
+    }
+    const rateChanged = setRate(video, target);
+    if (rateChanged) {
+      this.recentRateWrite = { rate: target, kind, at: now };
+      this.markEcho('rate', now);
+      this.noteRate(now, kind, roomRate, video, drift);
+    }
+    return rateChanged;
+  }
+
+  resetNudge(video, now, kind = 'seek-reset') {
+    const wasNudging = this.nudging || this.activeNudgeRate !== null;
+    this.nudging = false;
+    this.activeNudgeRate = null;
+    if (!video || this.roomRate === null || !wasNudging) return false;
+    const prevApplying = this.applying;
+    this.applying = true;
+    try {
+      return this.writeRate(video, this.roomRate, kind, this.roomRate, null, now);
+    } finally {
+      this.applying = prevApplying;
+    }
+  }
+
+  // Record the start of a local user scrub drag (seeking fired before seeked)
+  // so routine room ticks do not fight the user while dragging the scrubber.
+  noteLocalSeeking(now = this.now()) {
+    const video = this.video();
+    this.pendingSeek = null;
+    this.echoUntil.seek = -Infinity;
+    this.waitingSince = null;
+    this.waitingTarget = null;
+    this.bufferHeld = false;
+    this.bufferReady = false;
+    this.resetNudge(video, now, 'seek-reset');
+    this.localSeeking = {
+      at: now,
+      target: video ? Number(video.currentTime || 0) : null,
+      baseRev: this.lastAppliedRev,
+    };
+  }
+
+  isLocalSeeking(now = this.now()) {
+    if (!this.localSeeking) return false;
+    const video = this.video();
+    if (now - this.localSeeking.at >= RELAY_LOCAL_SEEK_GUARD_MS) {
+      this.localSeeking = null;
+      return false;
+    }
+    if (video && !video.seeking && now - this.localSeeking.at >= 300) {
+      this.localSeeking = null;
+      return false;
+    }
+    return true;
   }
 
   // Record a genuine local user act so an already-in-flight stale routine tick
   // from the room tab cannot snap the player back before the room processes it.
   noteLocalAct(action, now = this.now()) {
     const video = this.video();
+    this.localSeeking = null;
     if (action === 'seek') {
       this.pendingSeek = null;
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferHeld = false;
       this.bufferReady = false;
+      this.resetNudge(video, now, 'seek-reset');
+    } else if (action === 'rate') {
       this.nudging = false;
+      this.activeNudgeRate = null;
+      this.recentNudge = null;
+      this.recentRateWrite = null;
+      const currentRate = video ? Number(video.playbackRate) : NaN;
+      if (Number.isFinite(currentRate) && currentRate > 0) {
+        this.roomRate = currentRate;
+      }
     }
     this.localAct = {
       action,
       target: video ? Number(video.currentTime || 0) : null,
       playing: video ? !video.paused && !video.ended : null,
+      rate: video ? Number(video.playbackRate || 1) : null,
+      baseRev: this.lastAppliedRev,
       at: now,
     };
   }
@@ -797,6 +931,9 @@ export class RemoteMediaSync {
       this.lastKey = frame.key;
       this.primed = false;
       this.nudging = false;
+      this.activeNudgeRate = null;
+      this.recentNudge = null;
+      this.recentRateWrite = null;
       this.waitingSince = null;
       this.waitingTarget = null;
       this.bufferHeld = false;
@@ -808,6 +945,7 @@ export class RemoteMediaSync {
       this.lastAppliedRev = null;
       this.pendingSeek = null;
       this.localAct = null;
+      this.localSeeking = null;
       this.echoUntil = { play: -Infinity, pause: -Infinity, seek: -Infinity, rate: -Infinity };
     }
     const incomingRev =
@@ -824,7 +962,6 @@ export class RemoteMediaSync {
     // against that rate and never against the corrected element.
     const asked = Number(frame.rate);
     const roomRate = Number.isFinite(asked) && asked > 0 ? asked : this.roomRate || 1;
-    this.roomRate = roomRate;
     // A hold is not a playhead correction. It pauses this tab and keeps it
     // paused until the room sends the release that carries the source's
     // position. A normal tick during that window must not resume the film.
@@ -896,13 +1033,33 @@ export class RemoteMediaSync {
       Number(video.duration)
     );
 
+    // Protect an active local scrub drag (seeking fired before seeked) from
+    // routine room ticks. Only a strictly newer remote explicit seek supersedes it.
+    if (this.isLocalSeeking(now)) {
+      const baseRev = this.localSeeking ? this.localSeeking.baseRev : this.lastAppliedRev;
+      const newerRemoteSeek =
+        explicitSeek &&
+        (incomingRev === null || baseRev === null || incomingRev > baseRev);
+      if (newerRemoteSeek) {
+        this.localSeeking = null;
+      } else {
+        this.stats.skips += 1;
+        this.stats.last = 'local-seeking';
+        return { ok: true, skipped: 'local-seeking' };
+      }
+    }
+
     // Protect a recent local user act from being reverted by an already
     // in-flight stale routine tick before the room acknowledges or supersedes it.
     if (this.localAct) {
       const expired = now - this.localAct.at >= RELAY_LOCAL_ACT_GUARD_MS;
+      const baseRev =
+        this.localAct.baseRev !== undefined ? this.localAct.baseRev : this.lastAppliedRev;
       const newerRev =
         incomingRev !== null &&
-        (this.lastAppliedRev === null || incomingRev > this.lastAppliedRev);
+        (baseRev === null ? incomingRev > 0 : incomingRev > baseRev);
+      const newerExplicitSeek =
+        explicitSeek && (incomingRev === null || baseRev === null || incomingRev > baseRev);
       const matchedSeek =
         this.localAct.action === 'seek' &&
         this.localAct.target !== null &&
@@ -910,7 +1067,11 @@ export class RemoteMediaSync {
       const matchedPlay =
         (this.localAct.action === 'play' && Boolean(frame.playing) === true) ||
         (this.localAct.action === 'pause' && Boolean(frame.playing) === false);
-      if (expired || explicitSeek || newerRev || matchedSeek || matchedPlay) {
+      const matchedRate =
+        this.localAct.action === 'rate' &&
+        this.localAct.rate !== null &&
+        Math.abs(roomRate - this.localAct.rate) < 0.01;
+      if (expired || newerExplicitSeek || newerRev || matchedSeek || matchedPlay || matchedRate) {
         this.localAct = null;
       } else {
         this.stats.skips += 1;
@@ -918,6 +1079,8 @@ export class RemoteMediaSync {
         return { ok: true, skipped: 'local-act' };
       }
     }
+
+    this.roomRate = roomRate;
 
     const actual = Number(video.currentTime || 0);
     const drift = actual - expected;
@@ -982,11 +1145,7 @@ export class RemoteMediaSync {
       // A seek puts the playhead where the room is, so the correction that
       // was closing the old gap no longer applies. Leaving it on the element
       // runs the rest of the film at a rate nobody asked for.
-      const rateChanged = setRate(video, roomRate);
-      if (rateChanged) {
-        this.markEcho('rate', now);
-        this.noteRate(now, 'seek-reset', roomRate, video, drift);
-      }
+      const rateChanged = this.writeRate(video, roomRate, 'seek-reset', roomRate, drift, now);
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
@@ -1032,11 +1191,7 @@ export class RemoteMediaSync {
         }
         this.waitingTarget = expected;
         if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
-          const rateChanged = setRate(video, roomRate);
-          if (rateChanged) {
-            this.markEcho('rate', now);
-            this.noteRate(now, 'buffer-rate', roomRate, video, drift);
-          }
+          const rateChanged = this.writeRate(video, roomRate, 'buffer-rate', roomRate, drift, now);
           // Stop the film while it waits, or it keeps moving away from the
           // target and the seek has to cover a larger gap when data arrives.
           if (frame.playing && !video.paused) {
@@ -1067,11 +1222,7 @@ export class RemoteMediaSync {
       // The jump landed, so the nudge that was closing the old gap ends with
       // it. Without this the film keeps the five percent correction until the
       // next tick, and a room that jumps often adds that error every time.
-      const rateChanged = setRate(video, roomRate);
-      if (rateChanged) {
-        this.markEcho('rate', now);
-        this.noteRate(now, 'seek-reset', roomRate, video, drift);
-      }
+      const rateChanged = this.writeRate(video, roomRate, 'seek-reset', roomRate, drift, now);
       this.lastSeekAt = now;
       this.seekIssuedAt = now;
       this.lastSeekTarget = expected;
@@ -1096,8 +1247,13 @@ export class RemoteMediaSync {
     }
 
     this.primed = true;
+    if (explicitSeek) {
+      this.nudging = false;
+      this.activeNudgeRate = null;
+    }
     const absDrift = Math.abs(drift);
     const wantNudge =
+      !explicitSeek &&
       !paused &&
       !video.seeking &&
       (absDrift > RELAY_NUDGE_SECONDS ||
@@ -1106,18 +1262,17 @@ export class RemoteMediaSync {
     if (wantNudge) {
       this.nudging = true;
       const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
-      rateChanged = setRate(video, nudge);
-      if (rateChanged) {
-        this.markEcho('rate', now);
-        this.noteRate(now, 'nudge', roomRate, video, drift);
-      }
+      rateChanged = this.writeRate(video, nudge, 'nudge', roomRate, drift, now);
     } else {
       this.nudging = false;
-      rateChanged = setRate(video, roomRate);
-      if (rateChanged) {
-        this.markEcho('rate', now);
-        this.noteRate(now, 'room-rate', roomRate, video, drift);
-      }
+      rateChanged = this.writeRate(
+        video,
+        roomRate,
+        explicitSeek ? 'seek-reset' : 'room-rate',
+        roomRate,
+        drift,
+        now
+      );
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need

@@ -49,6 +49,9 @@ export function validate(message) {
       if (message.from !== undefined && typeof message.from !== 'string') {
         fail('snapshot from must be text');
       }
+      if (message.mediaRev !== undefined && (!isNumber(message.mediaRev) || message.mediaRev < 0)) {
+        fail('snapshot mediaRev must be a non-negative number');
+      }
       break;
     case 'nav':
       if (typeof message.url !== 'string' || !message.url) fail('nav needs a url');
@@ -118,6 +121,9 @@ export function validate(message) {
       if (typeof message.allowed !== 'boolean') fail('control needs an allowed flag');
       if (message.from !== undefined && typeof message.from !== 'string') {
         fail('control from must be text');
+      }
+      if (message.mediaRev !== undefined && (!isNumber(message.mediaRev) || message.mediaRev < 0)) {
+        fail('control mediaRev must be a non-negative number');
       }
       break;
     case 'fate':

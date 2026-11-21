@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRoomClient, HOST_MEDIA_PRIORITY_MS } from '../sync.mjs';
+import { createRoomClient, HOST_MEDIA_PRIORITY_MS, HOST_PEER_APPLY_MS, HOST_PEER_JOIN_APPLY_MS } from '../sync.mjs';
 import {
   RelayMediaAdapter,
   RemoteMediaSync,
   remoteMediaEcho,
   mediaEchoMatches,
+  MEDIA_ECHO_MS,
+  RELAY_NUDGE_RATE,
 } from '../media-relay.mjs';
 import { encode } from '../protocol.mjs';
 
@@ -539,4 +541,412 @@ test('RemoteMediaSync.isEcho suppresses remote seek echoes but passes immediate 
   video.currentTime = 120;
   assert.equal(observed.at(-1).pos, 120);
   assert.equal(observed.at(-1).echo, false);
+});
+
+test('host room tab with media.pick() === null anchors non-seek peer acts to fresh host playhead and uses 2.5s apply window', () => {
+  let local = 10000;
+  const relayed = [];
+  const hostSent = [];
+  // Real host room tab without in-page video or RelayMediaAdapter: media.pick() is null.
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => hostSent.push(JSON.parse(frame)),
+    overlay: false,
+    onMedia: (frame) => {
+      relayed.push(frame);
+      return true;
+    },
+  });
+  host.receive(encode({ type: 'hello', peerId: 'peer', name: 'Peer', roomTime: local }), local);
+  host.setGrant('peer', true);
+
+  // Host film tab reports active playing state at 120s (duration 600s).
+  assert.equal(
+    host.sendHostMedia(
+      { key: KEY, title: 'Demo', position: 120, duration: 600, playing: true, rate: 1, at: local },
+      local
+    ),
+    true
+  );
+
+  // 1 second later Host is at 121.0s. Granted peer (lagging at 118.0s) presses pause.
+  local += 1000;
+  const paused = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'peer',
+      key: KEY,
+      action: 'pause',
+      position: 118.0,
+      playing: false,
+      rate: 1,
+      rev: 1,
+      roomTime: local - 60,
+    }),
+    local
+  );
+  assert.equal(paused.relayed, true);
+  assert.ok(
+    Math.abs(relayed.at(-1).expected - 121.0) < 0.05,
+    `expected host playhead ~121.0s, got ${relayed.at(-1).expected}`
+  );
+  assert.ok(
+    Math.abs(hostSent.at(-1).position - 121.0) < 0.05,
+    `host broadcast should keep host playhead ~121.0s, got ${hostSent.at(-1).position}`
+  );
+
+  // Active host tab must use HOST_PEER_APPLY_MS (2.5s), NOT 12s HOST_PEER_JOIN_APPLY_MS.
+  assert.ok(host.pendingPeerMedia(KEY, local + HOST_PEER_APPLY_MS - 100));
+  assert.equal(
+    host.pendingPeerMedia(KEY, local + HOST_PEER_APPLY_MS + 100),
+    null,
+    'active host tab applyWindow must expire after HOST_PEER_APPLY_MS, not 12s'
+  );
+
+  // Peer changes rate to 1.5x while sitting 2s behind: still anchors to host playhead (121.0s paused).
+  local += 300;
+  const rated = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'peer',
+      key: KEY,
+      action: 'rate',
+      position: 118.0,
+      playing: false,
+      rate: 1.5,
+      rev: 2,
+      roomTime: local - 40,
+    }),
+    local
+  );
+  assert.equal(rated.relayed, true);
+  assert.ok(
+    Math.abs(relayed.at(-1).expected - 121.0) < 0.05,
+    `rate change must keep host playhead 121.0s, got ${relayed.at(-1).expected}`
+  );
+
+  // Explicit seek past host known duration clamps cleanly even with media.pick() === null.
+  local += 300;
+  const clamped = host.receive(
+    encode({
+      type: 'media',
+      peerId: 'peer',
+      key: KEY,
+      action: 'seek',
+      position: 900,
+      playing: false,
+      rate: 1.5,
+      rev: 3,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.equal(clamped.relayed, true);
+  assert.equal(relayed.at(-1).expected, 600);
+
+  // By contrast, joining a brand new peer film key that Host has not reported still gets 12s join window.
+  const NEW_KEY = 'youtube:brandNew99';
+  local += 300;
+  host.receive(
+    encode({
+      type: 'media',
+      peerId: 'peer',
+      key: NEW_KEY,
+      action: 'seek',
+      position: 45,
+      playing: true,
+      rate: 1,
+      rev: 4,
+      roomTime: local,
+    }),
+    local
+  );
+  assert.ok(
+    host.pendingPeerMedia(NEW_KEY, local + HOST_PEER_APPLY_MS + 1000),
+    'joining tab with no known host state must keep 12s HOST_PEER_JOIN_APPLY_MS window'
+  );
+  assert.equal(host.pendingPeerMedia(NEW_KEY, local + HOST_PEER_JOIN_APPLY_MS + 100), null);
+});
+
+test('late async ratechange during/after drift nudge never escapes echo suppression or causes slow-motion loop', () => {
+  let now = 5000;
+  const video = makeVideo({ currentTime: 100, paused: false, seekLatencyMs: 0 });
+  video._setClock(now);
+  const doc = {
+    location: { href: HREF, hostname: 'www.youtube.com' },
+    querySelector: () => video,
+  };
+  const remote = new RemoteMediaSync({
+    document: doc,
+    href: HREF,
+    hostname: 'www.youtube.com',
+    now: () => now,
+  });
+
+  // Prime at 1.0x.
+  remote.handle({ key: KEY, action: 'tick', position: 100, playing: true, rate: 1, at: now });
+  assert.equal(video.playbackRate, 1);
+
+  // Peer drifts +0.50s ahead -> RemoteMediaSync applies slowdown nudge (1 / 1.05 = 0.95238...).
+  now += 250;
+  video._setClock(now);
+  video.currentTime = 100.75;
+  const nudged = remote.handle({
+    key: KEY,
+    action: 'tick',
+    position: 100.25,
+    playing: true,
+    rate: 1,
+    at: now,
+  });
+  assert.equal(nudged.rateChanged, true);
+  assert.ok(Math.abs(video.playbackRate - 1 / RELAY_NUDGE_RATE) < 0.001);
+
+  // 1200 ms later (well past MEDIA_ECHO_MS = 600 ms!), YouTube/HLS fires a late ratechange
+  // while the element is still running our active 0.952x nudge -> MUST still be echo!
+  now += MEDIA_ECHO_MS + 600;
+  video._setClock(now);
+  assert.equal(
+    remote.isEcho('rate', now),
+    true,
+    'late ratechange matching active nudge rate must be suppressed even past MEDIA_ECHO_MS'
+  );
+  assert.equal(remote.reportedRate(), 1);
+
+  // Drift settles -> RemoteMediaSync resets element back to 1.0x.
+  now += 250;
+  video._setClock(now);
+  video.currentTime = 101.7;
+  const reset = remote.handle({
+    key: KEY,
+    action: 'tick',
+    position: 101.7,
+    playing: true,
+    rate: 1,
+    at: now,
+  });
+  assert.equal(reset.rateChanged, true);
+  assert.equal(video.playbackRate, 1);
+
+  // 1200 ms after reset (past MEDIA_ECHO_MS), late async ratechange at 1.0x is STILL suppressed.
+  now += MEDIA_ECHO_MS + 600;
+  assert.equal(
+    remote.isEcho('rate', now),
+    true,
+    'late ratechange matching nudge reset to roomRate must be suppressed'
+  );
+
+  // Meanwhile, a genuine human rate change to 1.5x MUST pass immediately (even inside MEDIA_ECHO_MS!).
+  now += 100;
+  video.playbackRate = 1.5;
+  assert.equal(remote.isEcho('rate', now), false, 'genuine user 1.5x must not be suppressed');
+  remote.noteLocalAct('rate', now);
+
+  // Returning to 1.0x immediately after 1.5x also passes cleanly.
+  now += 150;
+  video.playbackRate = 1.0;
+  assert.equal(remote.isEcho('rate', now), false, 'user returning from 1.5x to 1.0x must pass');
+  remote.noteLocalAct('rate', now);
+
+  // Explicit local seek while actively nudging resets element playbackRate cleanly back to roomRate!
+  now += 250;
+  video._setClock(now);
+  video.currentTime = 104.0;
+  remote.handle({ key: KEY, action: 'tick', position: 103.7, playing: true, rate: 1, at: now });
+  assert.ok(video.playbackRate < 0.99, 'nudge active before local seek');
+  now += 100;
+  remote.noteLocalAct('seek', now);
+  assert.equal(video.playbackRate, 1, 'explicit local seek must reset active nudge back to roomRate');
+  assert.equal(remote.isEcho('rate', now), true, 'rate reset from local seek must stay echo-suppressed');
+});
+
+test('active local scrub drag (seeking) blocks routine ticks until seeked lands, but yields to newer remote seek', () => {
+  let now = 5000;
+  const video = makeVideo({ currentTime: 20, paused: false, seekLatencyMs: 500 });
+  video._setClock(now);
+  const doc = {
+    location: { href: HREF, hostname: 'www.youtube.com' },
+    querySelector: () => video,
+  };
+  const remote = new RemoteMediaSync({
+    document: doc,
+    href: HREF,
+    hostname: 'www.youtube.com',
+    now: () => now,
+  });
+
+  // Prime video at 20s (rev 1).
+  remote.handle({ key: KEY, action: 'tick', position: 20, playing: true, rate: 1, rev: 1, at: now });
+
+  // User starts scrubbing toward 150s -> video.seeking is true, seeking event fires before seeked.
+  now += 200;
+  video._setClock(now);
+  video.currentTime = 150;
+  assert.equal(video.seeking, true);
+  assert.equal(remote.isEcho('seek', now), false);
+  remote.noteLocalSeeking(now);
+  assert.equal(remote.isLocalSeeking(now), true);
+
+  // Routine room tick arrives 200ms later while user is still dragging -> MUST skip as local-seeking.
+  now += 200;
+  video._setClock(now);
+  const duringDrag = remote.handle({
+    key: KEY,
+    action: 'tick',
+    position: 20.4,
+    playing: true,
+    rate: 1,
+    rev: 1,
+    at: now,
+  });
+  assert.equal(duringDrag.skipped, 'local-seeking');
+  assert.equal(video.paused, false);
+
+  // Once seeked lands, noteLocalAct clears localSeeking.
+  now += 350;
+  video._advanceTo(now);
+  assert.equal(video.seeking, false);
+  assert.equal(video.currentTime, 150);
+  remote.noteLocalAct('seek', now);
+  assert.equal(remote.isLocalSeeking(now), false);
+
+  // A strictly newer remote explicit seek supersedes an in-progress local scrub.
+  now += 100;
+  video._setClock(now);
+  video.currentTime = 240;
+  remote.noteLocalSeeking(now);
+  const override = remote.handle({
+    key: KEY,
+    action: 'seek',
+    position: 300,
+    playing: true,
+    rate: 1,
+    rev: 2,
+    at: now,
+  });
+  assert.equal(override.action, 'seek');
+  assert.equal(remote.isLocalSeeking(now), false);
+});
+
+test('multi-controller hand-off, late-joining peer rev sync, and host-priority rejection never drop or poison seeks', () => {
+  let local = 10000;
+  const hostRelayed = [];
+  const peerARelayed = [];
+  const peerBRelayed = [];
+  const sentHost = [];
+  const sentA = [];
+  const sentB = [];
+
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sentHost.push(frame),
+    overlay: false,
+    onMedia: (frame) => {
+      hostRelayed.push(frame);
+      return true;
+    },
+  });
+  const peerA = createRoomClient({
+    role: 'peer',
+    peerId: 'peerA',
+    name: 'Alice',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sentA.push(frame),
+    overlay: false,
+    onMedia: (frame) => {
+      peerARelayed.push(frame);
+      return true;
+    },
+  });
+  const peerB = createRoomClient({
+    role: 'peer',
+    peerId: 'peerB',
+    name: 'Bob',
+    hostId: 'host',
+    now: () => local,
+    send: (frame) => sentB.push(frame),
+    overlay: false,
+    onMedia: (frame) => {
+      peerBRelayed.push(frame);
+      return true;
+    },
+  });
+
+  const flushTo = (queue, targets) => {
+    while (queue.length) {
+      const frame = queue.shift();
+      for (const target of targets) target.receive(frame, local);
+    }
+  };
+
+  // Host advances mediaRev to 5 before Peer A and Peer B even join!
+  for (let i = 1; i <= 5; i += 1) {
+    local += 600;
+    host.sendHostMedia({ key: KEY, position: i * 10, playing: false, action: 'seek', rate: 1, at: local }, local);
+  }
+  sentHost.length = 0;
+
+  // Peer A and Peer B join late -> receive snapshot (with mediaRev: 5) and control grants.
+  local += 600;
+  peerA.hello();
+  peerB.hello();
+  flushTo(sentA, [host]);
+  flushTo(sentB, [host]);
+  flushTo(sentHost, [peerA, peerB]);
+  host.setGrant('peerA', true);
+  host.setGrant('peerB', true);
+  flushTo(sentHost, [peerA, peerB]);
+
+  // Peer B's VERY FIRST seek after late join must carry rev: 6 and succeed (never stale-rev!).
+  local += 100;
+  assert.equal(peerB.sendMedia({ key: KEY, position: 90, playing: true, action: 'seek', rate: 1 }), true);
+  flushTo(sentB, [host, peerA]);
+  assert.equal(hostRelayed.at(-1).expected, 90);
+  assert.equal(host.publish().mediaDrops['stale-rev'] || 0, 0);
+  flushTo(sentHost, [peerA, peerB]);
+
+  // Concurrent multi-controller hand-off: both Peer A and Peer B are at rev 6.
+  // Peer A seeks to 120 (rev 7) -> Host accepts. Before Peer B sees rev 7, Peer B seeks to 180 (rev 7).
+  // Latest explicit controller act (Peer B -> 180) must win with immediate rev 8 broadcast!
+  local += 100;
+  peerA.sendMedia({ key: KEY, position: 120, playing: true, action: 'seek', rate: 1 });
+  flushTo(sentA, [host]); // Host receives Peer A (rev 7), broadcasts rev 7 (still in sentHost).
+  assert.equal(hostRelayed.at(-1).expected, 120);
+
+  // Peer B has NOT received sentHost yet -> Peer B seeks to 180 with rev 7!
+  local += 20;
+  peerB.sendMedia({ key: KEY, position: 180, playing: true, action: 'seek', rate: 1 });
+  flushTo(sentB, [host]);
+  assert.equal(
+    hostRelayed.at(-1).expected,
+    180,
+    'concurrent second controller seek at equal peer rev must win as latest explicit act'
+  );
+  assert.equal(hostRelayed.at(-1).rev, 8);
+  flushTo(sentHost, [peerA, peerB]);
+  assert.equal(peerARelayed.at(-1).expected, 180);
+  assert.equal(peerBRelayed.at(-1).expected, 180);
+
+  // Host rejects a peer seek during HOST_MEDIA_PRIORITY_MS -> Peer's mediaRev must NOT be poisoned.
+  local += 600;
+  host.sendHostMedia({ key: KEY, position: 250, playing: true, action: 'seek', rate: 1, at: local }, local);
+  flushTo(sentHost, [peerA, peerB]);
+  // Peer A now has mediaRev = 9. 100ms later (inside host-priority), Peer A tries to seek (sends rev 10).
+  local += 100;
+  peerA.sendMedia({ key: KEY, position: 50, playing: true, action: 'seek', rate: 1 });
+  flushTo(sentA, [host]);
+  assert.equal(host.publish().mediaDrops['host-priority'], 1);
+  // After PEER_ACT_GUARD_MS expires, Peer A MUST still accept Host's routine ticks at rev 9!
+  local += 1600;
+  host.sendHostMedia({ key: KEY, position: 251.7, playing: true, action: false, rate: 1, at: local }, local);
+  const countBefore = peerARelayed.length;
+  flushTo(sentHost, [peerA]);
+  assert.equal(peerARelayed.length, countBefore + 1, 'peer must still accept host ticks after host-priority drop');
 });

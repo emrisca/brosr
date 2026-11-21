@@ -7,10 +7,12 @@ export const POINTER_HZ = 30;
 export const POINTER_INTERVAL_MS = Math.round(1000 / POINTER_HZ);
 export const MAX_QUEUE = 512;
 
-// Moving a cursor and scrolling are free. Everything that acts needs a grant.
-export const FREE_KINDS = new Set(['move', 'scroll']);
+// Moving a cursor is free. Scrolling is strictly local and never relayed.
+// Everything that acts needs a grant.
+export const FREE_KINDS = new Set(['move']);
 
 const POINTER_LOCK_KINDS = new Set(['pointerlock', 'pointer-lock', 'requestpointerlock']);
+const SCROLL_KINDS = new Set(['wheel', 'scroll']);
 
 const isPoint = (point) =>
   Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y));
@@ -58,6 +60,19 @@ export function pointerLockDecision({
   return { allow: true, reason: 'ok' };
 }
 
+// Guardrail #5: scrolling stays local in both directions and is never relayed.
+export function scrollPolicyDecision(record = null) {
+  const kind = String((record && (record.kind || record.type)) || '').toLowerCase();
+  if (SCROLL_KINDS.has(kind)) {
+    return {
+      allow: false,
+      reason: 'scroll',
+      message: 'Scrolling is local by design and cannot be relayed remotely.',
+    };
+  }
+  return { allow: true, reason: 'ok' };
+}
+
 export class GrantBook {
   constructor({ now = () => Date.now() } = {}) {
     this.now = now;
@@ -99,6 +114,8 @@ export class GrantBook {
   ) {
     const lock = pointerLockDecision({ doc, pointerLockElement, record: { kind } });
     if (!lock.allow) return lock;
+    const scroll = scrollPolicyDecision({ kind });
+    if (!scroll.allow) return scroll;
     if (FREE_KINDS.has(kind)) return { allow: true, reason: 'free-kind' };
     // A browser-wide grant names every tab with '*'. An exact tab entry wins,
     // then the wildcard, so a per-tab grant keeps the meaning it had.
@@ -167,6 +184,7 @@ export function isLocalControl(element) {
       element.closest('[data-brosr-overlay]') ||
       element.closest('[data-brosr-local]') ||
       element.closest('#live-tabs') ||
+      element.closest('#tiles') ||
       element.closest('#brosr-panel-button') ||
       element.closest('#host-takeover')
     ) {
@@ -174,13 +192,34 @@ export function isLocalControl(element) {
     }
   }
   const id = attribute(element, 'id');
-  if (id === 'live-tabs' || id === 'brosr-panel-button' || id === 'host-takeover') return true;
+  if (
+    id === 'live-tabs' ||
+    id === 'tiles' ||
+    id === 'brosr-panel-button' ||
+    id === 'host-takeover'
+  ) {
+    return true;
+  }
   return Boolean(attribute(element, 'data-brosr-overlay') || attribute(element, 'data-brosr-local'));
 }
 
-// A link interaction that opens a new tab or window (target="_blank", named
-// target, middle-click, or Cmd/Ctrl/Shift-click) is local only; tabs never
-// relay open across peers.
+function nonSelfTarget(raw) {
+  const target = String(raw || '')
+    .trim()
+    .toLowerCase();
+  return Boolean(target && target !== '_self');
+}
+
+function baseTarget(element) {
+  const doc = element && element.ownerDocument;
+  if (!doc || typeof doc.querySelector !== 'function') return '';
+  const base = doc.querySelector('base[target]');
+  return base ? attribute(base, 'target') : '';
+}
+
+// A link or form interaction that opens a new tab or window (target="_blank",
+// named target, <base target>, formtarget, middle-click, or Cmd/Ctrl/Shift-click)
+// is local only; tabs never relay open across peers.
 export function isTabOpeningClick(element, record = {}) {
   if (!element || typeof element !== 'object') return false;
   const link =
@@ -193,26 +232,48 @@ export function isTabOpeningClick(element, record = {}) {
     (element.href || attribute(element, 'href'))
       ? element
       : null);
-  if (!anchor) return false;
-  const targetName = String(anchor.target || attribute(anchor, 'target') || '')
-    .trim()
-    .toLowerCase();
-  if (targetName && targetName !== '_self') return true;
-  const button = Number(record && record.button);
-  if (button === 1) return true;
-  if (
-    Boolean(record && (record.ctrl || record.ctrlKey)) ||
-    Boolean(record && (record.meta || record.metaKey)) ||
-    Boolean(record && (record.shift || record.shiftKey))
-  ) {
-    return true;
+  if (anchor) {
+    const explicitTarget = anchor.target || attribute(anchor, 'target');
+    if (nonSelfTarget(explicitTarget)) return true;
+    if (!explicitTarget && nonSelfTarget(baseTarget(anchor))) return true;
+    const button = Number(record && record.button);
+    if (button === 1) return true;
+    if (
+      Boolean(record && (record.ctrl || record.ctrlKey)) ||
+      Boolean(record && (record.meta || record.metaKey)) ||
+      Boolean(record && (record.shift || record.shiftKey))
+    ) {
+      return true;
+    }
+    return false;
+  }
+  const submitControl =
+    typeof element.closest === 'function'
+      ? element.closest('button, input[type="submit"], input[type="image"]')
+      : ['button', 'input'].includes(String(element.tagName || '').toLowerCase())
+        ? element
+        : null;
+  if (submitControl) {
+    const formTarget = submitControl.formTarget || attribute(submitControl, 'formtarget');
+    if (nonSelfTarget(formTarget)) return true;
+    const form =
+      submitControl.form ||
+      (typeof submitControl.closest === 'function' ? submitControl.closest('form') : null);
+    if (form && nonSelfTarget(form.target || attribute(form, 'target'))) return true;
   }
   return false;
 }
 
 export function isTabOpeningKey(element, record = {}) {
-  if (!element || typeof element !== 'object') return false;
   const key = String((record && record.key) || '');
+  if (!key) return false;
+  const hasAccel =
+    Boolean(record && (record.ctrl || record.ctrlKey)) ||
+    Boolean(record && (record.meta || record.metaKey));
+  if (hasAccel && (key.toLowerCase() === 't' || key.toLowerCase() === 'n')) {
+    return true;
+  }
+  if (!element || typeof element !== 'object') return false;
   if (key !== 'Enter' && key !== 'Return' && key !== 'NumpadEnter') return false;
   return isTabOpeningClick(element, record);
 }
@@ -243,6 +304,8 @@ export function inputCaptureDecision({
 } = {}) {
   const lock = pointerLockDecision({ doc, record, requested, pointerLockElement });
   if (!lock.allow) return lock;
+  const scroll = scrollPolicyDecision(record || (event ? { kind: event.type } : null));
+  if (!scroll.allow) return scroll;
   if (event && event.isTrusted === false) {
     return { allow: false, reason: 'untrusted' };
   }
@@ -252,41 +315,19 @@ export function inputCaptureDecision({
   if (event && event.target && isSensitiveField(event.target)) {
     return { allow: false, reason: 'sensitive' };
   }
-  if (event && event.target && (isTabOpeningClick(event.target, event) || isTabOpeningKey(event.target, event))) {
+  if (
+    (event && event.target && isTabOpeningClick(event.target, event)) ||
+    (event && isTabOpeningKey(event.target || null, event)) ||
+    (record && record.kind === 'key' && isTabOpeningKey((event && event.target) || null, record))
+  ) {
     return { allow: false, reason: 'new-tab' };
   }
   return { allow: true, reason: 'ok' };
 }
 
-// Normalize a DOM WheelEvent into a wire record carrying finite deltas,
-// deltaMode, viewport coordinates, optional selector/canvas fraction, and
-// keyboard modifiers. Non-finite deltas are rejected instead of becoming NaN.
-export function wheelRecord(event, { path = '', canvas = null, point = null } = {}) {
-  if (!event || typeof event !== 'object') return null;
-  const deltaX = event.deltaX === undefined ? 0 : Number(event.deltaX);
-  const deltaY = event.deltaY === undefined ? 0 : Number(event.deltaY);
-  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return null;
-  const mode = Number(event.deltaMode);
-  const deltaMode = mode === 1 || mode === 2 ? mode : 0;
-  const resolvedPoint = isPoint(point)
-    ? { x: point.x, y: point.y }
-    : Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
-      ? { x: event.clientX, y: event.clientY }
-      : null;
-  const record = {
-    kind: 'wheel',
-    ...(path ? { path: String(path) } : {}),
-    ...(resolvedPoint ? { point: resolvedPoint } : {}),
-    ...(canvas ? { canvas } : {}),
-    deltaX,
-    deltaY,
-    deltaMode,
-    ctrl: Boolean(event.ctrlKey || event.ctrl),
-    alt: Boolean(event.altKey || event.alt),
-    shift: Boolean(event.shiftKey || event.shift),
-    meta: Boolean(event.metaKey || event.meta),
-  };
-  return record;
+// Scrolling stays strictly local; wheel events are never serialized for relay.
+export function wheelRecord() {
+  return null;
 }
 
 // A stable path a peer can resolve on its own copy of the page.
@@ -360,7 +401,8 @@ export class InputBatcher {
   }
 
   _checkPolicy(record) {
-    const decision = pointerLockDecision({ doc: this.doc, record });
+    const lock = pointerLockDecision({ doc: this.doc, record });
+    const decision = lock.allow ? scrollPolicyDecision(record) : lock;
     if (!decision.allow) {
       this.refused += 1;
       this.reasons[decision.reason] = (this.reasons[decision.reason] || 0) + 1;
@@ -441,6 +483,7 @@ function activateLink(target, root, record = {}) {
   const link =
     target && typeof target.closest === 'function' ? target.closest('a[href]') : null;
   if (!link) return false;
+  if (isLocalControl(target) || isLocalControl(link)) return false;
   if (link.hasAttribute && link.hasAttribute('download')) return false;
   const href = String(link.href || '');
   if (!href || /^\s*javascript:/i.test(href)) return false;
@@ -473,32 +516,9 @@ function setFieldValue(element, value) {
   );
 }
 
-function wheelPoint(target, record) {
-  if (isPoint(record.point)) return { x: record.point.x, y: record.point.y };
-  if (record.canvas && target && String(target.tagName || '').toLowerCase() === 'canvas') {
-    return canvasPoint(target, record.canvas);
-  }
-  if (target && typeof target.getBoundingClientRect === 'function') {
-    const rect = target.getBoundingClientRect();
-    if (
-      rect &&
-      Number.isFinite(rect.left) &&
-      Number.isFinite(rect.top) &&
-      Number.isFinite(rect.width) &&
-      Number.isFinite(rect.height)
-    ) {
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }
-    return {
-      x: Number(rect && (rect.x ?? rect.left)) || 0,
-      y: Number(rect && (rect.y ?? rect.top)) || 0,
-    };
-  }
-  return { x: 0, y: 0 };
-}
-
-// Replay one batch. Every record passes the pointer-lock, grant, target,
-// local-control, new-tab and sensitive-field guards before anything reaches the page.
+// Replay one batch. Every record passes the pointer-lock, scroll, grant,
+// target, local-control, new-tab and sensitive-field guards before anything
+// reaches the page.
 export function replayInput(
   records,
   {
@@ -520,6 +540,11 @@ export function replayInput(
     const lock = pointerLockDecision({ doc: root, record });
     if (!lock.allow) {
       drop(lock.reason);
+      continue;
+    }
+    const scroll = scrollPolicyDecision(record);
+    if (!scroll.allow) {
+      drop(scroll.reason);
       continue;
     }
     if (!allowed(record)) {
@@ -627,43 +652,6 @@ export function replayInput(
         continue;
       }
       setFieldValue(target, record.value);
-      result.applied += 1;
-      continue;
-    }
-
-    if (record.kind === 'wheel') {
-      const deltaX = record.deltaX === undefined ? 0 : Number(record.deltaX);
-      const deltaY = record.deltaY === undefined ? 0 : Number(record.deltaY);
-      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
-        drop('delta');
-        continue;
-      }
-      const wheelTarget =
-        target ||
-        (!record.path && isPoint(record.point) && root && typeof root.elementFromPoint === 'function'
-          ? root.elementFromPoint(record.point.x, record.point.y)
-          : null);
-      if (!wheelTarget) {
-        drop('target');
-        continue;
-      }
-      const point = wheelPoint(wheelTarget, record);
-      const mode = Number(record.deltaMode);
-      const deltaMode = mode === 1 || mode === 2 ? mode : 0;
-      dispatch(
-        root,
-        wheelTarget,
-        new view.WheelEvent('wheel', {
-          bubbles: true,
-          cancelable: true,
-          clientX: point.x,
-          clientY: point.y,
-          deltaX,
-          deltaY,
-          deltaMode,
-          ...mods,
-        })
-      );
       result.applied += 1;
       continue;
     }

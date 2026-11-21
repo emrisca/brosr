@@ -702,7 +702,12 @@ test('a peer follows the host url and reports layout mismatch without mirroring 
     scrollTo: (ratio) => scrolled.push(ratio),
   });
 
-  client.receive(encode({ type: 'nav', url: 'http://x/b.html', roomTime: 1 }), 0);
+  // Non-host or unattributed nav frames are ignored; only the current host counts.
+  const forgedNav = client.receive(encode({ type: 'nav', from: 'peer-rogue', url: 'http://evil.test', roomTime: 1 }), 0);
+  assert.equal(forgedNav.ignored, 'not-host');
+  const anonNav = client.receive(encode({ type: 'nav', url: 'http://evil.test', roomTime: 1 }), 0);
+  assert.equal(anonNav.ignored, 'not-host');
+  client.receive(encode({ type: 'nav', from: 'host', url: 'http://x/b.html', roomTime: 1 }), 0);
   client.receive(encode({ type: 'view', scroll: 0.75, fingerprint, roomTime: 1 }), 0);
   client.receive(encode({ type: 'snapshot', from: 'host', sequence: 1, url: 'http://x/a.html', scroll: 0.6, roomTime: 2 }), 0);
   assert.deepEqual(navigated, ['http://x/b.html']);

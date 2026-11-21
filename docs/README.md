@@ -8,6 +8,7 @@ The design is split by subject so a reader can open one file. The old single fil
 | [design.md](design.md) | The idea, the competition, and what works per use case. |
 | [engines.md](engines.md) | Firefox and Chromium side by side, uBlock Origin and the bridge extension. |
 | [sync.md](sync.md) | The five sync layers, the wire protocol, the media policy and input. |
+| [tab-share-plan.md](tab-share-plan.md) | Planned opt-in single-tab screen-share fallback (room panel, E2EE WebRTC signaling, alternatives). |
 | [architecture.md](architecture.md) | The parts of a room, the browser surface and the transport. |
 | [safety.md](safety.md) | Grants, the origin allowlist, sealing and rate limits. |
 | [privacy.md](privacy.md) | What stays end-to-end sealed, what the relay sees, and what never crosses it. |

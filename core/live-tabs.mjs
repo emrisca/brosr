@@ -80,8 +80,52 @@ export function rememberSharedTab(list, tab) {
   if (existing && existing.ownerId && existing.ownerId !== String(tab.ownerId || '')) {
     return current;
   }
-  const next = [tab, ...current.filter((entry) => entry && entry.key !== tab.key)];
+  const sameUrl = Boolean(existing && existing.url === tab.url);
+  const merged =
+    sameUrl && tab.playing === null && typeof existing.playing === 'boolean'
+      ? { ...tab, playing: existing.playing }
+      : tab;
+  // A title refresh on the same URL updates the row in place so rows do not
+  // jump under a user's pointer. A new offer or a navigation to a new video
+  // moves to the top.
+  if (sameUrl) {
+    return current.map((entry) => (entry && entry.key === tab.key ? merged : entry));
+  }
+  const next = [merged, ...current.filter((entry) => entry && entry.key !== tab.key)];
   return next.slice(0, MAX_SHARED_TABS);
+}
+
+// Guardrail #5: explicit decision for inline Live Tabs media controls.
+// Only the room host or a currently granted peer may drive playback, and only
+// on a tab this browser holds (published or joined).
+export const MAX_TAB_SKIP_SECONDS = 600;
+export function tabMediaControlDecision({
+  key,
+  action,
+  delta = 0,
+  role = 'peer',
+  granted = false,
+  mine = false,
+  joined = false,
+} = {}) {
+  const id = key === undefined || key === null ? '' : String(key);
+  if (!id) return { allow: false, reason: 'no-key' };
+  const canControl = role === 'host' || granted === true;
+  if (!canControl) return { allow: false, reason: 'no-control' };
+  if (!mine && !joined) return { allow: false, reason: 'not-local' };
+  const act = String(action || '');
+  if (act !== 'toggle' && act !== 'play' && act !== 'pause' && act !== 'skip') {
+    return { allow: false, reason: 'bad-action' };
+  }
+  if (act === 'skip') {
+    const raw = Number(delta);
+    if (!Number.isFinite(raw) || raw === 0) {
+      return { allow: false, reason: 'bad-delta' };
+    }
+    const clamped = Math.max(-MAX_TAB_SKIP_SECONDS, Math.min(MAX_TAB_SKIP_SECONDS, raw));
+    return { allow: true, reason: 'ok', key: id, action: act, delta: clamped };
+  }
+  return { allow: true, reason: 'ok', key: id, action: act, delta: 0 };
 }
 
 export function forgetSharedTab(list, key, { ownerId = null } = {}) {

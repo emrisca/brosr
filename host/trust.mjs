@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { BiDi } from '../spike/bidi.mjs';
 import { ChromeCdp } from './chrome-cdp.mjs';
-import { pointerLockDecision } from '../core/input.mjs';
+import { isTabOpeningKey, pointerLockDecision, scrollPolicyDecision } from '../core/input.mjs';
 import { actionsForRecord } from '../core/trust.mjs';
 
 export const TRUST_TTL_MS = 5 * 60 * 1000;
@@ -149,8 +149,9 @@ export async function createTrustAgent({
       return;
     }
 
-    // Guardrail #5: pointer lock is local by design. Refuse the batch with the
-    // explicit policy decision before touching the browser actuator.
+    // Guardrail #5: pointer lock, scrolling, and tab-opening shortcuts/middle-clicks
+    // are local by design. Refuse the batch with the explicit policy decision before
+    // touching the browser actuator.
     const lockActive = Boolean(typeof pointerLocked === 'function' ? pointerLocked() : pointerLocked);
     for (const record of records) {
       const lock = pointerLockDecision({
@@ -161,6 +162,23 @@ export async function createTrustAgent({
         stats.rejected += 1;
         stats.reasons[lock.reason] = (stats.reasons[lock.reason] || 0) + 1;
         reply(res, 403, { ok: false, ...lock });
+        return;
+      }
+      const scroll = scrollPolicyDecision(record);
+      if (!scroll.allow) {
+        stats.rejected += 1;
+        stats.reasons[scroll.reason] = (stats.reasons[scroll.reason] || 0) + 1;
+        reply(res, 403, { ok: false, ...scroll });
+        return;
+      }
+      if (
+        record &&
+        ((['click', 'down', 'up'].includes(record.kind) && Number(record.button) === 1) ||
+          (record.kind === 'key' && isTabOpeningKey(null, record)))
+      ) {
+        stats.rejected += 1;
+        stats.reasons['new-tab'] = (stats.reasons['new-tab'] || 0) + 1;
+        reply(res, 403, { ok: false, allow: false, reason: 'new-tab' });
         return;
       }
     }

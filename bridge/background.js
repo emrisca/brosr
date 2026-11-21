@@ -141,6 +141,7 @@ async function handleTabRemoved(id, remotelyClosed) {
   remoteTabs.delete(id);
   remoteOrigins.delete(id);
   mediaTabs.delete(id);
+  mediaTabStates.delete(id);
   // A closed tab frees its id, so a later tab must not inherit the stop.
   detachedTabs.delete(id);
   publishedPlaying.delete(String(remoteKey ?? id));
@@ -319,14 +320,40 @@ async function rememberAnnounced(id, url) {
   await save({ announcedTabs: announcedBook() });
   return true;
 }
+const announcedTitles = new Map();
 async function forgetAnnounced(id) {
   await restoreBooks();
+  announcedTitles.delete(id);
   if (!announced.delete(id)) return;
   await save({ announcedTabs: announcedBook() });
 }
 // Tabs with a player, keyed by the film each one shows. The room tab drives
 // playback through this map, because the film is usually in another tab.
 const mediaTabs = new Map();
+// Latest media state reported by each tab, kept as a fallback when a joiner
+// queries brosr:tab-media-state and brosr:media-read races with cross-origin
+// iframes or times out.
+const mediaTabStates = new Map();
+const TAB_MEDIA_CACHE_MS = 60000;
+function cachedTabMediaState(tabId, nowAt = Date.now()) {
+  const cached = mediaTabStates.get(tabId);
+  if (!cached || !cached.key) return null;
+  const at = Number(cached.at || 0);
+  if (!Number.isFinite(at) || nowAt - at > TAB_MEDIA_CACHE_MS) {
+    mediaTabStates.delete(tabId);
+    return null;
+  }
+  const base = Number(cached.position || 0);
+  const rate = Number(cached.rate);
+  const speed = Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const raw =
+    cached.playing && !cached.buffering && !cached.ad
+      ? base + (Math.max(0, nowAt - at) / 1000) * speed
+      : base;
+  const duration = Number(cached.duration || 0);
+  const position = duration > 0 ? Math.min(raw, duration) : raw;
+  return { ...cached, position, at: nowAt };
+}
 // A worker restart empties that map, and a film tab only announces a new key
 // when the film changes. The book keeps the last entry per tab, so a paused tab
 // is still reachable after the worker comes back. A write happens only when a
@@ -538,6 +565,7 @@ async function shareTab(tab) {
     // the remote book made the offer look like a copy, so a replay skipped it
     // and closing it reported a peer leaving instead of withdrawing the offer.
     if (arrived !== undefined && arrived !== null) await mapRemoteKey(key, tab.id);
+    if (typeof tab.title === 'string' && tab.title) announcedTitles.set(tab.id, tab.title);
     const sent = await announce(tab.url, key, tab.title, mediaTabs.get(tab.id));
     if (removedTabs.has(tab.id)) {
       await forgetAnnounced(tab.id);
@@ -602,6 +630,19 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
 });
 
 api.tabs.onUpdated.addListener((id, info, tab) => {
+  if (
+    info.title &&
+    !info.url &&
+    announced.has(id) &&
+    !remoteOrigins.has(id) &&
+    !detachedTabs.has(id) &&
+    tab &&
+    shareable(tab.url) &&
+    announcedTitles.get(id) !== info.title
+  ) {
+    announcedTitles.set(id, info.title);
+    announce(tab.url, id, info.title, mediaTabs.get(id)).catch(() => {});
+  }
   if (!info.url && info.status !== 'complete') return;
   if (info.url) {
     // An embedded player frame cannot see SPA URL changes in its parent tab
@@ -979,6 +1020,7 @@ async function handle(message, sender) {
     detachedTabs.add(id);
     // A stopped tab no longer names a film. Its player goes quiet for the room.
     mediaTabs.delete(id);
+    mediaTabStates.delete(id);
     await save({
       remoteKeyTabs: Object.fromEntries(remoteKeys),
       mediaTabKeys: mediaBook(),
@@ -1155,11 +1197,26 @@ async function handle(message, sender) {
     const id = await roomTab();
     if (id === from) {
       mediaTabs.delete(from);
+      mediaTabStates.delete(from);
       save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'room-tab' };
     }
+    const prevCached = mediaTabStates.get(from);
+    if (prevCached && prevCached.key !== String(message.key || '')) {
+      mediaTabStates.delete(from);
+    }
     await rememberMediaTab(from, message.key, false);
     if (sender.tab.active) mediaFocusTab = from;
+    const joinedOrigin = remoteOrigins.get(from);
+    if (joinedOrigin !== undefined && validId(id) && message.key) {
+      api.tabs
+        .sendMessage(id, {
+          type: 'brosr:media-mounted',
+          key: String(message.key),
+          joinedKey: String(joinedOrigin),
+        })
+        .catch(() => {});
+    }
     return { ok: true, tabs: mediaTabs.size };
   }
   if (message.type === 'brosr:media-out') {
@@ -1170,6 +1227,11 @@ async function handle(message, sender) {
     const media = message.state;
     if (!media || typeof media !== 'object' || !media.key) return { ok: false, reason: 'state' };
     await rememberMediaTab(from, media.key, media.playing);
+    mediaTabStates.set(from, {
+      ...media,
+      key: String(media.key),
+      at: Number(media.at) || Date.now(),
+    });
     // A tab this browser shared says whether it plays now, so its row updates
     // in place instead of waiting for the next URL change.
     if (announced.has(from)) {
@@ -1205,6 +1267,61 @@ async function handle(message, sender) {
     api.tabs.sendMessage(id, outgoing).catch(() => {});
     return { ok: true };
   }
+  // Bring an open published or joined tab to the front without opening a new tab.
+  if (message.type === 'brosr:tab-focus') {
+    const key = String(message.key || '');
+    if (!key) return { ok: false, reason: 'key' };
+    await restoreBooks();
+    let tabId = remoteKeys.get(key);
+    if (!validId(tabId)) {
+      const ownId = Number(key);
+      if (validId(ownId) && announced.has(ownId)) tabId = ownId;
+    }
+    if (!validId(tabId) || detachedTabs.has(tabId)) {
+      return { ok: false, reason: 'no-tab' };
+    }
+    const target = await api.tabs.get(tabId).catch(() => null);
+    if (!target) return { ok: false, reason: 'no-tab' };
+    try {
+      await api.tabs.update(tabId, { active: true });
+      if (api.windows && typeof api.windows.update === 'function' && Number.isInteger(target.windowId)) {
+        await api.windows.update(target.windowId, { focused: true }).catch(() => {});
+      }
+      return { ok: true, tabId };
+    } catch (error) {
+      return { ok: false, reason: 'focus-failed', error: text(error) };
+    }
+  }
+  // Route an inline controller media command (play, pause, toggle, skip) from
+  // the Live Tabs section on the landing page to the local published/joined tab.
+  if (message.type === 'brosr:tab-media-control') {
+    const key = String(message.key || '');
+    const action = String(message.action || '');
+    if (!key) return { ok: false, reason: 'key' };
+    if (action !== 'toggle' && action !== 'play' && action !== 'pause' && action !== 'skip') {
+      return { ok: false, reason: 'bad-action' };
+    }
+    await restoreBooks();
+    let tabId = remoteKeys.get(key);
+    if (!validId(tabId)) {
+      const ownId = Number(key);
+      if (validId(ownId) && announced.has(ownId)) tabId = ownId;
+    }
+    if (!validId(tabId) || detachedTabs.has(tabId)) {
+      return { ok: false, reason: 'no-tab' };
+    }
+    const delta = action === 'skip' ? Number(message.delta || 0) : 0;
+    try {
+      const reply = await Promise.race([
+        api.tabs.sendMessage(tabId, { type: 'brosr:media-control', action, delta }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+      ]);
+      if (reply && reply.ok) return { ok: true, tabId, ...reply };
+      return { ok: false, reason: reply ? 'no-video' : 'timeout', tabId };
+    } catch (error) {
+      return { ok: false, reason: 'send-failed', error: text(error), tabId };
+    }
+  }
   // A joiner asked for the live playback state of a tab this browser published.
   // Query that tab directly so the joiner lands at the owner's current position.
   if (message.type === 'brosr:tab-media-state') {
@@ -1221,10 +1338,23 @@ async function handle(message, sender) {
       ]);
       if (reply && reply.ok && reply.state && reply.state.key) {
         await rememberMediaTab(tabId, reply.state.key, reply.state.playing);
+        mediaTabStates.set(tabId, {
+          ...reply.state,
+          key: String(reply.state.key),
+          at: Number(reply.state.at) || Date.now(),
+        });
         return { ok: true, tabId, state: reply.state };
+      }
+      const fallback = cachedTabMediaState(tabId);
+      if (fallback) {
+        return { ok: true, tabId, cached: true, state: fallback };
       }
       return { ok: false, reason: reply ? 'no-media' : 'timeout' };
     } catch (error) {
+      const fallback = cachedTabMediaState(tabId);
+      if (fallback) {
+        return { ok: true, tabId, cached: true, state: fallback };
+      }
       return { ok: false, reason: 'send-failed', error: text(error) };
     }
   }
@@ -1270,10 +1400,12 @@ async function handle(message, sender) {
         return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, answer: 'timeout' }] };
       }
       mediaTabs.delete(id);
+      mediaTabStates.delete(id);
       save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, answer: 'empty' }] };
     } catch (error) {
       mediaTabs.delete(id);
+      mediaTabStates.delete(id);
       save({ mediaTabKeys: mediaBook() });
       return { ok: false, reason: 'no-tab', want: filmKey, failed: [{ id, error: text(error) }] };
     }
@@ -1289,6 +1421,7 @@ async function handle(message, sender) {
         return { ok: true, tabId: id, focused: true };
       } catch {
         mediaTabs.delete(id);
+        mediaTabStates.delete(id);
       }
     }
     try {
@@ -1336,6 +1469,7 @@ async function handle(message, sender) {
           .then(() => true)
           .catch(() => {
             mediaTabs.delete(id);
+            mediaTabStates.delete(id);
             save({ mediaTabKeys: mediaBook() });
             return false;
           })
