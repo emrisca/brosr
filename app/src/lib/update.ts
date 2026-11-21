@@ -18,6 +18,13 @@ export async function checkForUpdate(): Promise<Update | null> {
   }
 }
 
+// A check the person asked for from Settings. Unlike the background check it
+// reports a failure, so the panel can say the server could not be reached
+// instead of claiming the app is current.
+export async function findUpdate(): Promise<Update | null> {
+  return await check({ timeout: 12000 });
+}
+
 export function skipped(version: string): boolean {
   try {
     return localStorage.getItem(SKIP_KEY) === version;

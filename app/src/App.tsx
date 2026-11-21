@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Minus, Users, X } from 'lucide-react';
+import { Minus, Settings, Users, X } from 'lucide-react';
 import { Brand } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { UpdateDialog } from '@/components/update-dialog';
+import { PALETTE_ICONS, SettingsDialog } from '@/components/settings-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Prepare } from '@/screens/prepare';
 import { FriendsDialog } from '@/screens/friends';
@@ -35,7 +36,8 @@ const NAME_KEY = 'brosr-name';
 const ROOM_NAME_KEY = 'brosr-room-name';
 
 export default function App() {
-  const { theme, toggle } = useTheme();
+  const { theme, mode, palette, setMode, setPalette, toggle } = useTheme();
+  const SeasonIcon = palette === 'classic' ? null : PALETTE_ICONS[palette];
   const [step, setStep] = useState<Step>('welcome');
   const [booting, setBooting] = useState(true);
   const [name, setName] = useState(() => {
@@ -67,6 +69,7 @@ export default function App() {
   const [update, setUpdate] = useState<Update | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [friendsOpen, setFriendsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const [invite, setInvite] = useState<Invite | null>(null);
   const [version, setVersion] = useState('');
@@ -292,6 +295,7 @@ export default function App() {
         <div className="flex items-center gap-1.5">
           <Brand className="size-5" />
           <span className="text-sm font-medium tracking-tight">Brosr</span>
+          {SeasonIcon ? <SeasonIcon className="size-3.5 text-brand" aria-hidden="true" /> : null}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -303,6 +307,15 @@ export default function App() {
             <Users />
           </Button>
           <ThemeToggle theme={theme} onToggle={toggle} />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Settings"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings />
+          </Button>
           <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
           <Button
             variant="ghost"
@@ -429,6 +442,21 @@ export default function App() {
         browserId={browser?.id}
         name={name}
         onJoined={enterPeer}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        theme={theme}
+        mode={mode}
+        palette={palette}
+        onMode={setMode}
+        onPalette={setPalette}
+        version={version}
+        onUpdate={(next) => {
+          setUpdate(next);
+          setSettingsOpen(false);
+          setUpdateOpen(true);
+        }}
       />
       <UpdateDialog update={update} open={updateOpen} onLater={later} />
 
