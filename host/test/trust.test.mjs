@@ -430,7 +430,7 @@ test('a slow trusted batch holds the next one, so typing keeps its order', async
   assert.equal(client.publish().inputApplied, 2);
 });
 
-test('a trust target resolves exact, query-matched, then path-matched tabs', async () => {
+test('a trust target resolves exact and query-matched tabs and refuses mismatched query strings', async () => {
   const bidi = fakeBidi();
   bidi.cmd = async (method) => {
     if (method === 'browsingContext.getTree') {
@@ -439,6 +439,7 @@ test('a trust target resolves exact, query-matched, then path-matched tabs', asy
           { context: 'room', url: 'http://127.0.0.1:8787/?room=r1&peer=host' },
           { context: 'ep1', url: 'http://127.0.0.1:8787/watch?ep=1' },
           { context: 'ep2', url: 'http://127.0.0.1:8787/watch?ep=2' },
+          { context: 'ytB', url: 'https://www.youtube.com/watch?v=otherVideo' },
           { context: 'form', url: 'http://127.0.0.1:8787/form.html' },
         ],
       };
@@ -448,11 +449,17 @@ test('a trust target resolves exact, query-matched, then path-matched tabs', asy
   assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/form.html'), 'form');
   assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/form.html#top'), 'form');
   assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/watch?ep=2#player'), 'ep2');
+  // Closing watch?v=A must never redirect actuation onto another watch?v=B tab.
+  assert.equal(
+    await resolveTrustTarget(bidi, 'https://www.youtube.com/watch?v=aqz-KE-bpKQ'),
+    null
+  );
+  assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/watch?ep=3'), null);
   assert.equal(await resolveTrustTarget(bidi, 'http://127.0.0.1:8787/gone.html'), null);
   assert.equal(await resolveTrustTarget(bidi, ''), null);
 });
 
-test('the watcher moves the agent to the published target and back', async () => {
+test('the watcher moves to the published target, refuses actuation when missing, and returns only when cleared', async () => {
   const roomUrl = 'http://127.0.0.1:8787/?room=r1&peer=host';
   let shown = published([{ id: 'peer', granted: true, self: false }]);
   const bidi = fakeBidi();
@@ -469,33 +476,44 @@ test('the watcher moves the agent to the published target and back', async () =>
     return {};
   };
   const watcher = watchTrust({ bidi, context: 'ctx', token: 't', intervalMs: 10 });
-  await waitFor(() => watcher.agent(), 'the room agent');
-  const room = watcher.agent();
-  assert.equal(room.context, 'ctx');
-  assert.equal(watcher.state.targetContext, 'ctx');
+  try {
+    await waitFor(() => watcher.agent(), 'the room agent');
+    const room = watcher.agent();
+    assert.equal(room.context, 'ctx');
+    assert.equal(watcher.state.targetContext, 'ctx');
 
-  shown = published([{ id: 'peer', granted: true, self: false }], {
-    trustTarget: 'http://127.0.0.1:8787/form.html',
-  });
-  await waitFor(() => watcher.agent() !== room, 'the target agent');
-  assert.equal(watcher.agent().context, 'form');
-  assert.equal(watcher.state.targetUrl, 'http://127.0.0.1:8787/form.html');
-  assert.equal(await room.isActive(), false);
+    shown = published([{ id: 'peer', granted: true, self: false }], {
+      trustTarget: 'http://127.0.0.1:8787/form.html',
+    });
+    await waitFor(() => watcher.agent() && watcher.agent() !== room, 'the target agent');
+    assert.equal(watcher.agent().context, 'form');
+    assert.equal(watcher.state.targetUrl, 'http://127.0.0.1:8787/form.html');
+    assert.equal(room.isActive(), false);
 
-  const target = watcher.agent();
-  shown = published([{ id: 'peer', granted: true, self: false }], {
-    trustTarget: 'http://127.0.0.1:8787/gone.html',
-  });
-  await waitFor(() => watcher.agent() !== target, 'the fallback agent');
-  assert.equal(watcher.agent().context, 'ctx');
-  assert.equal(watcher.state.missingTarget, 'http://127.0.0.1:8787/gone.html');
+    // Missing named target must stop the agent instead of falling back to the room tab.
+    const target = watcher.agent();
+    shown = published([{ id: 'peer', granted: true, self: false }], {
+      trustTarget: 'http://127.0.0.1:8787/gone.html',
+    });
+    await waitFor(() => watcher.agent() === null, 'refusal on missing target');
+    assert.equal(target.isActive(), false);
+    assert.equal(watcher.state.targetContext, null);
+    assert.equal(watcher.state.missingTarget, 'http://127.0.0.1:8787/gone.html');
 
-  await watcher.stop();
+    // Clearing trustTarget explicitly returns actuation to the room tab.
+    shown = published([{ id: 'peer', granted: true, self: false }], {
+      trustTarget: '',
+    });
+    await waitFor(() => watcher.agent() && watcher.agent().context === 'ctx', 'return to room');
+    assert.equal(watcher.state.missingTarget, null);
+    assert.equal(watcher.state.seenGrants, 3);
+  } finally {
+    await watcher.stop();
+  }
   assert.equal(watcher.agent(), null);
-  assert.equal(watcher.state.seenGrants, 3);
 });
 
-test('the watcher refreshes a closed target tab immediately after a dispatch error', async () => {
+test('the watcher closes the agent instead of falling back to the room tab when a target closes mid-dispatch', async () => {
   const roomUrl = 'http://127.0.0.1:8787/?room=r1&peer=host';
   let contexts = [
     { context: 'ctx', url: roomUrl },
@@ -515,22 +533,27 @@ test('the watcher refreshes a closed target tab immediately after a dispatch err
     },
   };
   const watcher = watchTrust({ bidi, context: 'ctx', token: 't', intervalMs: 15 });
-  await waitFor(() => watcher.agent() && watcher.agent().context === 'form', 'the target agent');
-  const formAgent = watcher.agent();
+  try {
+    await waitFor(() => watcher.agent() && watcher.agent().context === 'form', 'the target agent');
+    const formAgent = watcher.agent();
 
-  // Target tab closes; an action fails with 502 and triggers immediate re-resolution
-  // without waiting for the 10 s TARGET_REFRESH_MS timer.
-  contexts = [{ context: 'ctx', url: roomUrl }];
-  const failed = await fetch(`${formAgent.url}/action`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer t' },
-    body: JSON.stringify({ records: [{ kind: 'key', key: 'a' }] }),
-  });
-  assert.equal(failed.status, 502);
+    // Target tab closes; an action fails with 502 and triggers immediate re-resolution
+    // without waiting for TARGET_REFRESH_MS, stopping the agent instead of typing into the room tab.
+    contexts = [{ context: 'ctx', url: roomUrl }];
+    const failed = await fetch(`${formAgent.url}/action`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer t' },
+      body: JSON.stringify({ records: [{ kind: 'key', key: 'a' }] }),
+    });
+    assert.equal(failed.status, 502);
 
-  await waitFor(() => watcher.agent() && watcher.agent().context === 'ctx', 'fallback to room');
-  assert.equal(watcher.state.missingTarget, 'http://127.0.0.1:8787/form.html');
-  await watcher.stop();
+    await waitFor(() => watcher.agent() === null, 'agent closed on missing target');
+    assert.equal(formAgent.isActive(), false);
+    assert.equal(watcher.state.targetContext, null);
+    assert.equal(watcher.state.missingTarget, 'http://127.0.0.1:8787/form.html');
+  } finally {
+    await watcher.stop();
+  }
 });
 
 test('a granted peer is never this tab', () => {
@@ -545,4 +568,218 @@ test('a granted peer is never this tab', () => {
     ['guest']
   );
   assert.deepEqual(grantedPeers(null), []);
+});
+
+test('watchTrust binds a dedicated loopback agentPort only while granted (zero-listener lockdown)', async () => {
+  // Reserve a free ephemeral loopback port without touching protected ports.
+  const http = await import('node:http');
+  const dedicatedPort = await new Promise((resolve) => {
+    const probe = http.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const p = probe.address().port;
+      probe.close(() => resolve(p));
+    });
+  });
+
+  let shown = published([{ id: 'peer', granted: false, self: false }]);
+  const bidi = fakeBidi();
+  bidi.cmd = async (method) => (method === 'script.evaluate' ? shown : {});
+  const watcher = watchTrust({
+    bidi,
+    context: 'ctx',
+    token: 'secret-port-tok',
+    agentPort: dedicatedPort,
+    intervalMs: 10,
+  });
+  try {
+    await waitFor(() => watcher.state.checks >= 2, 'ungranted checks');
+    assert.equal(watcher.agent(), null);
+    await assert.rejects(() => fetch(`http://127.0.0.1:${dedicatedPort}/health`));
+
+    // Grant opens the exact configured agentPort.
+    shown = published([{ id: 'peer', granted: true, self: false }]);
+    await waitFor(() => watcher.agent(), 'agent bound');
+    assert.equal(watcher.agent().port, dedicatedPort);
+    const ok = await fetch(`http://127.0.0.1:${dedicatedPort}/action`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer secret-port-tok' },
+      body: JSON.stringify({ records: [{ kind: 'key', key: 'k' }] }),
+    });
+    assert.equal(ok.status, 200);
+
+    // Revoking closes the listener on dedicatedPort immediately.
+    shown = published([{ id: 'peer', granted: false, self: false }]);
+    await waitFor(() => watcher.agent() === null, 'agent closed');
+    await assert.rejects(() => fetch(`http://127.0.0.1:${dedicatedPort}/health`));
+  } finally {
+    await watcher.stop();
+  }
+});
+
+test('watchTrust auto-renews the agent before TTL expires while granted', async () => {
+  const shown = published([{ id: 'peer', granted: true, self: false }]);
+  const bidi = fakeBidi();
+  bidi.cmd = async (method) => (method === 'script.evaluate' ? shown : {});
+  const watcher = watchTrust({
+    bidi,
+    context: 'ctx',
+    token: 'renew-tok',
+    ttlMs: 120,
+    intervalMs: 15,
+  });
+  try {
+    await waitFor(() => watcher.agent(), 'initial agent');
+    const firstExpiry = watcher.agent().expiresAt;
+
+    // Wait past the original 120 ms TTL; watcher must renew in-place before expiry.
+    await sleep(170);
+    assert.ok(watcher.state.renewals >= 1, 'expected at least one TTL renewal');
+    assert.ok(watcher.agent().expiresAt > firstExpiry, 'expiresAt advanced');
+
+    const res = await fetch(`${watcher.agent().url}/action`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer renew-tok' },
+      body: JSON.stringify({ records: [{ kind: 'key', key: 'a' }] }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    await watcher.stop();
+  }
+});
+
+test('createTrustAgent re-checks active inside the record loop and halts on mid-batch revocation', async () => {
+  let agent = null;
+  let dispatched = 0;
+  const bidi = {
+    async cmd(method) {
+      if (method === 'input.performActions') {
+        dispatched += 1;
+        if (dispatched === 1) {
+          // Revoke immediately after the first record applies; remaining records must not run.
+          await agent.revoke();
+        }
+      }
+      return {};
+    },
+  };
+  agent = await createTrustAgent({
+    bidi,
+    context: 'ctx',
+    token: 'mid-tok',
+    grant: { peerId: 'peer', active: true },
+  });
+
+  await fetch(`${agent.url}/action`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer mid-tok' },
+    body: JSON.stringify({
+      records: [
+        { kind: 'key', key: 'a' },
+        { kind: 'key', key: 'b' },
+        { kind: 'key', key: 'c' },
+      ],
+    }),
+  }).catch(() => {});
+
+  assert.equal(dispatched, 1, 'only record 1 ran before mid-batch revocation halted the loop');
+  assert.equal(agent.stats.reasons.revoked, 1);
+});
+
+test('trustedQueue re-checks grants at dispatch, blocks ungranted FREE_KINDS, and never falls back on 403 pointer-lock', async () => {
+  const origin = 'http://127.0.0.1:18787';
+  let syntheticDispatches = 0;
+  const targetEl = {
+    tagName: 'INPUT',
+    type: 'text',
+    value: '',
+    focus() {},
+    dispatchEvent() {
+      syntheticDispatches += 1;
+      return true;
+    },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 30 }),
+  };
+  const doc = {
+    location: { href: `${origin}/form.html`, origin },
+    querySelectorAll: () => [targetEl],
+    activeElement: targetEl,
+    defaultView: {},
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  let releaseFirst = () => {};
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const trustedCalls = [];
+  let mode = 'gate';
+
+  const client = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    document: doc,
+    overlay: false,
+    now: () => 1000,
+    input: {
+      capture: true,
+      tabId: 'host',
+      origin,
+      trusted: async (records) => {
+        trustedCalls.push(records);
+        if (mode === 'gate' && trustedCalls.length === 1) {
+          await firstGate;
+          return { ok: true, applied: records.length };
+        }
+        if (mode === 'pointer-lock') {
+          return { ok: false, status: 403, allow: false, reason: 'pointer-lock-active' };
+        }
+        return { ok: true, applied: records.length };
+      },
+    },
+  });
+
+  // 1. Ungranted FREE_KINDS (move) must NEVER reach input.trusted.
+  client.receive(
+    encode({
+      type: 'input',
+      peerId: 'ungranted-peer',
+      seq: 1,
+      records: [{ kind: 'move', point: { x: 10, y: 10 } }],
+    }),
+    1000
+  );
+  await sleep(10);
+  assert.equal(trustedCalls.length, 0, 'ungranted move never reaches input.trusted');
+  assert.equal(client.publish().inputReasons.grant, 1);
+
+  // 2. Grant peer-a, enqueue 2 batches, then revoke peer-a while batch 1 is in flight.
+  client.setGrant('peer-a', true);
+  client.receive(
+    encode({ type: 'input', peerId: 'peer-a', seq: 1, records: [{ kind: 'key', key: 'a' }] }),
+    1001
+  );
+  client.receive(
+    encode({ type: 'input', peerId: 'peer-a', seq: 2, records: [{ kind: 'key', key: 'b' }] }),
+    1002
+  );
+  await sleep(5);
+  assert.equal(trustedCalls.length, 1);
+  client.setGrant('peer-a', false);
+  releaseFirst();
+  await sleep(20);
+  assert.equal(trustedCalls.length, 1, 'queued batch 2 was dropped after revocation before reaching input.trusted');
+  assert.equal(client.publish().inputReasons.grant, 2);
+
+  // 3. Explicit 403 pointer-lock refusal must NEVER fall back to synthetic replay().
+  client.setGrant('peer-a', true);
+  mode = 'pointer-lock';
+  client.receive(
+    encode({ type: 'input', peerId: 'peer-a', seq: 3, records: [{ kind: 'key', key: 'c' }] }),
+    1003
+  );
+  await sleep(20);
+  assert.equal(trustedCalls.length, 2);
+  assert.equal(syntheticDispatches, 0, 'no synthetic DOM replay on 403 pointer-lock refusal');
+  assert.equal(client.publish().inputReasons['pointer-lock-active'], 1);
 });

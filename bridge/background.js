@@ -490,6 +490,19 @@ async function reconcileClosedAnnounced(all) {
   }
 }
 
+// When a peer loses control, withdraw every tab it published immediately so
+// its offers do not linger in Live Tabs until closed.
+async function withdrawPublishedTabs() {
+  await restoreBooks();
+  for (const [raw] of [...announced]) {
+    const id = Number(raw);
+    if (remoteOrigins.has(id)) continue;
+    publishedPlaying.delete(String(id));
+    await forgetAnnounced(id);
+    await announceClose(id);
+  }
+}
+
 async function sweepTabs() {
   let all;
   try {
@@ -650,14 +663,32 @@ async function handle(message, sender) {
         await save({ roomTabId: from, roomRole });
         // The room just started on this browser. Tabs that were open before it
         // have no navigation left to announce them, so they are offered here.
+        if (roomRole === 'host') {
+          loadPrefs()
+            .then(() => (prefs.granted ? savePrefs({ granted: false }) : null))
+            .catch(() => {});
+        }
         if (roomRole === 'host') sweepTabs().catch(() => {});
         else {
-          restoreBooks()
-            .then(() => {
-              if (!announced.size) return;
-              return api.tabs.query({}).then((all) => reconcileClosedAnnounced(all));
-            })
-            .catch(() => {});
+          await loadPrefs();
+          const wasGranted = prefs.granted === true;
+          // A room hello reconciles the live grant flag (defaulting to false
+          // when omitted) so stale granted: true in storage never survives a
+          // reload or fresh room join.
+          const nextGranted = Boolean(message.granted);
+          if (prefs.granted !== nextGranted) {
+            await savePrefs({ granted: nextGranted });
+          }
+          if (wasGranted && !nextGranted) {
+            await withdrawPublishedTabs().catch(() => {});
+          } else {
+            restoreBooks()
+              .then(() => {
+                if (!announced.size) return;
+                return api.tabs.query({}).then((all) => reconcileClosedAnnounced(all));
+              })
+              .catch(() => {});
+          }
         }
       }
     }
@@ -702,6 +733,13 @@ async function handle(message, sender) {
       // Control just arrived, so the tabs this person already had become
       // offers too, without waiting for each one to navigate.
       if (!before && prefs.granted) sweepTabs().catch(() => {});
+      if (before && !prefs.granted) {
+        const seen = await state();
+        const currentRole = roomRole || seen.roomRole || null;
+        if (currentRole !== 'host') {
+          await withdrawPublishedTabs().catch(() => {});
+        }
+      }
     }
     await save({
       lastRoomStatus: {

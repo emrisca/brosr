@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { openPanelPayload, sealPanelPayload } from '../../core/panel.mjs';
 import { decode, encode } from '../../core/protocol.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,16 +35,23 @@ class RefusingSocket extends EventTarget {
 
   send(frame) {
     const message = decode(String(frame));
+    assert.deepEqual(Object.keys(message.data), ['sealed']);
+    const opened = openPanelPayload('host-token', message.data, { room: 'room-1' });
+    assert.equal(opened.ok, true);
     const answer = encode({
       type: 'app',
       peerId: 'host',
       name: 'brosr-panel',
-      data: {
-        requestId: message.data.requestId,
-        ok: false,
-        reason: 'not-in-room',
-        error: 'That person is no longer in the room.',
-      },
+      data: sealPanelPayload(
+        'host-token',
+        {
+          requestId: opened.payload.requestId,
+          ok: false,
+          reason: 'not-in-room',
+          error: 'That person is no longer in the room.',
+        },
+        { room: 'room-1' }
+      ),
     });
     queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: answer })));
   }

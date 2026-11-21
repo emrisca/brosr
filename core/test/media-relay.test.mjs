@@ -688,3 +688,116 @@ test('a tab that just joined seeks to the room instead of nudging', () => {
   assert.equal(next.action, 'tick');
   assert.ok(video.playbackRate < 1, 'a tab that is ahead slows down instead of seeking');
 });
+
+test('room-applied rate nudges and resets set rateChanged so echo suppression hides them', () => {
+  const video = fakeVideo({ currentTime: 100, paused: false, playbackRate: 1 });
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: fakeDoc(video, cleanRoot),
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  const baseFrame = { key: ytKey, position: 100, playing: true, rate: 1, at: now };
+  const seed = sync.handle(baseFrame);
+  assert.equal(seed.rateChanged, false);
+  const previous = { key: ytKey, position: 100, playing: true, rate: 1, at: now };
+
+  // Routine tick with no rate change opens no rate echo window.
+  now = 10250;
+  video.currentTime = 100.25;
+  const steady = sync.handle({ ...baseFrame, position: 100.25, at: now });
+  assert.equal(steady.action, 'tick');
+  assert.equal(steady.rateChanged, false);
+  assert.equal(remoteMediaEcho(steady, previous, { ...baseFrame, at: now }, now), null);
+
+  // Behind by 0.5s triggers a 1.05x nudge -> rateChanged: true -> suppressed as 'rate' echo.
+  now = 10500;
+  video.currentTime = 100.0;
+  const nudged = sync.handle({ ...baseFrame, position: 100.5, at: now });
+  assert.equal(nudged.action, 'tick');
+  assert.equal(nudged.rateChanged, true);
+  assert.ok(Math.abs(video.playbackRate - 1.05) < 1e-9);
+  const nudgeEcho = remoteMediaEcho(nudged, previous, { ...baseFrame, at: now }, now);
+  assert.deepEqual(nudgeEcho.actions, ['rate']);
+  assert.equal(mediaEchoMatches(nudgeEcho, 'rate', now + 50), true);
+  assert.equal(mediaEchoMatches(nudgeEcho, 'pause', now + 50), false);
+
+  // Subsequent tick while already at 1.05x does NOT change the rate again -> rateChanged: false.
+  now = 10750;
+  video.currentTime = 100.3;
+  const holdNudge = sync.handle({ ...baseFrame, position: 100.75, at: now });
+  assert.equal(holdNudge.rateChanged, false);
+  assert.equal(remoteMediaEcho(holdNudge, previous, { ...baseFrame, at: now }, now), null);
+
+  // Catching back up resets 1.05x -> 1.0x -> rateChanged: true -> reset also suppressed as echo.
+  now = 11000;
+  video.currentTime = 101.0;
+  const reset = sync.handle({ ...baseFrame, position: 101.0, at: now });
+  assert.equal(reset.action, 'tick');
+  assert.equal(reset.rateChanged, true);
+  assert.equal(video.playbackRate, 1);
+  const resetEcho = remoteMediaEcho(reset, previous, { ...baseFrame, at: now }, now);
+  assert.deepEqual(resetEcho.actions, ['rate']);
+  assert.equal(mediaEchoMatches(resetEcho, 'rate', now + 50), true);
+
+  // A seek that also clears an active nudge suppresses both 'seek' and 'rate' echoes.
+  now = 11250;
+  video.currentTime = 100.7;
+  sync.handle({ ...baseFrame, position: 101.25, at: now });
+  assert.ok(Math.abs(video.playbackRate - 1.05) < 1e-9);
+  now = 12500;
+  const seekReset = sync.handle({ ...baseFrame, position: 180, at: now });
+  assert.equal(seekReset.action, 'seek');
+  assert.equal(seekReset.rateChanged, true);
+  assert.equal(video.playbackRate, 1);
+  const seekEcho = remoteMediaEcho(seekReset, previous, { ...baseFrame, position: 180, at: now }, now);
+  assert.deepEqual(seekEcho.actions, ['seek', 'rate']);
+  assert.equal(mediaEchoMatches(seekEcho, 'seek', now + 50), true);
+  assert.equal(mediaEchoMatches(seekEcho, 'rate', now + 50), true);
+});
+
+test('a genuine user ratechange reports video.playbackRate while ticks keep reportedRate', () => {
+  const video = fakeVideo({ currentTime: 100, paused: false, playbackRate: 1 });
+  const doc = fakeDoc(video, cleanRoot);
+  let now = 10000;
+  const sync = new RemoteMediaSync({
+    document: doc,
+    href: ytHref,
+    hostname: ytHost,
+    now: () => now,
+  });
+
+  // Prime at roomRate 1.0 and trigger a 1.05x nudge.
+  const frame = { key: ytKey, position: 100, playing: true, rate: 1, at: now };
+  sync.handle(frame);
+  now = 10250;
+  video.currentTime = 99.75;
+  const nudged = sync.handle({ ...frame, position: 100.25, at: now });
+  assert.equal(nudged.rateChanged, true);
+  assert.ok(Math.abs(video.playbackRate - 1.05) < 1e-9);
+
+  // Routine ticks and non-rate user actions still report sync.reportedRate() (1.0), never 1.05.
+  const tickState = mediaStateFromDocument(doc, ytHref, ytHost, {
+    rate: false === 'rate' ? null : sync.reportedRate(),
+  });
+  assert.equal(tickState.rate, 1);
+  const pauseState = mediaStateFromDocument(doc, ytHref, ytHost, {
+    rate: 'pause' === 'rate' ? null : sync.reportedRate(),
+  });
+  assert.equal(pauseState.rate, 1);
+
+  // Once the echo window has elapsed and the user changes speed to 1.5x in the UI,
+  // a genuine 'rate' action passes rate: null so video.playbackRate (1.5) is emitted
+  // instead of being clobbered back to stale roomRate (1.0).
+  const echo = remoteMediaEcho(nudged, frame, { ...frame, position: 100.25, at: now }, now);
+  now += MEDIA_ECHO_MS + 100;
+  assert.equal(mediaEchoMatches(echo, 'rate', now), false);
+  video.playbackRate = 1.5;
+  assert.equal(sync.reportedRate(), 1, 'roomRate has not updated yet before the host applies it');
+  const userRateState = mediaStateFromDocument(doc, ytHref, ytHost, {
+    rate: 'rate' === 'rate' ? null : sync.reportedRate(),
+  });
+  assert.equal(userRateState.rate, 1.5);
+});

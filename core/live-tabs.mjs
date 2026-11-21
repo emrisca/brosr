@@ -39,20 +39,61 @@ export function sharedTab(data, { from = '', hostId = null } = {}) {
   };
 }
 
+// Guardrail #5: every policy returns allow plus a named reason. A TAB_APP
+// open/media/close frame is accepted only from the room host or a currently
+// granted peer, and cannot overwrite, update, or close another owner's row.
+export function tabActionDecision({
+  action,
+  key,
+  from = '',
+  hostId = null,
+  granted = false,
+  list = [],
+} = {}) {
+  const sender = String(from || '');
+  if (!sender) return { allow: false, reason: 'no-sender' };
+  if (action !== 'open' && action !== 'media' && action !== 'close') {
+    return { allow: false, reason: 'bad-action' };
+  }
+  const id = key === undefined || key === null ? '' : String(key);
+  if (!id) return { allow: false, reason: 'no-key' };
+  const isHost = Boolean(hostId && sender === String(hostId));
+  if (!isHost && !granted) return { allow: false, reason: 'no-control' };
+  const current = Array.isArray(list) ? list : [];
+  const existing = current.find((entry) => entry && entry.key === id);
+  if (existing && existing.ownerId && existing.ownerId !== sender) {
+    return { allow: false, reason: 'not-owner' };
+  }
+  if ((action === 'media' || action === 'close') && !existing) {
+    return { allow: false, reason: 'no-offer' };
+  }
+  return { allow: true, reason: 'ok' };
+}
+
 // One row per key. The newest offer leads the list, and an older copy of the
-// same tab is replaced rather than repeated.
+// same tab is replaced rather than repeated. An existing row owned by another
+// peer is never overwritten.
 export function rememberSharedTab(list, tab) {
   const current = Array.isArray(list) ? list : [];
   if (!tab || !tab.key) return current;
+  const existing = current.find((entry) => entry && entry.key === tab.key);
+  if (existing && existing.ownerId && existing.ownerId !== String(tab.ownerId || '')) {
+    return current;
+  }
   const next = [tab, ...current.filter((entry) => entry && entry.key !== tab.key)];
   return next.slice(0, MAX_SHARED_TABS);
 }
 
-export function forgetSharedTab(list, key) {
+export function forgetSharedTab(list, key, { ownerId = null } = {}) {
   const id = String(key || '');
   const current = Array.isArray(list) ? list : [];
   if (!id) return current;
-  return current.filter((entry) => entry && entry.key !== id);
+  const owner = ownerId === null || ownerId === undefined ? '' : String(ownerId);
+  return current.filter((entry) => {
+    if (!entry || entry.key !== id) return true;
+    if (owner && entry.ownerId && entry.ownerId !== owner) return true;
+    return false;
+  });
 }
 
 // A publisher says a tab started or stopped playing. The row shows that state
@@ -67,13 +108,16 @@ export function tabMedia(data) {
 
 // The newest playback state for one offer. A key nobody published is ignored,
 // so a stray frame cannot add a row to the list.
-export function noteSharedMedia(list, media) {
+export function noteSharedMedia(list, media, { ownerId = null } = {}) {
   const current = Array.isArray(list) ? list : [];
   const id = String((media && media.key) || '');
   if (!id) return current;
-  return current.map((entry) =>
-    entry && entry.key === id ? { ...entry, playing: media.playing === true } : entry
-  );
+  const owner = ownerId === null || ownerId === undefined ? '' : String(ownerId);
+  return current.map((entry) => {
+    if (!entry || entry.key !== id) return entry;
+    if (owner && entry.ownerId && entry.ownerId !== owner) return entry;
+    return { ...entry, playing: media.playing === true };
+  });
 }
 
 // The landing page draws one group per person with control. The host sorts

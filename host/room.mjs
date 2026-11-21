@@ -102,6 +102,21 @@ export async function freePort(start = 8787, host = '127.0.0.1') {
   throw new Error(`no free port between ${start} and ${start + 39}`);
 }
 
+// The browser debugger and the loopback trusted-input agent each need their
+// own loopback port so #tp= points at the agent rather than CDP/BiDi.
+export async function allocateTrustPorts({
+  debugStart = 9330,
+  agentStart = 9400,
+  host = '127.0.0.1',
+} = {}) {
+  const debugPort = await freePort(debugStart, host);
+  let agentPort = await freePort(agentStart, host);
+  if (agentPort === debugPort) {
+    agentPort = await freePort(agentPort + 1, host);
+  }
+  return { debugPort, agentPort };
+}
+
 function relayReady(port, host = '127.0.0.1') {
   return new Promise((resolve) => {
     const request = http.get(
@@ -337,8 +352,9 @@ export function roomUrl({
   // relay or a request line. The token opens the loopback agent and nothing
   // else, and only while a peer holds a grant.
   const fragment = [`k=${key}`];
-  if (trust && trust.port && trust.token) {
-    fragment.push(`t=${trust.token}`, `tp=${trust.port}`);
+  const trustPort = trust && (trust.agentPort || trust.port);
+  if (trust && trustPort && trust.token) {
+    fragment.push(`t=${trust.token}`, `tp=${trustPort}`);
   }
   // The docs token lets the host tab read and write the canvas and note
   // library. A guest invite never carries it, so a peer only sees the room copy.
@@ -498,19 +514,31 @@ function bridgeVersion() {
 // installs the add-ons. So a helper process owns both: it starts the window,
 // installs each folder, reports the ids and stays alive beside the window. Every
 // other build takes the flags on the command line and is spawned here.
+export function trustHelperArgs(room, trust, family = 'gecko') {
+  if (!trust || !trust.token) return null;
+  const debugPort = Number(trust.debugPort || trust.port) || 0;
+  if (!debugPort) return null;
+  const args = [
+    TRUST,
+    `--debug-port=${debugPort}`,
+    `--room=${room}`,
+    `--token=${trust.token}`,
+    `--family=${family}`,
+  ];
+  const agentPort = Number(trust.agentPort || 0) || 0;
+  if (agentPort > 0) args.push(`--agent-port=${agentPort}`);
+  return args;
+}
+
 function startTrustHelper(room, trust, family) {
-  if (!trust || !trust.port || !trust.token) return null;
-  const helper = spawn(
-    process.execPath,
-    [
-      TRUST,
-      `--debug-port=${trust.port}`,
-      `--room=${room}`,
-      `--token=${trust.token}`,
-      `--family=${family}`,
-    ],
-    { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true }
-  );
+  const args = trustHelperArgs(room, trust, family);
+  if (!args) return null;
+  const helper = spawn(process.execPath, args, {
+    cwd: ROOT,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
   helper.unref();
   return helper.pid;
 }
@@ -614,12 +642,16 @@ export async function start(options = {}) {
   const docsToken = crypto.randomBytes(24).toString('base64url');
   // Trusted input follows the browser family. Gecko opens a BiDi session and
   // Chromium a CDP one, and the helper picks its client from the family.
-  const trust = options.trusted
-    ? {
-        token: crypto.randomBytes(32).toString('base64url'),
-        port: await freePort(9330, '127.0.0.1'),
-      }
-    : null;
+  let trust = null;
+  if (options.trusted) {
+    const { debugPort, agentPort } = await allocateTrustPorts();
+    trust = {
+      token: crypto.randomBytes(32).toString('base64url'),
+      debugPort,
+      agentPort,
+      port: agentPort,
+    };
+  }
 
   // The relay does not read the profile, so it boots while the profile is
   // written. A cold first run then costs the larger of the two legs, not both.
@@ -665,7 +697,7 @@ export async function start(options = {}) {
     url,
     headless: Boolean(options.headless),
     extension: prepared.extensionDirs || prepared.extension || null,
-    remotePort: trust ? trust.port : null,
+    remotePort: trust ? trust.debugPort || trust.port : null,
   });
   const launched = await launch(browser, args, prepared.extensionDirs || []);
   const launchedAt = Date.now();
@@ -699,10 +731,12 @@ export async function start(options = {}) {
     // status command reports the port and the helper without the token.
     trust: trust
       ? {
-          port: trust.port,
+          port: trust.agentPort,
+          debugPort: trust.debugPort,
+          agentPort: trust.agentPort,
           token: trust.token,
           helperPid,
-          url: `http://127.0.0.1:${trust.port}`,
+          url: `http://127.0.0.1:${trust.agentPort}`,
         }
       : null,
     bridge: prepared.bridge,
@@ -853,7 +887,10 @@ export async function reopen() {
       profile: prepared.profile,
       url: run.url,
       extension: prepared.extensionDirs || prepared.extension || null,
-      remotePort: run.trust && run.trust.port ? run.trust.port : null,
+      remotePort:
+        run.trust && (run.trust.debugPort || run.trust.port)
+          ? run.trust.debugPort || run.trust.port
+          : null,
     });
     const launched = await launch(browser, args, prepared.extensionDirs || []);
     const helperPid =

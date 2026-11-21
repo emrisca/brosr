@@ -96,7 +96,7 @@ test('a film tab reports the room rate instead of its own nudge', () => {
     source.indexOf('function reportMedia('),
     source.indexOf('setInterval(reportMedia')
   );
-  assert.match(body, /rate: remote\.reportedRate\(\)/);
+  assert.match(body, /rate: userAction === 'rate' \? null : remote\.reportedRate\(\)/);
   assert.doesNotMatch(body, /mediaStateFromDocument\(document, pageHref\(\), location\.hostname\)/);
 });
 

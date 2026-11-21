@@ -35,7 +35,7 @@ const closed = await new Promise((resolve) => {
   });
 });
 
-const { status, relayLaunch } = await import(
+const { status, relayLaunch, allocateTrustPorts, roomUrl, trustHelperArgs } = await import(
   pathToFileURL(path.join(here, '..', 'room.mjs')).href
 );
 
@@ -237,4 +237,40 @@ test('relayLaunch priority: explicit RELAY_BIN > auto-discovered staged binary >
     else process.env.RELAY_BIN = previousRelayBin;
     await rm(bundleRoot, { recursive: true, force: true });
   }
+});
+
+test('trust agent port wiring separates agentPort from debugPort in roomUrl and helper args', async () => {
+  const { debugPort, agentPort } = await allocateTrustPorts({
+    debugStart: 19330,
+    agentStart: 19400,
+  });
+  assert.notEqual(debugPort, agentPort);
+  assert.ok(debugPort >= 19330 && debugPort < 19370);
+  assert.ok(agentPort >= 19400 && agentPort < 19440);
+
+  const trust = { debugPort, agentPort, port: agentPort, token: 'tok-123' };
+  const url = new URL(
+    roomUrl({
+      host: '127.0.0.1',
+      port: 18787,
+      room: 'room-trust',
+      key: 'k1',
+      name: 'Host',
+      trust,
+    })
+  );
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  assert.equal(fragment.get('tp'), String(agentPort));
+  assert.notEqual(fragment.get('tp'), String(debugPort));
+  assert.equal(fragment.get('t'), 'tok-123');
+
+  const args = trustHelperArgs('room-trust', trust, 'chromium');
+  assert.ok(args.includes(`--debug-port=${debugPort}`));
+  assert.ok(args.includes(`--agent-port=${agentPort}`));
+  assert.ok(args.includes('--family=chromium'));
+
+  // Backward compatibility when agentPort is omitted (defaults to 0 in host/trust.mjs).
+  const legacyArgs = trustHelperArgs('room-trust', { port: debugPort, token: 'tok-123' }, 'gecko');
+  assert.ok(legacyArgs.includes(`--debug-port=${debugPort}`));
+  assert.equal(legacyArgs.some((a) => a.startsWith('--agent-port=')), false);
 });

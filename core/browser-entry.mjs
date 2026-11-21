@@ -12,9 +12,10 @@ import {
   noteSharedMedia,
   rememberSharedTab,
   sharedTab,
+  tabActionDecision,
   tabMedia,
 } from './live-tabs.mjs';
-import { PANEL_APP } from './panel.mjs';
+import { PANEL_APP, openPanelPayload, sealPanelPayload } from './panel.mjs';
 import { YouTubeAdapter, playerKey } from './youtube.mjs';
 import {
   RELAY_TICK_MS,
@@ -573,7 +574,7 @@ async function startPageMedia() {
     // names the rate the room asked for, or each hop divides that correction
     // again and the film sinks into slow motion for the rest of the session.
     const state = mediaStateFromDocument(document, pageHref(), location.hostname, {
-      rate: remote.reportedRate(),
+      rate: userAction === 'rate' ? null : remote.reportedRate(),
     });
     if (!state) return;
     // The position belongs to this instant, so the report names it. The room
@@ -963,9 +964,11 @@ export async function start() {
       // The host app's control panel uses a private app channel. A guest has no
       // token, so the same message from a guest is ignored here.
       if (message.name === PANEL_APP) {
-        const data = message.data && typeof message.data === 'object' ? message.data : {};
-        if (!panelToken || data.token !== panelToken) return;
-        handlePanel(data).catch(() => {});
+        if (!panelToken) return;
+        const opened = openPanelPayload(panelToken, message.data, { room });
+        if (!opened.ok) return;
+        if (typeof opened.payload.action !== 'string') return;
+        handlePanel(opened.payload).catch(() => {});
         return;
       }
       // A viewer report is panel data, not page data. It stays in this tab.
@@ -985,10 +988,21 @@ export async function start() {
         // it, and copying an announcement back to its own sender opens the film
         // again on the machine that asked for it.
         if (message.from === peerId) return;
+        const activeHost = client.hostId ? client.hostId() : hostId;
+        const senderGranted = client.hasGrant ? client.hasGrant(message.from) : false;
         // A publisher reports that a tab started or stopped playing. The row
         // updates in place, and no tab opens from this frame.
         const media = tabMedia(message.data);
         if (media) {
+          const check = tabActionDecision({
+            action: 'media',
+            key: media.key,
+            from: message.from,
+            hostId: activeHost,
+            granted: senderGranted,
+            list: sharedTabs,
+          });
+          if (!check.allow) return;
           sharedTabs = noteSharedMedia(sharedTabs, media);
           publishSharedTabs();
           return;
@@ -997,7 +1011,16 @@ export async function start() {
         // It never closes a tab the publisher did not share.
         const close = tabClose(message.data);
         if (close) {
-          sharedTabs = forgetSharedTab(sharedTabs, close.key);
+          const check = tabActionDecision({
+            action: 'close',
+            key: close.key,
+            from: message.from,
+            hostId: activeHost,
+            granted: senderGranted,
+            list: sharedTabs,
+          });
+          if (!check.allow) return;
+          sharedTabs = forgetSharedTab(sharedTabs, close.key, { ownerId: message.from });
           joinedTabs.delete(close.key);
           saveJoinedTabs();
           publishSharedTabs();
@@ -1008,8 +1031,17 @@ export async function start() {
           }
           return;
         }
-        const offer = sharedTab(message.data, { from: message.from, hostId });
+        const offer = sharedTab(message.data, { from: message.from, hostId: activeHost });
         if (!offer) return;
+        const check = tabActionDecision({
+          action: 'open',
+          key: offer.key,
+          from: message.from,
+          hostId: activeHost,
+          granted: senderGranted,
+          list: sharedTabs,
+        });
+        if (!check.allow) return;
         sharedTabs = rememberSharedTab(sharedTabs, offer);
         publishSharedTabs();
         // A peer still opens nothing by itself. Only a key this browser already
@@ -1040,6 +1072,42 @@ export async function start() {
     // The room tab owns the socket, so it forwards each pointer to the rest of
     // this browser. Every tab draws it, because a cursor is not tied to one
     // site.
+    onControl: ({ peerId: targetPeer, allowed }) => {
+      if (allowed || !targetPeer) return;
+      const dropped = [];
+      sharedTabs = sharedTabs.filter((entry) => {
+        if (!entry || entry.ownerId !== targetPeer) return true;
+        dropped.push(entry.key);
+        return false;
+      });
+      if (dropped.length) {
+        for (const key of dropped) {
+          const wasJoined = joinedTabs.delete(key);
+          if (wasJoined && api && api.runtime && api.runtime.sendMessage) {
+            api.runtime
+              .sendMessage({ type: 'brosr:tab-close-local', key })
+              .catch(() => {});
+          }
+        }
+        saveJoinedTabs();
+        publishSharedTabs();
+      }
+      if (targetPeer === peerId && api && api.runtime && api.runtime.sendMessage) {
+        const seen = status();
+        api.runtime
+          .sendMessage({
+            type: 'brosr:room-status',
+            room,
+            peerId,
+            role,
+            source,
+            panelUrl,
+            granted: false,
+            data: seen,
+          })
+          .catch(() => {});
+      }
+    },
     onPresence: (position) => {
       if (!api || !api.runtime || !api.runtime.sendMessage) return;
       const at = Date.now();
@@ -1298,14 +1366,24 @@ export async function start() {
   async function handlePanel(data) {
     const requestId = String(data.requestId || '');
     const answer = (state, extra = {}) =>
-      client.sendApp(PANEL_APP, { requestId, ok: true, ...extra, state });
+      client.sendApp(
+        PANEL_APP,
+        sealPanelPayload(panelToken, { requestId, ok: true, ...extra, state }, { room })
+      );
     const refuse = (error, reason = 'command') =>
-      client.sendApp(PANEL_APP, {
-        requestId,
-        ok: false,
-        reason,
-        error: String((error && error.message) || error),
-      });
+      client.sendApp(
+        PANEL_APP,
+        sealPanelPayload(
+          panelToken,
+          {
+            requestId,
+            ok: false,
+            reason,
+            error: String((error && error.message) || error),
+          },
+          { room }
+        )
+      );
     const refusal = (message, reason) => {
       const error = new Error(message);
       error.reason = reason;
@@ -1849,6 +1927,7 @@ export async function start() {
         .sendMessage({
           type: 'brosr:room-hello',
           role,
+          granted: Boolean(client.isGranted()),
           build: bridgeBuild,
           cursor: showOwnCursor ? wireCursor(ownCursor) : null,
         })

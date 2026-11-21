@@ -1,7 +1,73 @@
+import { decodeKey, encodeKey, hkdfSha256, openFrame, sealFrame } from './seal.mjs';
+
 // The host app and the room tab share one private app channel. The token is
-// minted by the host start path and travels in the host room URL only.
+// minted by the host start path and travels in the host room URL only, and
+// derives a separate key so panel commands and replies stay opaque to room
+// peers that hold the shared room key.
 export const PANEL_APP = 'brosr-panel';
 export const PANEL_PEER = 'host-app';
+
+const PANEL_SEAL_SALT = new TextEncoder().encode('brosr-panel-seal-v1');
+const PANEL_SEAL_INFO = new TextEncoder().encode('panel payload key');
+
+function panelSealRoom(room) {
+  return `panel:${String(room || '')}`;
+}
+
+export function panelKey(token) {
+  if (typeof token !== 'string' || !token) {
+    throw new Error('panel token is required');
+  }
+  return hkdfSha256(
+    new TextEncoder().encode(token),
+    PANEL_SEAL_SALT,
+    PANEL_SEAL_INFO
+  );
+}
+
+export function sealPanelPayload(token, payload, { room = '', nonce = null } = {}) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('panel payload must be an object');
+  }
+  const key = panelKey(token);
+  const plain = new TextEncoder().encode(JSON.stringify(payload));
+  const sealed = sealFrame(key, plain, { room: panelSealRoom(room), nonce });
+  return { sealed: encodeKey(sealed) };
+}
+
+export function openPanelPayload(token, data, { room = '' } = {}) {
+  if (typeof token !== 'string' || !token) {
+    return { ok: false, payload: null, reason: 'no-token' };
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { ok: false, payload: null, reason: 'bad-envelope' };
+  }
+  if (typeof data.sealed !== 'string' || !data.sealed) {
+    return { ok: false, payload: null, reason: 'unsealed' };
+  }
+  let bytes;
+  try {
+    bytes = decodeKey(data.sealed);
+  } catch {
+    return { ok: false, payload: null, reason: 'bad-encoding' };
+  }
+  let plain;
+  try {
+    plain = openFrame(panelKey(token), bytes, { room: panelSealRoom(room) });
+  } catch {
+    return { ok: false, payload: null, reason: 'decrypt-failed' };
+  }
+  let payload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(plain));
+  } catch {
+    return { ok: false, payload: null, reason: 'bad-payload' };
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { ok: false, payload: null, reason: 'bad-payload' };
+  }
+  return { ok: true, payload, reason: 'ok' };
+}
 
 // One schema for both sides of the app-to-CLI boundary. A field that is not in
 // this table is refused, so a spelling mistake cannot become a silent no-op.

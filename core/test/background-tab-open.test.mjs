@@ -580,3 +580,79 @@ test('brosr:tab-close-local waits for remote key restore after a worker restart'
   assert.equal(reply.closed, 1);
   assert.deepEqual(bg.removedIds, [12]);
 });
+
+test('brosr:room-hello resets stale prefs.granted = false and withdraws stale published tabs', async () => {
+  const store = {
+    roomTabId: 1,
+    roomRole: 'peer',
+    announcedTabs: { '2': 'https://example.test/stale' },
+  };
+  const localStore = { granted: true };
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=guest', active: true },
+      { id: 2, url: 'https://example.test/stale', active: false },
+    ],
+    store,
+    localStore,
+  });
+
+  await ask(bg.listener, { type: 'brosr:room-hello', role: 'peer' }, { tab: { id: 1 } });
+
+  assert.equal(localStore.granted, false, 'stale granted flag reset to false on room-hello');
+  assert.equal(store.announcedTabs['2'], undefined, 'stale announced tab cleared');
+  assert.ok(
+    bg.sentMessages.some(
+      (entry) =>
+        entry.tabId === 1 &&
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        entry.message.action === 'close' &&
+        entry.message.key === '2'
+    ),
+    'stale published tab withdrawn via close announcement'
+  );
+  const attempt = await ask(bg.listener, { type: 'brosr:tab-share', tabId: 2, shared: true });
+  assert.equal(attempt.ok, false);
+  assert.equal(attempt.reason, 'no-control');
+});
+
+test('revoking a peer immediately withdraws its published tabs without waiting for tab close', async () => {
+  const store = { roomTabId: 1, roomRole: 'peer' };
+  const localStore = { granted: true };
+  const bg = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=guest', active: true },
+      { id: 2, url: 'https://example.test/watch', active: false },
+    ],
+    store,
+    localStore,
+  });
+
+  const shared = await ask(bg.listener, { type: 'brosr:tab-share', tabId: 2, shared: true });
+  assert.equal(shared.ok, true);
+  assert.equal(store.announcedTabs['2'], 'https://example.test/watch');
+
+  await ask(bg.listener, {
+    type: 'brosr:room-status',
+    room: 'two',
+    peerId: 'guest',
+    role: 'peer',
+    granted: false,
+  });
+
+  // Tab 2 is still open, yet its offer is withdrawn immediately upon revocation.
+  assert.equal(localStore.granted, false);
+  assert.equal(store.announcedTabs['2'], undefined);
+  assert.ok(
+    bg.sentMessages.some(
+      (entry) =>
+        entry.tabId === 1 &&
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        entry.message.action === 'close' &&
+        entry.message.key === '2'
+    ),
+    'revocation immediately withdraws open published tab'
+  );
+});

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { formatAddress } from '../core/friends.mjs';
-import { PANEL_APP, PANEL_PEER } from '../core/panel.mjs';
+import { PANEL_APP, PANEL_PEER, openPanelPayload, sealPanelPayload } from '../core/panel.mjs';
 import { decode, encode } from '../core/protocol.mjs';
 import { openFrame, roomKey, sealFrame } from '../core/seal.mjs';
 import { readJoin, readRun, RUN_DIR } from './room.mjs';
@@ -122,7 +122,7 @@ export async function panelCommand({ action = 'status', ...params } = {}, { gues
     type: 'app',
     peerId: PANEL_PEER,
     name: PANEL_APP,
-    data: { token: record.panelToken, requestId, action, ...params },
+    data: sealPanelPayload(record.panelToken, { requestId, action, ...params }, { room: record.room }),
     roomTime: Date.now(),
   });
   const frame = key
@@ -167,8 +167,10 @@ export async function panelCommand({ action = 'status', ...params } = {}, { gues
         return;
       }
       if (message.type !== 'app' || message.name !== PANEL_APP) return;
-      const data = message.data && typeof message.data === 'object' ? message.data : {};
-      if (data.requestId !== requestId) return;
+      const opened = openPanelPayload(record.panelToken, message.data, { room: record.room });
+      if (!opened.ok) return;
+      const data = opened.payload;
+      if (data.requestId !== requestId || typeof data.ok !== 'boolean') return;
       if (data.ok === false) {
         const error = new Error(String(data.error || 'The room refused that change.'));
         if (data.reason) error.reason = String(data.reason);

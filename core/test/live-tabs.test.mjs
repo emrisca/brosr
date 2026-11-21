@@ -7,6 +7,7 @@ import {
   noteSharedMedia,
   rememberSharedTab,
   sharedTab,
+  tabActionDecision,
   tabMedia,
 } from '../live-tabs.mjs';
 
@@ -125,4 +126,84 @@ test('the list keeps a readable cap', () => {
   }
   assert.equal(list.length, MAX_SHARED_TABS);
   assert.equal(list[0].key, String(MAX_SHARED_TABS + 4));
+});
+
+test('tabActionDecision enforces host/grant auth and ownerId with structured reasons (Guardrail #5)', () => {
+  const hostOffer = sharedTab(
+    { action: 'open', url: film, key: '964436478', owner: 'Host' },
+    { from: 'host', hostId: 'host' }
+  );
+  const peerOffer = sharedTab(
+    { action: 'open', url: 'https://example.com/', key: '200', owner: 'Bob' },
+    { from: 'peer-1', hostId: 'host' }
+  );
+  const list = [hostOffer, peerOffer];
+
+  // Ungranted peer cannot open, update media, or close any tab.
+  assert.deepEqual(
+    tabActionDecision({ action: 'open', key: 'evil', from: 'adv', hostId: 'host', granted: false, list }),
+    { allow: false, reason: 'no-control' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'media', key: '964436478', from: 'adv', hostId: 'host', granted: false, list }),
+    { allow: false, reason: 'no-control' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'close', key: '964436478', from: 'adv', hostId: 'host', granted: false, list }),
+    { allow: false, reason: 'no-control' }
+  );
+
+  // Even a granted peer cannot overwrite, toggle media on, or close the host row.
+  assert.deepEqual(
+    tabActionDecision({ action: 'open', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
+    { allow: false, reason: 'not-owner' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'media', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
+    { allow: false, reason: 'not-owner' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'close', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
+    { allow: false, reason: 'not-owner' }
+  );
+
+  // Host and granted peer can manage their own entries.
+  assert.deepEqual(
+    tabActionDecision({ action: 'open', key: '964436478', from: 'host', hostId: 'host', granted: false, list }),
+    { allow: true, reason: 'ok' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'close', key: '200', from: 'peer-1', hostId: 'host', granted: true, list }),
+    { allow: true, reason: 'ok' }
+  );
+  assert.deepEqual(
+    tabActionDecision({ action: 'open', key: '201', from: 'peer-1', hostId: 'host', granted: true, list }),
+    { allow: true, reason: 'ok' }
+  );
+});
+
+test('rememberSharedTab, forgetSharedTab, and noteSharedMedia enforce ownerId', () => {
+  const hostOffer = sharedTab(
+    { action: 'open', url: film, key: '10', owner: 'Host', playing: true },
+    { from: 'host', hostId: 'host' }
+  );
+  const spoof = sharedTab(
+    { action: 'open', url: 'https://evil.example/', key: '10', owner: 'Adv' },
+    { from: 'adv', hostId: 'host' }
+  );
+  const afterOverwrite = rememberSharedTab([hostOffer], spoof);
+  assert.equal(afterOverwrite.length, 1);
+  assert.equal(afterOverwrite[0].url, film);
+  assert.equal(afterOverwrite[0].ownerId, 'host');
+
+  const afterClose = forgetSharedTab([hostOffer], '10', { ownerId: 'adv' });
+  assert.equal(afterClose.length, 1);
+  assert.equal(forgetSharedTab([hostOffer], '10', { ownerId: 'host' }).length, 0);
+
+  const afterMedia = noteSharedMedia([hostOffer], { key: '10', playing: false }, { ownerId: 'adv' });
+  assert.equal(afterMedia[0].playing, true);
+  assert.equal(
+    noteSharedMedia([hostOffer], { key: '10', playing: false }, { ownerId: 'host' })[0].playing,
+    false
+  );
 });

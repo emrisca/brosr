@@ -19,6 +19,7 @@ import { pointerLockDecision } from '../core/input.mjs';
 import { actionsForRecord } from '../core/trust.mjs';
 
 export const TRUST_TTL_MS = 5 * 60 * 1000;
+export const TRUST_RENEW_BEFORE_MS = 60 * 1000;
 // A target tab can close or navigate after the panel named it. The helper looks
 // it up again this often, and keeps the room tab when nothing matches.
 export const TARGET_REFRESH_MS = 10 * 1000;
@@ -53,6 +54,7 @@ function readBody(req, limit = MAX_BODY_BYTES) {
 }
 
 function reply(res, status, body) {
+  if (res.writableEnded || res.destroyed) return;
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -74,6 +76,7 @@ export async function createTrustAgent({
   context,
   grant,
   token: givenToken = '',
+  port: listenPort = 0,
   ttlMs = TRUST_TTL_MS,
   pointerLocked = () => false,
   onTargetError = null,
@@ -87,7 +90,9 @@ export async function createTrustAgent({
   const stats = { batches: 0, records: 0, applied: 0, skipped: 0, rejected: 0, reasons: {} };
   let active = true;
   let closedAt = null;
-  const expiresAt = Date.now() + ttlMs;
+  let expiresAt = Date.now() + ttlMs;
+  const bindPort =
+    Number.isInteger(listenPort) && listenPort >= 0 && listenPort <= 65535 ? listenPort : 0;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -165,6 +170,22 @@ export async function createTrustAgent({
     stats.batches += 1;
     stats.records += records.length;
     for (const record of records) {
+      if (!active) {
+        stats.applied += applied;
+        stats.skipped += skipped;
+        stats.rejected += 1;
+        stats.reasons.revoked = (stats.reasons.revoked || 0) + 1;
+        reply(res, 401, { ok: false, reason: 'revoked', applied });
+        return;
+      }
+      if (Date.now() > expiresAt) {
+        stats.applied += applied;
+        stats.skipped += skipped;
+        stats.rejected += 1;
+        stats.reasons.expired = (stats.reasons.expired || 0) + 1;
+        reply(res, 401, { ok: false, reason: 'expired', applied });
+        return;
+      }
       const actions = actionsForRecord(record);
       if (!actions) {
         skipped += 1;
@@ -174,6 +195,8 @@ export async function createTrustAgent({
         await bidi.cmd('input.performActions', { context, actions });
         applied += 1;
       } catch (error) {
+        stats.applied += applied;
+        stats.skipped += skipped;
         stats.rejected += 1;
         stats.reasons.bidi = (stats.reasons.bidi || 0) + 1;
         if (typeof onTargetError === 'function') onTargetError(error);
@@ -193,7 +216,7 @@ export async function createTrustAgent({
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(bindPort, '127.0.0.1', resolve);
   });
 
   const address = server.address();
@@ -209,7 +232,14 @@ export async function createTrustAgent({
     port: address.port,
     host: address.address,
     url: `http://127.0.0.1:${address.port}`,
-    expiresAt,
+    get expiresAt() {
+      return expiresAt;
+    },
+    renew(nextTtlMs = ttlMs) {
+      if (!active) return null;
+      expiresAt = Date.now() + nextTtlMs;
+      return expiresAt;
+    },
     stats,
     revoke() {
       active = false;
@@ -268,8 +298,9 @@ export async function resolveTrustTarget(bidi, target) {
       return null;
     }
   };
-  // An exact address wins, then same origin+path+query (ignoring hash), then
-  // same origin+path as fallback when room parameters change the query.
+  // An exact address wins, then same origin+path+query (ignoring only hash).
+  // Query strings stay load-bearing so closing watch?v=A never redirects
+  // actuation onto watch?v=B.
   const exact = contexts.find((item) => {
     const url = read(item);
     return url && url.href === wanted.href;
@@ -283,11 +314,7 @@ export async function resolveTrustTarget(bidi, target) {
       url.search === wanted.search
     );
   });
-  const page = contexts.find((item) => {
-    const url = read(item);
-    return url && url.origin === wanted.origin && url.pathname === wanted.pathname;
-  });
-  const hit = exact || withQuery || page;
+  const hit = exact || withQuery;
   return hit ? hit.context : null;
 }
 
@@ -298,18 +325,21 @@ export function watchTrust({
   bidi,
   context,
   token = '',
+  agentPort = 0,
   ttlMs = TRUST_TTL_MS,
   intervalMs = 500,
   log = () => {},
 } = {}) {
   if (!bidi) throw new Error('the watcher needs a BiDi session');
   if (!context) throw new Error('the watcher needs a browsing context');
+  const renewLeadMs = Math.max(1, Math.min(TRUST_RENEW_BEFORE_MS, Math.floor(ttlMs / 3)));
   const state = {
     checks: 0,
     peerId: null,
     agent: null,
     error: null,
     seenGrants: 0,
+    renewals: 0,
     targetUrl: null,
     targetContext: context,
     missingTarget: null,
@@ -359,8 +389,8 @@ export function watchTrust({
     }
     state.pointerLocked = Boolean(published && published.pointerLock);
     const granted = grantedPeers(published);
-    // The panel names the tab this grant types into. The room tab itself is
-    // the fallback, so a closed or missing target never stops the channel.
+    // The panel names the tab this grant types into. If a named target tab is
+    // closed or missing, refuse actuation instead of falling back to the room tab.
     const asked =
       granted.length && published && typeof published.trustTarget === 'string'
         ? published.trustTarget
@@ -369,19 +399,23 @@ export function watchTrust({
       targetContext = context;
       targetUrl = null;
       state.missingTarget = null;
-    } else if (asked !== targetUrl || Date.now() - resolvedAt > TARGET_REFRESH_MS) {
+    } else if (
+      asked !== targetUrl ||
+      !targetContext ||
+      Date.now() - resolvedAt > TARGET_REFRESH_MS
+    ) {
       let hit = null;
       try {
         hit = await resolveTrustTarget(bidi, asked);
       } catch (error) {
         state.error = text(error);
       }
-      const next = hit || context;
+      const next = hit || null;
       if (next !== targetContext) {
         log(
           hit
             ? `[trust] typing into ${asked} on context ${hit}`
-            : `[trust] no tab shows ${asked}, typing into the room tab`
+            : `[trust] no tab shows ${asked}, refusing actuation`
         );
       }
       targetUrl = asked;
@@ -397,13 +431,24 @@ export function watchTrust({
       await stopAgent();
       peerId = null;
       state.peerId = null;
-    } else if (!agent || granted[0] !== peerId || agent.context !== targetContext) {
+    } else if (!targetContext) {
+      if (agent) log('[trust] target tab missing, listener closed');
+      await stopAgent();
+      peerId = granted[0];
+      state.peerId = peerId;
+    } else if (
+      !agent ||
+      granted[0] !== peerId ||
+      agent.context !== targetContext ||
+      !agent.isActive()
+    ) {
       await stopAgent();
       peerId = granted[0];
       agent = await createTrustAgent({
         bidi,
         context: targetContext,
         token,
+        port: agentPort,
         ttlMs,
         grant: { peerId, active: true },
         pointerLocked: () => state.pointerLocked,
@@ -420,6 +465,18 @@ export function watchTrust({
         expiresAt: agent.expiresAt,
       };
       log(`[trust] agent for ${peerId} on ${agent.url}`);
+    } else if (Date.now() >= agent.expiresAt - renewLeadMs) {
+      const nextExpiry = agent.renew(ttlMs);
+      if (nextExpiry) {
+        state.renewals += 1;
+        state.agent = {
+          host: agent.host,
+          port: agent.port,
+          url: agent.url,
+          expiresAt: nextExpiry,
+        };
+        log(`[trust] renewed agent for ${peerId} until ${nextExpiry}`);
+      }
     }
     if (!stopped) timer = setTimeout(tick, intervalMs);
   };
@@ -475,6 +532,7 @@ async function roomContext(bidi, room, timeoutMs = 30000) {
 // when the app sends SIGTERM, and either way the listener closes first.
 export async function runTrustHelper({
   debugPort,
+  agentPort = 0,
   room,
   token,
   ttlMs = TRUST_TTL_MS,
@@ -483,7 +541,7 @@ export async function runTrustHelper({
 } = {}) {
   const bidi = await connect(debugPort, family);
   const context = await roomContext(bidi, room);
-  const watcher = watchTrust({ bidi, context, token, ttlMs, log });
+  const watcher = watchTrust({ bidi, context, token, agentPort, ttlMs, log });
   const close = async () => {
     await watcher.stop();
     bidi.close();
@@ -519,6 +577,7 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const debugPort = Number(arg('debug-port'));
+  const agentPort = Number(arg('agent-port', '0')) || 0;
   const room = arg('room');
   const token = arg('token');
   const family = arg('family', 'gecko');
@@ -528,6 +587,7 @@ if (isDirectRun()) {
   }
   runTrustHelper({
     debugPort,
+    agentPort,
     room,
     token,
     family,

@@ -247,6 +247,7 @@ export function remoteMediaEcho(result, previous, frame, at = Date.now()) {
   const actions = new Set();
   if (result.skipped === 'buffer' || result.action === 'hold') actions.add('pause');
   if (result.action === 'seek' || result.action === 'seek-retry') actions.add('seek');
+  if (result.rateChanged) actions.add('rate');
   if (result.ok && !result.skipped) {
     const changed =
       !previous ||
@@ -824,7 +825,8 @@ export class RemoteMediaSync {
       // A seek puts the playhead where the room is, so the correction that
       // was closing the old gap no longer applies. Leaving it on the element
       // runs the rest of the film at a rate nobody asked for.
-      if (setRate(video, roomRate)) {
+      const rateChanged = setRate(video, roomRate);
+      if (rateChanged) {
         this.noteRate(now, 'seek-reset', roomRate, video, drift);
       }
       this.lastSeekAt = now;
@@ -837,7 +839,13 @@ export class RemoteMediaSync {
       this.stats.applied += 1;
       this.stats.last = 'seek-retry';
       if (frame.playing && video.paused) startPlayback(video);
-      return { ok: true, action: 'seek', retry: true, drift: Math.round(drift * 1000) / 1000 };
+      return {
+        ok: true,
+        action: 'seek',
+        retry: true,
+        rateChanged,
+        drift: Math.round(drift * 1000) / 1000,
+      };
     }
     if (
       Math.abs(drift) > seekLimit &&
@@ -855,7 +863,8 @@ export class RemoteMediaSync {
         }
         this.waitingTarget = expected;
         if (now - this.waitingSince < RELAY_BUFFER_WAIT_MS) {
-          if (setRate(video, roomRate)) {
+          const rateChanged = setRate(video, roomRate);
+          if (rateChanged) {
             this.noteRate(now, 'buffer-rate', roomRate, video, drift);
           }
           // Stop the film while it waits, or it keeps moving away from the
@@ -868,7 +877,12 @@ export class RemoteMediaSync {
           this.nudging = false;
           this.stats.skips += 1;
           this.stats.last = 'buffer';
-          return { ok: true, skipped: 'buffer', drift: Math.round(drift * 1000) / 1000 };
+          return {
+            ok: true,
+            skipped: 'buffer',
+            rateChanged,
+            drift: Math.round(drift * 1000) / 1000,
+          };
         }
       }
       this.finishBufferWait(now, rangeReady ? 'ready' : 'deadline');
@@ -880,7 +894,8 @@ export class RemoteMediaSync {
       // The jump landed, so the nudge that was closing the old gap ends with
       // it. Without this the film keeps the five percent correction until the
       // next tick, and a room that jumps often adds that error every time.
-      if (setRate(video, roomRate)) {
+      const rateChanged = setRate(video, roomRate);
+      if (rateChanged) {
         this.noteRate(now, 'seek-reset', roomRate, video, drift);
       }
       this.lastSeekAt = now;
@@ -893,7 +908,12 @@ export class RemoteMediaSync {
       this.stats.applied += 1;
       this.stats.last = 'seek';
       if (frame.playing && video.paused) startPlayback(video);
-      return { ok: true, action: 'seek', drift: Math.round(drift * 1000) / 1000 };
+      return {
+        ok: true,
+        action: 'seek',
+        rateChanged,
+        drift: Math.round(drift * 1000) / 1000,
+      };
     }
 
     this.primed = true;
@@ -903,19 +923,27 @@ export class RemoteMediaSync {
       !video.seeking &&
       (absDrift > RELAY_NUDGE_SECONDS ||
         (this.nudging && absDrift > RELAY_NUDGE_STOP_SECONDS));
+    let rateChanged = false;
     if (wantNudge) {
       this.nudging = true;
       const nudge = drift < 0 ? roomRate * RELAY_NUDGE_RATE : roomRate / RELAY_NUDGE_RATE;
-      if (setRate(video, nudge)) this.noteRate(now, 'nudge', roomRate, video, drift);
+      rateChanged = setRate(video, nudge);
+      if (rateChanged) this.noteRate(now, 'nudge', roomRate, video, drift);
     } else {
       this.nudging = false;
-      if (setRate(video, roomRate)) this.noteRate(now, 'room-rate', roomRate, video, drift);
+      rateChanged = setRate(video, roomRate);
+      if (rateChanged) this.noteRate(now, 'room-rate', roomRate, video, drift);
     }
 
     // The room leaves the viewer volume alone. A shared playhead does not need
     // a shared volume, and one viewer's headphones are not another's.
     this.stats.applied += 1;
     this.stats.last = 'tick';
-    return { ok: true, action: 'tick', drift: Math.round(drift * 1000) / 1000 };
+    return {
+      ok: true,
+      action: 'tick',
+      rateChanged,
+      drift: Math.round(drift * 1000) / 1000,
+    };
   }
 }

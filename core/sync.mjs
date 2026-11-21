@@ -141,6 +141,9 @@ export function createRoomClient({
   // A room hold from a stutter. The page pauses its own player, or hands the
   // hold to the tab that holds the film.
   onHold = null,
+  // A control grant or revocation change. Used to withdraw a revoked peer's
+  // published Live Tabs immediately.
+  onControl = null,
   // The page this tab shows. Presence carries it so another tab knows where
   // the pointer is.
   pageUrl = null,
@@ -265,6 +268,7 @@ export function createRoomClient({
   let lastViewTick = -Infinity;
   let lastUrl = null;
   const grants = new GrantBook({ now });
+  const remoteGrants = new Set();
   let remoteGrant = false;
   let batcher = null;
   // Trusted batches reach the browser one at a time. The last send has to land
@@ -531,8 +535,10 @@ export function createRoomClient({
     // peer's image inside one snapshot would overflow the frame, so the roster
     // travels first and each image follows in its own frame.
     const snapshot = state.snapshot({
+      from: peerId,
       ...(clientBuild ? { build: clientBuild } : {}),
       scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
+      grantedPeers: grants.active().map((grant) => grant.peerId),
     });
     snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
     sendMessage(snapshot);
@@ -602,7 +608,22 @@ export function createRoomClient({
         notifyHold();
       }
     }
-    sendMessage({ type: 'control', peerId: peer, allowed, tabId, origin, roomTime: roomTimeOf() });
+    sendMessage({
+      type: 'control',
+      from: peerId,
+      peerId: peer,
+      allowed,
+      tabId,
+      origin,
+      roomTime: roomTimeOf(),
+    });
+    if (onControl) {
+      try {
+        onControl({ peerId: peer, allowed: Boolean(allowed), from: peerId });
+      } catch {
+        // A listener cannot break the room.
+      }
+    }
     stats.controlSent += 1;
     stats.sentControls.push({
       peerId: peer,
@@ -909,8 +930,13 @@ export function createRoomClient({
     const tabId = (input && input.tabId) || 'tab';
     const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
     const allowed = (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind });
-    const replay = () => {
-      const applied = replayInput(message.records, {
+    // Trusted actuation drives the browser's real input pipeline, so even
+    // FREE_KINDS (move/scroll) require an active grant for this peer.
+    const hasActiveGrant = () =>
+      grants.decide(message.peerId, { tabId, origin, kind: 'click' }).allow;
+    const trustedAllowed = (record) => hasActiveGrant() && allowed(record);
+    const replay = (records = message.records) => {
+      const applied = replayInput(records, {
         root: doc,
         // A peer that laid out the page differently sends a point that lands
         // elsewhere here. Drop the record and say so.
@@ -938,30 +964,64 @@ export function createRoomClient({
     // path is the fallback and not the first choice. A refusal replays, so a
     // closed agent or a stale token never swallows a click silently.
     if (input && typeof input.trusted === 'function') {
-      const sendable = message.records.filter(allowed);
+      const sendable = message.records.filter(trustedAllowed);
+      const droppedNow = message.records.length - sendable.length;
+      if (droppedNow > 0) {
+        stats.inputDropped += droppedNow;
+        stats.inputReasons.grant = (stats.inputReasons.grant || 0) + droppedNow;
+      }
       if (!sendable.length) {
-        stats.inputDropped += message.records.length;
-        stats.inputReasons.grant = (stats.inputReasons.grant || 0) + message.records.length;
         return { ok: true, applied: 0, dropped: message.records.length, trusted: true };
       }
       // Two batches used to be in flight at once, and a slow one let the next
       // overtake it, so a word arrived with its letters swapped. Each send now
       // waits for the browser to apply the batch before it.
       const dispatch = async () => {
+        // Re-check grants at dispatch time so a revocation mid-queue stops
+        // queued batches from executing.
+        const liveSendable = sendable.filter(trustedAllowed);
+        if (!liveSendable.length) {
+          stats.inputDropped += sendable.length;
+          stats.inputReasons.grant = (stats.inputReasons.grant || 0) + sendable.length;
+          return;
+        }
         try {
-          const answer = await input.trusted(sendable);
+          const answer = await input.trusted(liveSendable);
           if (!answer || !answer.ok) {
-            replay();
+            const reason = String((answer && answer.reason) || '');
+            const pointerLockRefused =
+              Boolean(answer) &&
+              (reason === 'pointer-lock-active' ||
+                reason === 'pointer-lock-local' ||
+                answer.status === 403 ||
+                reason === 'status 403');
+            if (pointerLockRefused) {
+              const key = reason || 'pointer-lock-active';
+              stats.inputDropped += liveSendable.length;
+              stats.inputReasons[key] = (stats.inputReasons[key] || 0) + liveSendable.length;
+              return;
+            }
+            if (!hasActiveGrant()) {
+              stats.inputDropped += liveSendable.length;
+              stats.inputReasons.grant = (stats.inputReasons.grant || 0) + liveSendable.length;
+              return;
+            }
+            replay(liveSendable);
             return;
           }
-          stats.inputApplied += Number(answer.applied) || sendable.length;
+          stats.inputApplied += Number(answer.applied) || liveSendable.length;
           const skipped = Number(answer.skipped) || 0;
           if (skipped) {
             stats.inputDropped += skipped;
             stats.inputReasons.kind = (stats.inputReasons.kind || 0) + skipped;
           }
         } catch {
-          replay();
+          if (!hasActiveGrant()) {
+            stats.inputDropped += liveSendable.length;
+            stats.inputReasons.grant = (stats.inputReasons.grant || 0) + liveSendable.length;
+            return;
+          }
+          replay(liveSendable);
         }
       };
       trustedQueue = trustedQueue.then(dispatch);
@@ -1573,6 +1633,7 @@ export function createRoomClient({
           if (held) {
             sendMessage({
               type: 'control',
+              from: peerId,
               peerId: message.peerId,
               allowed: true,
               tabId: held.tabId,
@@ -1584,25 +1645,64 @@ export function createRoomClient({
         }
         return { ok: true };
       }
-      case 'control':
+      case 'control': {
+        // The host is the authority. Control frames are ignored on the host,
+        // and guests only accept control changes authenticated from currentHost.
+        if (isHost()) return { ok: true, ignored: 'host' };
+        if (!message.from || message.from !== currentHost) {
+          return { ok: true, ignored: 'not-host' };
+        }
+        const allowed = Boolean(message.allowed);
         stats.controlReceived += 1;
-        stats.controls.push({ peerId: message.peerId, allowed: Boolean(message.allowed) });
+        stats.controls.push({ peerId: message.peerId, allowed });
         if (stats.controls.length > 8) stats.controls.shift();
         stats.lastControl = {
           peerId: message.peerId,
-          allowed: Boolean(message.allowed),
+          allowed,
           mine: message.peerId === peerId,
         };
+        if (allowed) remoteGrants.add(message.peerId);
+        else remoteGrants.delete(message.peerId);
         if (message.peerId === peerId) {
-          remoteGrant = Boolean(message.allowed);
+          remoteGrant = allowed;
           stats.granted = remoteGrant;
         }
+        if (onControl) {
+          try {
+            onControl({ peerId: message.peerId, allowed, from: message.from });
+          } catch {
+            // A listener cannot break the room.
+          }
+        }
         return { ok: true };
+      }
       case 'input':
         return handleInput(message);
       case 'snapshot':
+        if (isHost()) return { ok: true, ignored: 'host' };
+        if (!message.from || message.from !== currentHost) {
+          return { ok: true, ignored: 'not-host' };
+        }
         if (message.build) hostBuild = cleanBuild(message.build);
         state.applySnapshot(message);
+        if (Array.isArray(message.grantedPeers)) {
+          const previous = new Set(remoteGrants);
+          remoteGrants.clear();
+          for (const id of message.grantedPeers) {
+            if (typeof id === 'string' && id) remoteGrants.add(id);
+          }
+          if (onControl) {
+            for (const id of previous) {
+              if (!remoteGrants.has(id)) {
+                try {
+                  onControl({ peerId: id, allowed: false, from: message.from });
+                } catch {
+                  // A listener cannot break the room.
+                }
+              }
+            }
+          }
+        }
         if (message.scrollSites !== undefined) {
           allowedScrollSites =
             message.scrollSites === null ? null : cleanCursorSites(message.scrollSites) || [];
@@ -1977,7 +2077,9 @@ export function createRoomClient({
     // stopped hearing recovery reports has to expire here or it freezes the
     // room for the rest of the session.
     expireHolds(now());
-    const grantedPeers = new Set(grants.active().map((grant) => grant.peerId));
+    const grantedPeers = new Set(
+      isHost() ? grants.active().map((grant) => grant.peerId) : remoteGrants
+    );
     return {
       role: currentRole,
       peerId,
@@ -2126,6 +2228,13 @@ export function createRoomClient({
     sendMedia,
     sendHostMedia,
     isGranted: () => remoteGrant,
+    hasGrant: (id) => {
+      const target = String(id || '');
+      if (!target) return false;
+      if (isHost()) return grants.active().some((grant) => grant.peerId === target);
+      return (target === peerId && remoteGrant) || remoteGrants.has(target);
+    },
+    hostId: () => currentHost,
     tick,
     presence,
     setPointer,

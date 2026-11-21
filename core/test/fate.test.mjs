@@ -59,7 +59,7 @@ test('a granted peer stutter holds the host and an ungranted one is ignored', ()
   host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
   host.setGrant('brave', true);
   peer.receive(
-    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    encode({ type: 'control', from: 'host', peerId: 'brave', allowed: true, roomTime: local }),
     local
   );
   peer.receive(encode({ type: 'fate', peerId: 'host', enabled: true, roomTime: local }), local);

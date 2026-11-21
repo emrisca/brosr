@@ -364,7 +364,15 @@ Both Windows pages should now read two peers.
 
 ### 3. Start the two Mac peers, one minute before
 
-Two terminals on this Mac, one command each:
+Single-command launcher on this Mac (recommended; `lan-peers.mjs` owns both child processes,
+prefixes each peer's output, forwards `--probe` to every peer, and writes
+`.runtime/lanhour-mac1.json` and `.runtime/lanhour-mac2.json`):
+
+```
+node spike/lan-peers.mjs --relay=<ip> --port=8787 --room=lanhour --peers=mac1,mac2 --seconds=3660 --probe=60 --out-prefix=.runtime/lanhour
+```
+
+Or run them in two terminals on this Mac, one command each:
 
 ```
 node spike/peer.mjs --relay=<ip> --port=8787 --room=lanhour --peer=mac1 --name=Mac1 \
@@ -376,9 +384,10 @@ node spike/peer.mjs --relay=<ip> --port=8787 --room=lanhour --peer=mac2 --name=M
   --host=host --seconds=3660 --probe=60 --out=.runtime/lanhour-mac2.json
 ```
 
-Each prints `[peer] joined ws://<ip>:8787/room room=lanhour peer=mac1`. Both host pages must
-read four peers before the window starts. If a page reads three, stop and fix that first,
-because a count that is wrong at the start is not a result at the end.
+Each peer prints `[peer] joined ws://<ip>:8787/room room=lanhour peer=<id>` (prefixed with
+`[mac1]` / `[mac2]` under `lan-peers.mjs`). Both Windows pages must read four peers before the
+window starts. If a page reads three, stop and fix that first, because a count that is wrong at
+the start is not a result at the end.
 
 `--seconds=3660` gives a minute of margin so the peers do not leave before the host page does.
 `--probe=60` reads the relay table from the Mac once a minute, which is the witness beside the
@@ -391,14 +400,18 @@ row easy to line up afterwards.
 
 ### 5. Drive the room from the host page
 
-One person drives, and the marks are fixed so a later reader can compare windows:
+One person drives, and the marks are fixed so a later reader can compare windows. Commit
+`6d0b899` intentionally removed host-to-guest scroll mirroring, so the four scroll marks check
+**independent scrolling** (scrolling on the host stays local and does not yank `win2` or change
+`scroll` in the Mac journals), while presence, clock exchange, and the `00:58` media annexe
+stay synced:
 
 | At | Act |
 | --- | --- |
-| 00:05 | Scroll the host page to 0.2 |
-| 00:20 | Scroll to 0.6 |
-| 00:40 | Scroll to 0.35 |
-| 00:55 | Scroll to 0.2 |
+| 00:05 | Scroll the host page to 0.2 (verify `win2` does not move; independent scrolling) |
+| 00:20 | Scroll the host page to 0.6 (verify `win2` does not move; independent scrolling) |
+| 00:40 | Scroll the host page to 0.35 (verify `win2` does not move; independent scrolling) |
+| 00:55 | Scroll the host page to 0.2 (verify `win2` does not move; independent scrolling) |
 | 00:58 | Media annexe: open the clip on the host page, pause at 30 s, seek to 50 s |
 
 Do not do anything else on that page. A second tab on the same room makes the presence numbers
@@ -420,8 +433,9 @@ passes.
 
 ### 7. Stop at 60:00
 
-`peer.mjs` writes its journal on its own timer, on `Ctrl+C`, or on `SIGTERM`. Let it write. Then
-close the two Windows pages.
+`peer.mjs` writes its journal on its own timer, on `Ctrl+C`, or on `SIGTERM` (and
+`lan-peers.mjs` forwards `Ctrl+C` / `SIGTERM` to both peers). Let them write. Then close the
+two Windows pages.
 
 ### 8. Read the two journals
 
@@ -443,7 +457,10 @@ carries `roomSockets`, so the relay's own count sits beside the page's count.
 - Presence p95 under 80 ms on the page column, with the clock round trip beside it. If presence
   reads tens of milliseconds while the clock holds 3 ms, say so and do not call it a transit
   time, because the 13 November table made exactly that mistake.
-- Both Mac peers followed all four scroll marks.
+- Independent scrolling held across all four host scroll marks (`6d0b899` intentionally removed
+  host-to-guest scroll mirroring): scrolling on the host did not yank `win2` or change `scroll`
+  (stays `0`) in either Mac journal, while presence frames, clock exchange, and the `00:58`
+  media annexe remained synced.
 - `peerIds` names four entries with no extra entry.
 - Media annexe: pause drift 0, seek drift under 0.25 s, and no seek loop in the next minute.
 - The clock offset recorded at the start and at the end, so a step during the hour is visible.

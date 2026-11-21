@@ -46,6 +46,9 @@ export function validate(message) {
       break;
     case 'snapshot':
       if (!isNumber(message.sequence)) fail('snapshot needs a sequence');
+      if (message.from !== undefined && typeof message.from !== 'string') {
+        fail('snapshot from must be text');
+      }
       break;
     case 'nav':
       if (typeof message.url !== 'string' || !message.url) fail('nav needs a url');
@@ -110,6 +113,9 @@ export function validate(message) {
     case 'control':
       if (typeof message.peerId !== 'string') fail('control needs a peerId');
       if (typeof message.allowed !== 'boolean') fail('control needs an allowed flag');
+      if (message.from !== undefined && typeof message.from !== 'string') {
+        fail('control from must be text');
+      }
       break;
     case 'fate':
       if (typeof message.peerId !== 'string' || !message.peerId) fail('fate needs a peerId');

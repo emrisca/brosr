@@ -117,7 +117,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   // The host sees the same film, so only the sender can tell the two apart.
   host.setGrant('brave', true);
   peer.receive(
-    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    encode({ type: 'control', from: 'host', peerId: 'brave', allowed: true, roomTime: local }),
     local
   );
   assert.equal(peer.isGranted(), true);
@@ -148,7 +148,7 @@ test('a granted peer drives the host film, and a revoked peer cannot', () => {
   // A revoked peer keeps its own playhead.
   host.setGrant('brave', false);
   peer.receive(
-    encode({ type: 'control', peerId: 'brave', allowed: false, roomTime: local }),
+    encode({ type: 'control', from: 'host', peerId: 'brave', allowed: false, roomTime: local }),
     local
   );
   assert.equal(peer.isGranted(), false);
@@ -202,7 +202,7 @@ test('a granted peer pause keeps the host playhead, and a seek moves it', () => 
   host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
   host.setGrant('brave', true);
   peer.receive(
-    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    encode({ type: 'control', from: 'host', peerId: 'brave', allowed: true, roomTime: local }),
     local
   );
 
@@ -397,7 +397,7 @@ test('a host report of a peer act does not open the host window', () => {
   host.receive(encode({ type: 'hello', peerId: 'brave', name: 'Bob', roomTime: local }), local);
   host.setGrant('brave', true);
   peer.receive(
-    encode({ type: 'control', peerId: 'brave', allowed: true, roomTime: local }),
+    encode({ type: 'control', from: 'host', peerId: 'brave', allowed: true, roomTime: local }),
     local
   );
 
@@ -704,7 +704,7 @@ test('a peer follows the host url and reports layout mismatch without mirroring 
 
   client.receive(encode({ type: 'nav', url: 'http://x/b.html', roomTime: 1 }), 0);
   client.receive(encode({ type: 'view', scroll: 0.75, fingerprint, roomTime: 1 }), 0);
-  client.receive(encode({ type: 'snapshot', sequence: 1, url: 'http://x/a.html', scroll: 0.6, roomTime: 2 }), 0);
+  client.receive(encode({ type: 'snapshot', from: 'host', sequence: 1, url: 'http://x/a.html', scroll: 0.6, roomTime: 2 }), 0);
   assert.deepEqual(navigated, ['http://x/b.html']);
   assert.deepEqual(scrolled, []);
   assert.equal(client.publish().layoutMismatch, false);
@@ -957,7 +957,7 @@ test('a granted peer on a switched-off site sends no click', () => {
   });
   const tile = { tagName: 'A', getAttribute: () => '', closest: () => null };
 
-  client.receive(encode({ type: 'control', peerId: 'peer', allowed: true }), 0);
+  client.receive(encode({ type: 'control', from: 'host', peerId: 'peer', allowed: true }), 0);
   doc.dispatch('click', { isTrusted: true, target: tile, button: 0 });
   assert.equal(sent.filter((message) => message.type === 'input').length, 0);
 
@@ -1435,6 +1435,7 @@ test('a granted click leaves at once, before a link can unload the page', () => 
   client.receive(
     encode({
       type: 'control',
+      from: 'host',
       peerId: 'peer',
       allowed: true,
       tabId: 'peer',
@@ -1492,7 +1493,7 @@ test('a granted peer types into a field, and no text leaves without the grant', 
     'no text leaves before the grant'
   );
 
-  client.receive(encode({ type: 'control', peerId: 'peer', allowed: true }), 0);
+  client.receive(encode({ type: 'control', from: 'host', peerId: 'peer', allowed: true }), 0);
   doc.dispatch('input', { isTrusted: true, target: field });
   client.tick(1100);
   const frame = sent.find((message) => message.type === 'input');
@@ -1914,4 +1915,118 @@ test('a remote alignment claim is rate limited and never moves this peer', () =>
   assert.equal(client.receive(claim(9999), 2100).align, true);
   assert.equal(client.publish().align, null, 'the claim belongs to its sender');
   assert.equal(client.stats.appReceived, 2);
+});
+
+test('host ignores peer snapshot and control frames, preserving mirror-site allowlist', () => {
+  const host = createRoomClient({
+    role: 'host',
+    peerId: 'host',
+    hostId: 'host',
+    scrollSites: ['https://youtube.com'],
+    roomName: 'My Room',
+    overlay: false,
+    now: () => 1000,
+    send: () => {},
+  });
+
+  const snapRes = host.receive(
+    encode({
+      type: 'snapshot',
+      from: 'evil-peer',
+      sequence: 99,
+      scrollSites: null,
+      roomName: 'Hijacked',
+      url: 'https://evil.example/',
+      roomTime: 1000,
+    }),
+    1000
+  );
+  assert.equal(snapRes.ignored, 'host');
+  assert.deepEqual(host.publish().scrollSites, ['https://youtube.com']);
+  assert.equal(host.publish().roomName, 'My Room');
+
+  const ctrlRes = host.receive(
+    encode({ type: 'control', from: 'evil-peer', peerId: 'host', allowed: true, roomTime: 1000 }),
+    1000
+  );
+  assert.equal(ctrlRes.ignored, 'host');
+  assert.equal(host.publish().controlReceived, 0);
+  assert.equal(host.isGranted(), false);
+});
+
+test('guest rejects spoofed or unsigned control and snapshot frames and accepts host-authenticated ones', () => {
+  const controlEvents = [];
+  const guest = createRoomClient({
+    role: 'peer',
+    peerId: 'peer-1',
+    hostId: 'host',
+    scrollSites: ['https://youtube.com'],
+    overlay: false,
+    now: () => 1000,
+    send: () => {},
+    onControl: (ev) => controlEvents.push(ev),
+  });
+
+  // Unsigned control frame (Phase 1 repro) must be rejected.
+  const unsignedCtrl = guest.receive(
+    encode({ type: 'control', peerId: 'peer-1', allowed: true, roomTime: 1000 }),
+    1000
+  );
+  assert.equal(unsignedCtrl.ignored, 'not-host');
+  assert.equal(guest.isGranted(), false);
+  assert.equal(guest.hasGrant('peer-1'), false);
+
+  // Control frame from another peer must be rejected.
+  const spoofedCtrl = guest.receive(
+    encode({ type: 'control', from: 'peer-2', peerId: 'peer-1', allowed: true, roomTime: 1000 }),
+    1000
+  );
+  assert.equal(spoofedCtrl.ignored, 'not-host');
+  assert.equal(guest.isGranted(), false);
+
+  // Snapshot from another peer or without from must be rejected.
+  const spoofedSnap = guest.receive(
+    encode({ type: 'snapshot', from: 'peer-2', sequence: 5, scrollSites: null, roomTime: 1000 }),
+    1000
+  );
+  assert.equal(spoofedSnap.ignored, 'not-host');
+  assert.deepEqual(guest.publish().scrollSites, ['https://youtube.com']);
+
+  const unsignedSnap = guest.receive(
+    encode({ type: 'snapshot', sequence: 6, scrollSites: null, roomTime: 1000 }),
+    1000
+  );
+  assert.equal(unsignedSnap.ignored, 'not-host');
+  assert.deepEqual(guest.publish().scrollSites, ['https://youtube.com']);
+
+  // Host-authenticated control grant + revocation updates local state and fires onControl.
+  const granted = guest.receive(
+    encode({ type: 'control', from: 'host', peerId: 'peer-1', allowed: true, roomTime: 1001 }),
+    1001
+  );
+  assert.equal(granted.ok, true);
+  assert.equal(guest.isGranted(), true);
+  assert.equal(guest.hasGrant('peer-1'), true);
+
+  // Host-authenticated grant for a second peer is tracked by hasGrant.
+  guest.receive(
+    encode({ type: 'control', from: 'host', peerId: 'peer-2', allowed: true, roomTime: 1002 }),
+    1002
+  );
+  assert.equal(guest.hasGrant('peer-2'), true);
+
+  guest.receive(
+    encode({ type: 'control', from: 'host', peerId: 'peer-1', allowed: false, roomTime: 1003 }),
+    1003
+  );
+  assert.equal(guest.isGranted(), false);
+  assert.equal(guest.hasGrant('peer-1'), false);
+  assert.deepEqual(
+    controlEvents.map((e) => ({ peerId: e.peerId, allowed: e.allowed })),
+    [
+      { peerId: 'peer-1', allowed: true },
+      { peerId: 'peer-2', allowed: true },
+      { peerId: 'peer-1', allowed: false },
+    ]
+  );
 });
