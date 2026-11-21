@@ -69,7 +69,10 @@ test('the replay only sends tabs that already went out', () => {
   // A copy this browser opened is not one of this person's offers.
   assert.match(background, /if \(remoteOrigins\.has\(id\)\) continue;/);
   assert.match(background, /if \(!tab \|\| tab\.url !== url \|\| !shareable\(tab\.url\)\) continue;/);
-  assert.match(background, /await announce\(tab\.url, id, tab\.title, mediaTabs\.get\(id\)\)/);
+  assert.match(
+    background,
+    /await announce\(tab\.url, await publishKey\(id\), tab\.title, mediaTabs\.get\(id\)\)/
+  );
 });
 
 test('a hello asks for the replay at once, not only on the greet timer', () => {

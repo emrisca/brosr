@@ -57,6 +57,7 @@ const memory = {
   lastRoomStatus: null,
   remoteKeyTabs: null,
   mediaTabKeys: null,
+  sharePrefix: null,
 };
 
 async function state() {
@@ -78,6 +79,43 @@ async function save(changes) {
     // A worker that is shutting down refuses the write. The live copy is still
     // right for this lifetime.
   }
+}
+
+// Tab ids are per browser, so a host and a peer almost always share a low id.
+// The room needs one key per tab in the room, not one per tab per browser, so
+// every offer this browser publishes carries a prefix of its own. The prefix
+// lives in the same session store as the announced book, so a worker restart
+// keeps the keys stable.
+let sharePrefixPending = null;
+function sharePrefix() {
+  if (sharePrefixPending) return sharePrefixPending;
+  sharePrefixPending = (async () => {
+    const seen = await state();
+    if (typeof seen.sharePrefix === 'string' && seen.sharePrefix) return seen.sharePrefix;
+    let next = '';
+    try {
+      next = String(crypto.randomUUID()).replace(/-/g, '').slice(0, 12);
+    } catch {
+      next = Math.random().toString(36).slice(2, 14);
+    }
+    await save({ sharePrefix: next });
+    return next;
+  })();
+  return sharePrefixPending;
+}
+
+async function publishKey(tabId) {
+  return `${await sharePrefix()}-${tabId}`;
+}
+
+// A key from this browser names the local tab after its prefix. A key from
+// another publisher names a copy here, and remoteKeys answers that one first.
+async function ownKeyTab(key) {
+  const text = String(key || '');
+  const head = `${await sharePrefix()}-`;
+  if (!text.startsWith(head)) return null;
+  const id = Number(text.slice(head.length));
+  return validId(id) ? id : null;
 }
 
 function rememberTab(tab, seen) {
@@ -133,7 +171,7 @@ async function handleTabRemoved(id, remotelyClosed) {
   // it only leaves the sync and returns the row to Open.
   const remoteKey = remoteOrigins.get(id);
   const shared = announced.has(id) && remoteKey === undefined;
-  const key = remoteKey ?? id;
+  const key = remoteKey !== undefined ? remoteKey : await publishKey(id);
   for (const [entryKey, entry] of [...stoppedTabs]) {
     if (entry.tabId === id) stoppedTabs.delete(entryKey);
   }
@@ -144,7 +182,7 @@ async function handleTabRemoved(id, remotelyClosed) {
   mediaTabStates.delete(id);
   // A closed tab frees its id, so a later tab must not inherit the stop.
   detachedTabs.delete(id);
-  publishedPlaying.delete(String(remoteKey ?? id));
+  publishedPlaying.delete(remoteKey !== undefined ? String(remoteKey) : await publishKey(id));
   await save({ mediaTabKeys: mediaBook() });
   let unkeyed = false;
   for (const [entryKey, tabId] of [...remoteKeys]) {
@@ -506,9 +544,9 @@ async function reconcileClosedAnnounced(all) {
   for (const [raw] of [...announced]) {
     const id = Number(raw);
     if (liveIds.has(id) || remoteOrigins.has(id)) continue;
-    publishedPlaying.delete(String(id));
+    publishedPlaying.delete(await publishKey(id));
     await forgetAnnounced(id);
-    await announceClose(id);
+    await announceClose(await publishKey(id));
   }
 }
 
@@ -542,7 +580,8 @@ async function shareTab(tab) {
     // with, so the other side navigates that same tab. A tab from this browser
     // names itself.
     const arrived = remoteOrigins.get(tab.id);
-    const key = arrived === undefined || arrived === null ? tab.id : arrived;
+    const key =
+      arrived === undefined || arrived === null ? await publishKey(tab.id) : arrived;
     // A tab this browser owns keeps its id as its key. Writing that pair into
     // the remote book made the offer look like a copy, so a replay skipped it
     // and closing it reported a peer leaving instead of withdrawing the offer.
@@ -623,7 +662,9 @@ api.tabs.onUpdated.addListener((id, info, tab) => {
     announcedTitles.get(id) !== info.title
   ) {
     announcedTitles.set(id, info.title);
-    announce(tab.url, id, info.title, mediaTabs.get(id)).catch(() => {});
+    publishKey(id)
+      .then((key) => announce(tab.url, key, info.title, mediaTabs.get(id)))
+      .catch(() => {});
   }
   if (!info.url && info.status !== 'complete') return;
   if (info.url) {
@@ -897,7 +938,7 @@ async function handle(message, sender) {
     } else {
       const wasShared = announced.has(tabId) && !remoteOrigins.has(tabId);
       await forgetAnnounced(tabId);
-      if (wasShared) await announceClose(tabId);
+      if (wasShared) await announceClose(await publishKey(tabId));
     }
     return { ok: true, shared: Boolean(message.shared) };
   }
@@ -929,7 +970,7 @@ async function handle(message, sender) {
       // A tab that navigated or closed keeps no replay. The tab events keep the
       // record current, so a mismatch here means the record is stale.
       if (!tab || tab.url !== url || !shareable(tab.url)) continue;
-      if (await announce(tab.url, id, tab.title, mediaTabs.get(id))) sent += 1;
+      if (await announce(tab.url, await publishKey(id), tab.title, mediaTabs.get(id))) sent += 1;
     }
     return { ok: true, sent };
   }
@@ -1174,7 +1215,10 @@ async function handle(message, sender) {
     // A tab this browser shared says whether it plays now, so its row updates
     // in place instead of waiting for the next URL change.
     if (announced.has(from)) {
-      await notifyMedia(remoteOrigins.get(from) ?? from, media.playing === true);
+      await notifyMedia(
+        remoteOrigins.get(from) ?? (await publishKey(from)),
+        media.playing === true
+      );
     }
     await loadPrefs();
     if (!prefs.sync) return { ok: true, skipped: 'sync-off' };
@@ -1213,8 +1257,8 @@ async function handle(message, sender) {
     await restoreBooks();
     let tabId = remoteKeys.get(key);
     if (!validId(tabId)) {
-      const ownId = Number(key);
-      if (validId(ownId) && announced.has(ownId)) tabId = ownId;
+      const ownId = await ownKeyTab(key);
+      if (ownId !== null && announced.has(ownId)) tabId = ownId;
     }
     if (!validId(tabId) || detachedTabs.has(tabId)) {
       return { ok: false, reason: 'no-tab' };
@@ -1243,8 +1287,8 @@ async function handle(message, sender) {
     await restoreBooks();
     let tabId = remoteKeys.get(key);
     if (!validId(tabId)) {
-      const ownId = Number(key);
-      if (validId(ownId) && announced.has(ownId)) tabId = ownId;
+      const ownId = await ownKeyTab(key);
+      if (ownId !== null && announced.has(ownId)) tabId = ownId;
     }
     if (!validId(tabId) || detachedTabs.has(tabId)) {
       return { ok: false, reason: 'no-tab' };
@@ -1265,7 +1309,8 @@ async function handle(message, sender) {
   // Query that tab directly so the joiner lands at the owner's current position.
   if (message.type === 'brosr:tab-media-state') {
     const rawKey = String(message.key || '');
-    const tabId = Number(rawKey);
+    const own = await ownKeyTab(rawKey);
+    const tabId = own === null ? Number(rawKey) : own;
     await restoreBooks();
     if (!validId(tabId) || !announced.has(tabId) || remoteOrigins.has(tabId)) {
       return { ok: false, reason: 'no-tab' };

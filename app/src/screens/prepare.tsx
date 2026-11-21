@@ -77,11 +77,15 @@ export function Prepare({ browser, name, roomName, onRoomName, onReady, onBack }
     setPhase('starting');
     setError('');
     try {
+      // Trusted input launches the browser with a debugger attached, and Gecko
+      // then shows "Browser is under remote control" over every page. That
+      // banner blocks the Google sign-in a room needs, so the app starts a
+      // room without it. The trusted channel stays available with --trusted
+      // for a caller that asks for it.
       const run = await start(
         browser.id,
         name.trim() || 'Host',
-        roomName.trim() || 'Room',
-        true
+        roomName.trim() || 'Room'
       );
       onReady(run);
     } catch (cause) {

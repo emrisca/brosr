@@ -307,6 +307,42 @@ test('a stopped copy is not reused for a later offer', async () => {
   assert.equal(created.length, 2, 'the offer opens its own copy');
 });
 
+test('two browsers that share the same tab id publish different room keys', async () => {
+  // Tab ids are per browser. While the published key was the bare id, the
+  // second person to share tab 2 was refused as not-owner of the first
+  // person's row, so a peer's tab never appeared under Live tabs.
+  const peer = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=peer&room=two&peer=bo', active: true },
+      { id: 2, url: 'https://example.test/peer', active: false },
+    ],
+    store: { roomTabId: 1, roomRole: 'peer', sharePrefix: 'peer' },
+  });
+  const host = loadBackground({
+    tabs: [
+      { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=ana', active: true },
+      { id: 2, url: 'https://example.test/host', active: false },
+    ],
+    store: { roomTabId: 1, roomRole: 'host', sharePrefix: 'host' },
+  });
+
+  const sharedByPeer = await ask(peer.listener, { type: 'brosr:tab-share', tabId: 2, shared: true });
+  assert.equal(sharedByPeer.ok, true);
+  const sharedByHost = await ask(host.listener, { type: 'brosr:tab-share', tabId: 2, shared: true });
+  assert.equal(sharedByHost.ok, true);
+
+  const published = (bg, key) =>
+    bg.sentMessages.some(
+      (entry) =>
+        entry.message &&
+        entry.message.type === 'brosr:tabs-announce' &&
+        !entry.message.action &&
+        entry.message.key === key
+    );
+  await until(() => published(peer, 'peer-2'), 'the peer publishes its own key');
+  await until(() => published(host, 'host-2'), 'the host publishes its own key');
+});
+
 test('closing a shared tab right after a worker restart still withdraws it from Live tabs', async () => {
   // Chrome wakes an idle MV3 service worker on tabs.onRemoved before the async
   // session storage restores settle. Reading announced synchronously missed the
@@ -315,6 +351,7 @@ test('closing a shared tab right after a worker restart still withdraws it from 
   const store = {
     roomTabId: 1,
     roomRole: 'host',
+    sharePrefix: 'test',
     announcedTabs: { '2': 'https://example.test/watch' },
   };
   let releaseRestore = () => {};
@@ -344,7 +381,7 @@ test('closing a shared tab right after a worker restart still withdraws it from 
           entry.message &&
           entry.message.type === 'brosr:tabs-announce' &&
           entry.message.action === 'close' &&
-          entry.message.key === '2'
+          entry.message.key === 'test-2'
       ),
     'close announcement sent to room tab'
   );
@@ -404,7 +441,7 @@ test('closing a guest copy right after a worker restart notifies the room tab', 
 });
 
 test('closing a shared tab still withdraws its offer', async () => {
-  const store = { roomTabId: 1, roomRole: 'peer' };
+  const store = { roomTabId: 1, roomRole: 'peer', sharePrefix: 'test' };
   const localStore = {};
   const bg = loadBackground({
     tabs: [
@@ -436,7 +473,7 @@ test('closing a shared tab still withdraws its offer', async () => {
           entry.message &&
           entry.message.type === 'brosr:tabs-announce' &&
           entry.message.action === 'close' &&
-          entry.message.key === '2'
+          entry.message.key === 'test-2'
       ),
     'revoked peer still withdraws its closed tab'
   );
@@ -490,7 +527,7 @@ test('closing a tab while a sweep announcement is in flight does not resurrect i
 });
 
 test('unsharing a tab via brosr:tab-share withdraws it from Live tabs', async () => {
-  const store = {};
+  const store = { sharePrefix: 'test' };
   const bg = loadBackground({
     tabs: [
       { id: 1, url: 'http://127.0.0.1:8891/?role=host&room=two&peer=host', active: true },
@@ -515,7 +552,7 @@ test('unsharing a tab via brosr:tab-share withdraws it from Live tabs', async ()
         entry.message &&
         entry.message.type === 'brosr:tabs-announce' &&
         entry.message.action === 'close' &&
-        entry.message.key === '2'
+        entry.message.key === 'test-2'
     ),
     'unsharing sends a close announcement'
   );
@@ -525,6 +562,7 @@ test('sweepTabs withdraws an announced tab whose close event was missed', async 
   const store = {
     roomTabId: 1,
     roomRole: 'host',
+    sharePrefix: 'test',
     announcedTabs: { '2': 'https://example.test/closed' },
   };
   const bg = loadBackground({
@@ -542,7 +580,7 @@ test('sweepTabs withdraws an announced tab whose close event was missed', async 
           entry.message &&
           entry.message.type === 'brosr:tabs-announce' &&
           entry.message.action === 'close' &&
-          entry.message.key === '2'
+          entry.message.key === 'test-2'
       ),
     'sweep reconciles missing announced tab'
   );

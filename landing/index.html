@@ -20,7 +20,6 @@
         <circle cx="13" cy="9.5" r="1.2" fill="currentColor"></circle>
       </svg>
       <span class="brand-name">Brosr</span>
-      <span class="brand-tag">One browser for the whole room</span>
     </div>
     <div class="room-bar">
       <p class="room-state" id="room-state">
@@ -54,7 +53,6 @@
         </span>
         <div class="tile-copy">
           <h2 class="tile-name" id="youtube-title">YouTube</h2>
-          <p class="tile-note">Videos with one playhead for the room.</p>
         </div>
         <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <path d="M7 17 17 7M8 7h9v9"></path>
@@ -71,7 +69,6 @@
         </span>
         <div class="tile-copy">
           <h2 class="tile-name" id="music-title">YouTube Music</h2>
-          <p class="tile-note" id="music-note">Music with one playhead for the room.</p>
         </div>
         <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <path d="M7 17 17 7M8 7h9v9"></path>
@@ -86,7 +83,6 @@
         </span>
         <div class="tile-copy">
           <h2 class="tile-name" id="play-title">Play</h2>
-          <p class="tile-note">Chess with both players at one board.</p>
         </div>
         <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <path d="M7 17 17 7M8 7h9v9"></path>
@@ -102,7 +98,6 @@
         </span>
         <div class="tile-copy">
           <h2 class="tile-name" id="canvas-title">Canvas</h2>
-          <p class="tile-note">One surface. Every stroke lands for the room.</p>
         </div>
         <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <path d="M7 17 17 7M8 7h9v9"></path>
@@ -118,7 +113,6 @@
         </span>
         <div class="tile-copy">
           <h2 class="tile-name" id="notes-title">Notes</h2>
-          <p class="tile-note">A page for the room, saved on the host.</p>
         </div>
         <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
           <path d="M7 17 17 7M8 7h9v9"></path>
@@ -518,37 +512,6 @@
 
       input.addEventListener('input', apply);
       apply();
-    })();
-    // The core writes the room state onto the document, and the YouTube Music
-    // tile reads the music player out of it. A track title replaces the note. A
-    // page with no core behind it keeps the plain note.
-    (function () {
-      var note = document.getElementById('music-note');
-      if (!note) return;
-
-      function render(media) {
-        if (!media || !media.music || !media.title) {
-          note.textContent = 'Music with one playhead for the room.';
-          note.removeAttribute('title');
-          return;
-        }
-        note.textContent = media.title;
-        note.title = media.title;
-      }
-
-      function read() {
-        var media = null;
-        try {
-          var raw = document.documentElement.dataset.brosr;
-          if (raw) media = JSON.parse(raw).media || null;
-        } catch (err) {
-          media = null;
-        }
-        render(media);
-      }
-
-      read();
-      setInterval(read, 2000);
     })();
     // A tab in the room is an offer. Anyone in the room can share a tab, and
     // the person who shares it hosts it: only they change its video. Everyone

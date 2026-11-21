@@ -67,7 +67,7 @@ export function Browsers({ selected, onSelect, onContinue, onBack }: Props) {
         <div className="flex flex-col gap-2 rounded-md bg-muted p-2.5">
           <p className="text-sm font-medium">No browser found</p>
           <p className="max-w-[46ch] text-xs text-muted-foreground">
-            Install Firefox, Zen, Brave or Chromium, then use Rescan.
+            Install Firefox, Zen, LibreWolf, Floorp, Waterfox or Brave, then use Rescan.
           </p>
         </div>
       ) : null}

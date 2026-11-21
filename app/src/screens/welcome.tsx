@@ -170,7 +170,7 @@ export function Welcome({
           <p className="text-xs text-muted-foreground">
             {hasSupported
               ? 'Choose a browser to host or join a room.'
-              : 'Install Firefox, Zen, Brave or Chromium, then rescan.'}
+              : 'Install Firefox, Zen, LibreWolf, Floorp, Waterfox or Brave, then rescan.'}
           </p>
         ) : null}
       </div>

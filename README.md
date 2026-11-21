@@ -11,24 +11,23 @@ needs 2 Mbps on a bad link. (For pages that cannot sync state, see the planned o
 single-tab share in [docs/tab-share-plan.md](docs/tab-share-plan.md).)
 
 A room starts in a browser Brosr picks and runs with its own profile, plus a bridge extension, a
-room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. A
-Chromium build runs the same lane with uBlock Origin Lite and P-Stream, loaded as unpacked
-packs. Google Chrome 137 and later ignore the flag that loads an unpacked add-on, so a Chrome
-room installs the three add-ons over the devtools pipe instead, with a helper process holding it
-open.
+room window and a relay. Firefox keeps full uBlock Origin, which is a Manifest V2 add-on. Brave is
+the one Chromium build a room runs, because it blocks ads and trackers itself. Chrome, Edge and
+plain Chromium cannot run full uBlock Origin, so a room refuses them and the setup screen says
+why.
 
-Status: `v0.3.58` ships a signed macOS and Windows app (bridge `0.4.14`). Rooms run in Firefox, Zen and Brave.
+Status: `v0.3.59` ships a signed macOS and Windows app (bridge `0.4.15`). Rooms run in Firefox, Zen and Brave.
 
 ## Quick start for non-developers
 
 You do not need Node, Rust or a checkout to try Brosr. Take the build for your machine from
-[the latest release](https://github.com/emrisca/brosr/releases/latest) (currently `v0.3.58`):
+[the latest release](https://github.com/emrisca/brosr/releases/latest) (currently `v0.3.59`):
 
 | Machine | File |
 | --- | --- |
-| macOS on Apple silicon | [`Brosr_0.3.58_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_aarch64.dmg) |
-| macOS on Intel | [`Brosr_0.3.58_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64.dmg) |
-| Windows, 64-bit | [`Brosr_0.3.58_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64-setup.exe) or [`Brosr_0.3.58_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.58_x64_en-US.msi) |
+| macOS on Apple silicon | [`Brosr_0.3.59_aarch64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.59_aarch64.dmg) |
+| macOS on Intel | [`Brosr_0.3.59_x64.dmg`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.59_x64.dmg) |
+| Windows, 64-bit | [`Brosr_0.3.59_x64-setup.exe`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.59_x64-setup.exe) or [`Brosr_0.3.59_x64_en-US.msi`](https://github.com/emrisca/brosr/releases/download/v0.3.58/Brosr_0.3.59_x64_en-US.msi) |
 
 The macOS build carries an ad hoc signature and no notarisation, so the first launch needs one
 extra step. Move Brosr to Applications, try to open it, then allow it in System Settings,
@@ -49,11 +48,11 @@ use.
 | Firefox 140 or newer | Gecko | Supported | Full uBlock Origin, the bridge and a room | Release and Beta need a signed bridge. Developer Edition and Nightly load an unsigned one |
 | Firefox Developer Edition | Gecko | Supported | The same, with an unsigned bridge | The lane to use for a build from a working tree |
 | Zen | Gecko | Supported | The same as Firefox | The lane this repository is developed in |
-| Brave | Chromium | Supported | uBlock Origin Lite, P-Stream and the bridge, as unpacked packs | No full uBlock Origin, because Chromium retired Manifest V2 |
-| Microsoft Edge | Chromium | Supported | The same as Brave | The same install path, and no measured run in this repository |
-| Chrome for Testing, Chromium | Chromium | Supported | The same as Brave | The CI browser lane runs Chrome for Testing |
-| Google Chrome 137 or newer | Chromium | Partial | The same three add-ons, installed over the devtools pipe | `--load-extension` is ignored, so a helper process holds the pipe open. If it cannot hold it, the launch stops with the reason |
-| LibreWolf, Floorp, Waterfox | Gecko | Partial | The bridge should load as it does in Firefox | Offered when installed, never measured here |
+| Brave | Chromium | Supported | Its own ad and tracker blocking, P-Stream and the bridge, as unpacked packs | No full uBlock Origin, because Chromium retired Manifest V2 |
+| LibreWolf, Floorp, Waterfox | Gecko | Supported | Full uBlock Origin, the bridge and a room | Offered when installed, never measured here |
+| Microsoft Edge | Chromium | Not supported | Nothing | No full uBlock Origin |
+| Chrome for Testing, Chromium | Chromium | Not supported | Nothing | No full uBlock Origin. The CI browser lane runs Chrome for Testing only |
+| Google Chrome 137 or newer | Chromium | Not supported | Nothing | No full uBlock Origin, and `--load-extension` is ignored |
 | Safari and other WebKit browsers | WebKit | Blocked | Nothing | The bridge is a Gecko or Chromium add-on. WebKit runs Safari extensions only |
 | Vivaldi, Opera, Arc and other Chromium forks | Chromium | Not detected | Nothing offered | Not in the browser catalogue, and nothing was measured |
 | Any browser on a phone or tablet | None | Blocked | Nothing | No mobile lane. A room needs a desktop browser, a profile and an unpacked add-on |
@@ -62,9 +61,9 @@ A Firefox build older than 140 stays in the list with `Needs Gecko 140` and cann
 The bridge is a Manifest V2 add-on with a background page, and 140 is the first build it
 targets.
 
-Partial means one of two things here. Chrome works and the add-on path differs. The three Gecko
-forks are found and offered, and no run in this repository covers them, so treat that group as
-untested rather than supported.
+A browser without full uBlock Origin, or Brave's own blocker, is refused even when it is installed.
+The setup screen lists it with the reason and cannot pick it. The three Gecko forks are found and
+offered, and no run in this repository covers them, so treat that group as untested in practice.
 
 The blocker, the install path and the remote protocol differ by engine. The protocol, the
 relay, the clock, the cursor overlay and the media policy do not. [docs/engines.md](docs/engines.md)
@@ -160,7 +159,7 @@ npm install
 npm run tauri dev
 ```
 
-The app finds the Firefox and Chromium builds on the machine. Pick one. The app builds a separate room
+The app finds the Firefox and Brave builds on the machine. Pick one. The app builds a separate room
 profile, installs the blockers and the bridge, then starts the relay and opens the browser
 on the room. The panel is the extension's own popup, so it draws inside the browser window
 and never in one of its own. The toolbar icon and the room shortcut open it.

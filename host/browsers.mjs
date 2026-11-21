@@ -141,8 +141,11 @@ const CHROMIUM = [
     // over the devtools pipe instead, which the helper beside the window holds
     // open. See host/chrome-pipe.mjs.
     branded: true,
-    supported: true,
-    reason: null,
+    // Chrome cannot run the full uBlock Origin, and its own ad blocking leaves
+    // a room with the ads and trackers a shared page shows everyone. The room
+    // refuses it even when the path is there.
+    supported: false,
+    reason: 'No full uBlock Origin',
     bins: {
       darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
       win32: [
@@ -188,8 +191,8 @@ const CHROMIUM = [
     id: 'edge',
     name: 'Microsoft Edge',
     vendor: 'Microsoft',
-    supported: true,
-    reason: null,
+    supported: false,
+    reason: 'No full uBlock Origin',
     bins: {
       darwin: ['/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'],
       win32: ['C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'],
@@ -208,8 +211,9 @@ const CHROMIUM = [
     id: 'chrome-for-testing',
     name: 'Chrome for Testing',
     vendor: 'Google',
-    supported: true,
-    reason: null,
+    // Kept in the list for the test harness only. A room never runs in it.
+    supported: false,
+    reason: 'Testing build only',
     bins: {
       darwin: [
         '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
@@ -233,8 +237,8 @@ const CHROMIUM = [
     id: 'chromium',
     name: 'Chromium',
     vendor: 'Chromium',
-    supported: true,
-    reason: null,
+    supported: false,
+    reason: 'No full uBlock Origin',
     bins: {
       darwin: ['/Applications/Chromium.app/Contents/MacOS/Chromium'],
       win32: ['C:\\Program Files\\Chromium\\Application\\chrome.exe'],
