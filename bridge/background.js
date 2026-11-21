@@ -184,7 +184,6 @@ const prefs = {
   shared: {},
   sync: true,
   notices: true,
-  granted: false,
   // Null means the two brosr apps on the page's own origin. A host replaces
   // this with its own list, and a peer keeps the list its host sent.
   cursorSites: null,
@@ -204,7 +203,6 @@ async function loadPrefs() {
       'shared',
       'sync',
       'notices',
-      'granted',
       'cursorSites',
       'cursorNames',
     ]);
@@ -214,7 +212,6 @@ async function loadPrefs() {
       prefs.shared = saved.shared || {};
       prefs.sync = saved.sync !== false;
       prefs.notices = saved.notices !== false;
-      prefs.granted = saved.granted === true;
       prefs.cursorSites = Array.isArray(saved.cursorSites)
         ? saved.cursorSites.filter((site) => typeof site === 'string')
         : null;
@@ -487,23 +484,21 @@ async function announceClose(key) {
   }
 }
 
-// Control allows a tab to go out, and a granted peer holds it just as the host
-// does. A plain peer shares nothing.
+// Any room member may offer a tab. The offer stays owned by the person who
+// shared it, so another peer can play, pause and seek it but never change its
+// source.
 async function mayShare() {
-  await loadPrefs();
-  if (prefs.granted === true) return true;
   // The role arrives on the hello, and a worker restart loses it. Reading the
-  // saved role keeps a replay from answering no-control on a host that has
-  // held control all along.
+  // saved role keeps a replay from answering no-control on a live room.
   if (roomRole === null) {
     const seen = await state();
     if (!roomRole) roomRole = seen.roomRole || null;
   }
-  return roomRole === 'host';
+  return roomRole === 'host' || roomRole === 'peer';
 }
 
 // A tab that was already open when the room started never loads again, so the
-// navigation events cannot offer it. The room's start and a fresh grant sweep
+// navigation events cannot offer it. The room's start and a fresh hello sweep
 // the open tabs once, so a guest sees the pages the host already had.
 async function reconcileClosedAnnounced(all) {
   await restoreBooks();
@@ -511,19 +506,6 @@ async function reconcileClosedAnnounced(all) {
   for (const [raw] of [...announced]) {
     const id = Number(raw);
     if (liveIds.has(id) || remoteOrigins.has(id)) continue;
-    publishedPlaying.delete(String(id));
-    await forgetAnnounced(id);
-    await announceClose(id);
-  }
-}
-
-// When a peer loses control, withdraw every tab it published immediately so
-// its offers do not linger in Live Tabs until closed.
-async function withdrawPublishedTabs() {
-  await restoreBooks();
-  for (const [raw] of [...announced]) {
-    const id = Number(raw);
-    if (remoteOrigins.has(id)) continue;
     publishedPlaying.delete(String(id));
     await forgetAnnounced(id);
     await announceClose(id);
@@ -704,33 +686,8 @@ async function handle(message, sender) {
         await save({ roomTabId: from, roomRole });
         // The room just started on this browser. Tabs that were open before it
         // have no navigation left to announce them, so they are offered here.
-        if (roomRole === 'host') {
-          loadPrefs()
-            .then(() => (prefs.granted ? savePrefs({ granted: false }) : null))
-            .catch(() => {});
-        }
-        if (roomRole === 'host') sweepTabs().catch(() => {});
-        else {
-          await loadPrefs();
-          const wasGranted = prefs.granted === true;
-          // A room hello reconciles the live grant flag (defaulting to false
-          // when omitted) so stale granted: true in storage never survives a
-          // reload or fresh room join.
-          const nextGranted = Boolean(message.granted);
-          if (prefs.granted !== nextGranted) {
-            await savePrefs({ granted: nextGranted });
-          }
-          if (wasGranted && !nextGranted) {
-            await withdrawPublishedTabs().catch(() => {});
-          } else {
-            restoreBooks()
-              .then(() => {
-                if (!announced.size) return;
-                return api.tabs.query({}).then((all) => reconcileClosedAnnounced(all));
-              })
-              .catch(() => {});
-          }
-        }
+        // Every room member may offer tabs, so this runs for both roles.
+        sweepTabs().catch(() => {});
       }
     }
     // A tab that opens later still gets the cursor this person picked. The
@@ -765,23 +722,6 @@ async function handle(message, sender) {
     };
   }
   if (message.type === 'brosr:room-status') {
-    // The room tab is the one place that knows whether this browser holds
-    // control, so its report is also the grant state the tab list reads.
-    if (message.granted !== undefined) {
-      await loadPrefs();
-      const before = prefs.granted;
-      await savePrefs({ granted: Boolean(message.granted) });
-      // Control just arrived, so the tabs this person already had become
-      // offers too, without waiting for each one to navigate.
-      if (!before && prefs.granted) sweepTabs().catch(() => {});
-      if (before && !prefs.granted) {
-        const seen = await state();
-        const currentRole = roomRole || seen.roomRole || null;
-        if (currentRole !== 'host') {
-          await withdrawPublishedTabs().catch(() => {});
-        }
-      }
-    }
     await save({
       lastRoomStatus: {
         at: Date.now(),
@@ -867,7 +807,7 @@ async function handle(message, sender) {
     await loadPrefs();
     const seen = await state();
     const role = roomRole || seen.roomRole || '';
-    const canShare = role === 'host' || prefs.granted === true;
+    const canShare = role === 'host' || role === 'peer';
     const all = await api.tabs.query({}).catch(() => []);
     // A stopped copy still exists, so the panel can offer it back. A tab that
     // closed drops out here, which keeps the list honest between updates.
@@ -909,13 +849,12 @@ async function handle(message, sender) {
       auto: prefs.autoShare,
       sync: prefs.sync,
       notices: prefs.notices,
-      granted: prefs.granted,
       tabs,
       stopped,
     };
   }
   if (message.type === 'brosr:tabs-auto') {
-    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    if (!(await mayShare())) return { ok: false, reason: 'not-in-room' };
     await savePrefs({ autoShare: Boolean(message.on) });
     return { ok: true, auto: prefs.autoShare };
   }
@@ -934,7 +873,7 @@ async function handle(message, sender) {
   if (message.type === 'brosr:tab-share') {
     const tabId = Number(message.tabId);
     if (!validId(tabId)) return { ok: false, reason: 'bad-tab' };
-    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    if (!(await mayShare())) return { ok: false, reason: 'not-in-room' };
     await restoreBooks();
     await loadPrefs();
     const muted = { ...prefs.muted };
@@ -968,7 +907,7 @@ async function handle(message, sender) {
   // map is the record of what already went out, so a tab nobody shared stays
   // private.
   if (message.type === 'brosr:tabs-replay') {
-    if (!(await mayShare())) return { ok: false, reason: 'no-control' };
+    if (!(await mayShare())) return { ok: false, reason: 'not-in-room' };
     // The book restore runs at startup and the ask can beat it.
     await restoreBooks();
     let all = null;
@@ -1292,7 +1231,7 @@ async function handle(message, sender) {
       return { ok: false, reason: 'focus-failed', error: text(error) };
     }
   }
-  // Route an inline controller media command (play, pause, toggle, skip) from
+  // Route an inline transport media command (play, pause, toggle, skip) from
   // the Live Tabs section on the landing page to the local published/joined tab.
   if (message.type === 'brosr:tab-media-control') {
     const key = String(message.key || '');
@@ -1463,7 +1402,6 @@ async function handle(message, sender) {
             volume: message.volume,
             ad: Boolean(message.ad),
             ...(Number.isFinite(Number(message.rev)) ? { rev: Number(message.rev) } : {}),
-            ...(typeof message.hold === 'boolean' ? { hold: message.hold } : {}),
             at: message.at,
           })
           .then(() => true)

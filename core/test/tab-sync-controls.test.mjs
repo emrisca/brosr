@@ -103,8 +103,9 @@ test('Live Tabs provides inline controller media controls, focus jump, and live 
   assert.match(page, /controlMedia\(tab\.key,\s*'skip',\s*-10\)/);
   assert.match(page, /controlMedia\(tab\.key,\s*'toggle',\s*0\)/);
   assert.match(page, /controlMedia\(tab\.key,\s*'skip',\s*10\)/);
-  // Core enforces controller authorization and publishes canControl
-  assert.match(source, /canControl:\s*Boolean\(role === 'host' \|\| client\.isGranted\(\)\)/);
+  // Transport is open to every peer that holds the tab, so the row does not
+  // gate its controls on a role.
+  assert.match(source, /canControl:\s*true,/);
   assert.match(source, /if \(message\.type === 'tab-media-control'\)/);
   assert.match(source, /tabMediaControlDecision\(\{/);
   assert.match(source, /if \(message\.type === 'brosr:media-control'\)/);

@@ -1,7 +1,7 @@
 // The trusted actuator. A relayed record becomes one browser input action, so
 // the page sees isTrusted true and a form receives real typing. The page cannot
 // open this channel alone: the loopback agent needs a token and an active
-// grant, and the start path owns both.
+// trusted session, and the start path owns both.
 //
 // A point travels as a selector plus a canvas fraction, because a record made on
 // another window has no viewport point here. The receiver resolves it against

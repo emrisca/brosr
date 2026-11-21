@@ -45,7 +45,7 @@ three places: the engine, the trusted actuator, and the extension catalogue.
 | Other extensions | The Firefox add-on catalogue | The Chrome Web Store catalogue |
 | Trusted actuator | BiDi through a Node helper, M7 | `chrome.debugger` in the bridge, with M8 |
 | Trusted input | BiDi through the Node helper, built | `chrome.debugger` in the bridge, still open |
-| Visible cost of a grant | The sidebar indicator | The browser's debug bar for the whole grant |
+| Visible cost of trusted input | The sidebar indicator | The browser's debug bar for the whole session |
 | Bridge install | Signed XPI, or a temporary add-on in development | Unpacked folder with developer mode on |
 | Automatic bridge install | `policies.json` in a shipped Firefox | CDP `Extensions.loadUnpacked`, or a store listing |
 | Profile start | `--profile` and `--no-remote` beside the daily browser | `--user-data-dir`, one process per profile |
@@ -58,18 +58,18 @@ three places: the engine, the trusted actuator, and the extension catalogue.
 **What the Firefox build loses.**
 
 - Trusted typing arrived at M7, after synthetic replay. A relayed click still cannot press a
-  control that checks `isTrusted` without a grant, and pointer lock stays local.
+  control that checks `isTrusted` without the trusted actuator, and pointer lock stays local.
 - Chrome-only extensions. Some workplace tools ship for Chromium alone.
 - A fast test loop for the extension. Playwright cannot load the bridge, so those tests run
   through WebDriver and take longer to write.
 - Reach. Some people will not install a second browser to join a room.
 - Per-tab control. Firefox has no per-tab debugger, so the remote agent is browser-wide and the
-  grant model has to constrain it.
+  trusted session has to constrain it.
 
 **What the Chromium build loses.**
 
 - Full uBlock Origin, and every other MV2 add-on. uBlock Origin Lite is the ceiling.
-- A quiet grant. The debug bar shows for as long as a grant is active.
+- A quiet trusted session. The debug bar shows for as long as it is active.
 - A small permission set. `debugger` reaches any tab and bypasses `host_permissions`, so our
   allowlist is the only guard.
 - Loading add-ons. `--load-extension` left branded Chrome in 137, so the bridge, the blocker and
@@ -128,8 +128,8 @@ Three rules keep it that way:
 
 1. The bridge draws only inside one closed shadow root, pinned to the viewport, with pointer
    events off. It adds no global CSS, no `style` element on the document and no wrapper node.
-2. Element targeting skips the bridge's own nodes and any shadow root it did not create. A
-   relayed click must not resolve to a cursor.
+2. Element targeting skips the bridge's own nodes and any shadow root it did not create, so
+   the overlay never becomes the target of a page action.
 3. The bridge registers no request filter. If a later feature needs request data, it uses the
    browser's remote agent instead of a second blocker.
 

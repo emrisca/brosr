@@ -19,9 +19,6 @@ export const TYPES = [
   'cursor',
   'cursorpolicy',
   'scrollpolicy',
-  'control',
-  'fate',
-  'stutter',
   'ping',
   'pong',
   'bye',
@@ -114,30 +111,6 @@ export function validate(message) {
       // The same shape as the cursor policy, with the same null meaning.
       if (message.sites !== null && !Array.isArray(message.sites)) {
         fail('scrollpolicy needs a sites list or null');
-      }
-      break;
-    case 'control':
-      if (typeof message.peerId !== 'string') fail('control needs a peerId');
-      if (typeof message.allowed !== 'boolean') fail('control needs an allowed flag');
-      if (message.from !== undefined && typeof message.from !== 'string') {
-        fail('control from must be text');
-      }
-      if (message.mediaRev !== undefined && (!isNumber(message.mediaRev) || message.mediaRev < 0)) {
-        fail('control mediaRev must be a non-negative number');
-      }
-      break;
-    case 'fate':
-      if (typeof message.peerId !== 'string' || !message.peerId) fail('fate needs a peerId');
-      if (typeof message.enabled !== 'boolean') fail('fate needs an enabled flag');
-      break;
-    case 'stutter':
-      if (typeof message.peerId !== 'string' || !message.peerId) fail('stutter needs a peerId');
-      if (typeof message.active !== 'boolean') fail('stutter needs an active flag');
-      if (typeof message.key !== 'string' || !message.key) fail('stutter needs a key');
-      if (!isNumber(message.position)) fail('stutter needs a position');
-      if (typeof message.playing !== 'boolean') fail('stutter needs a playing flag');
-      if (message.from !== undefined && typeof message.from !== 'string') {
-        fail('stutter from must be text');
       }
       break;
     case 'ping':

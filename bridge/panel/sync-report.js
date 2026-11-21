@@ -141,7 +141,6 @@
             id: data.peerId,
             name: data.name || data.peerId,
             self: true,
-            granted: Boolean(data.granted),
             build: data.build || null,
           }
         : null;
@@ -195,7 +194,6 @@
     if (data.seal && data.seal.mode) {
       add('Seal', data.seal.error ? `${data.seal.mode} (${data.seal.error})` : data.seal.mode);
     }
-    add('Same fate', data.sameFate === true ? 'on' : data.sameFate === false ? 'off' : '');
     if (data.latency && Number.isFinite(Number(data.latency.p95))) {
       add(
         'Latency',
@@ -214,7 +212,6 @@
       for (const peer of peers) {
         const flags = [];
         if (peer.self) flags.push('you');
-        if (peer.granted) flags.push('control');
         const build = peer.build && peer.build.version ? ` bridge ${peer.build.version}` : '';
         lines.push(
           `- ${peer.name || peer.id || 'peer'} (${peer.id || 'no id'})${build}${
@@ -258,10 +255,8 @@
       if (filmStats) {
         const applied = Number(filmStats.applied);
         const skipped = Number(filmStats.skips) || 0;
-        const holds = Number(filmStats.holds) || 0;
         if (Number.isFinite(applied)) parts.push(`${applied} applied`);
         if (skipped) parts.push(`${skipped} skipped`);
-        if (holds) parts.push(`${holds} hold${holds === 1 ? '' : 's'}`);
       }
       if (relay.last && Number.isFinite(Number(relay.last.drift))) {
         parts.push(`${Math.abs(Number(relay.last.drift)).toFixed(2)} s on the last frame`);
@@ -317,31 +312,6 @@
 
     add('Matched copy', offset(data.align && data.align.offsetMs));
 
-    const holds = Array.isArray(data.holds) ? data.holds.filter(Boolean) : [];
-    if (holds.length) {
-      add(
-        'Holds',
-        holds
-          .map((hold) => {
-            const age = Number(hold.ageMs);
-            const since = Number.isFinite(age) && age >= 0 ? ` for ${(age / 1000).toFixed(1)} s` : '';
-            return `${nameFor(hold.peerId)}${since} at ${clock(hold.position)}, ${
-              hold.playing ? 'playing' : 'paused'
-            }`;
-          })
-          .join('; ')
-      );
-    }
-    if (data.lastHoldEvent) {
-      const last = data.lastHoldEvent;
-      const at = stamp(last.eventAt);
-      add(
-        'Last hold',
-        `${last.active ? 'started' : 'released'} by ${nameFor(last.peerId)}` +
-          (at ? ` at ${at}` : '') +
-          ` (${clock(last.position)}, ${last.playing ? 'playing' : 'paused'})`
-      );
-    }
     if (data.hostPriority && present(data.hostPriority.lastActAt)) {
       const at = stamp(data.hostPriority.lastActAt);
       const remaining = Math.max(0, Math.round(Number(data.hostPriority.remainingMs) || 0));
@@ -399,23 +369,6 @@
               return `${clock(event.target)} ${event.outcome || 'waiting'}${
                 spent ? ` after ${spent}` : ''
               }${at ? ` at ${at}` : ''}`;
-            })
-            .join('; ')
-        );
-      }
-      const relayHolds = recent(relayHistory.holds);
-      if (relayHolds.length) {
-        add(
-          'Relay holds',
-          relayHolds
-            .map((event) => {
-              const spent = durationText(event.durationMs);
-              const at = shortStamp(event.at);
-              return `${clock(event.position)}, ${
-                event.playing ? 'playing' : 'paused'
-              }, ${event.outcome || 'active'}${spent ? ` after ${spent}` : ''}${
-                at ? ` at ${at}` : ''
-              }`;
             })
             .join('; ')
         );
@@ -529,33 +482,6 @@
       );
     }
 
-    const control = [];
-    if (present(data.controlSent)) control.push(`sent ${data.controlSent}`);
-    if (present(data.controlReceived)) control.push(`received ${data.controlReceived}`);
-    add('Control', control.join(', '));
-    if (data.lastControl) {
-      const last = data.lastControl;
-      add(
-        'Last control',
-        `${last.allowed ? 'granted' : 'revoked'} ${last.peerId || 'a peer'}${
-          last.mine ? ' (this peer)' : ''
-        }`
-      );
-    }
-    if (Array.isArray(data.controlHistory) && data.controlHistory.length) {
-      add(
-        'Control history',
-        data.controlHistory
-          .slice(-5)
-          .map(
-            (entry) =>
-              `${entry.allowed ? 'granted' : 'revoked'} ${entry.peerId || 'a peer'}` +
-              (present(entry.roomTime) ? ` at room ${entry.roomTime}` : '')
-          )
-          .join('; ')
-      );
-    }
-
     const counters = [
       ['seeks', data.seeks],
       ['nudges', data.nudges],
@@ -571,9 +497,6 @@
       .map(([name, value]) => `${name}=${value}`);
     if (counters.length) add('Media counters', counters.join(', '));
 
-    if (data.stutter && (data.stutter.active || data.stutter.holds)) {
-      add('Stutter', json(data.stutter));
-    }
     add('Last command', data.command);
     add('Media debug', json(data.debug));
 
@@ -610,7 +533,6 @@
           id: peer.id,
           name: peer.name,
           self: Boolean(peer.self),
-          granted: Boolean(peer.granted),
           build: peer.build || null,
         })),
         media: media
@@ -644,8 +566,6 @@
         mediaDropTicks: data.mediaDropTicks || null,
         lastMediaDrop: data.lastMediaDrop || null,
         mediaDropHistory: data.mediaDropHistory || null,
-        holds: holds.length ? holds : null,
-        lastHoldEvent: data.lastHoldEvent || null,
         hostPriority: data.hostPriority || null,
         lastMediaFrame: data.lastMediaFrame || null,
         lastSeek: data.lastSeek || null,

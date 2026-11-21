@@ -5,8 +5,8 @@ import { ALIGN_GAP_MS } from './align.mjs';
 export const MAX_INPUT_PER_SECOND = 120;
 export const MAX_NAV_PER_SECOND = 1;
 // Presence frames arrive every 100 ms, but a background tab can be throttled.
-// Keep a peer long enough for a tab switch, and let a grant hold the row even
-// when its presence timer has gone quiet.
+// Keep a peer long enough for a tab switch, even when its presence timer has
+// gone quiet.
 export const PEER_TTL_MS = 15000;
 
 // Host migration. Every peer elects the same successor without a vote, so a
@@ -22,9 +22,6 @@ export class Room {
     this.role = role;
     this.peerId = peerId;
     this.roomName = roomName;
-    // A host can make every player wait for a starved player. The setting
-    // travels in the snapshot, so a late guest learns it with the room.
-    this.sameFate = false;
     this.now = now;
     this.peers = new Map();
     this.seen = new Map();
@@ -153,7 +150,6 @@ export class Room {
       type: 'snapshot',
       sequence: this.sequence,
       roomName: this.roomName,
-      sameFate: this.sameFate,
       peers: [...this.peers.values()],
       url: this.url,
       scroll: this.scroll,
@@ -168,7 +164,6 @@ export class Room {
     if (typeof snapshot.roomName === 'string' && snapshot.roomName.trim()) {
       this.roomName = snapshot.roomName;
     }
-    if (typeof snapshot.sameFate === 'boolean') this.sameFate = snapshot.sameFate;
     if (snapshot.url) this.url = snapshot.url;
     if (typeof snapshot.scroll === 'number') {
       this.scroll = Math.max(0, Math.min(1, snapshot.scroll));

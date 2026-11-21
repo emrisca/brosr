@@ -63,7 +63,7 @@ test('the replay only sends tabs that already went out', () => {
   assert.match(background, /if \(message\.type === 'brosr:tabs-replay'\) \{/);
   assert.match(
     background,
-    /if \(!\(await mayShare\(\)\)\) return \{ ok: false, reason: 'no-control' \}/
+    /if \(!\(await mayShare\(\)\)\) return \{ ok: false, reason: 'not-in-room' \}/
   );
   assert.match(background, /for \(const \[raw, url\] of announced\)/);
   // A copy this browser opened is not one of this person's offers.
@@ -76,7 +76,10 @@ test('a hello asks for the replay at once, not only on the greet timer', () => {
   // A hidden room tab throttles its timer to about once a minute, and the host
   // tab usually sits behind the page someone reads. A guest that joined then
   // waited that long, because the timer was the only ask.
-  assert.match(source, /if \(kind === 'hello'\) replayTabsSoon\(\);/);
+  assert.match(
+    source,
+    /if \(parsed && parsed\.type === 'hello' && parsed\.peerId !== peerId\) \{\s*replayTabsSoon\(\);/ 
+  );
   assert.match(source, /const replayTabsSoon = \(\) => \{/);
   assert.match(
     source,
@@ -104,8 +107,10 @@ test('a tab this browser owns is not recorded as a copy', () => {
 test('a room that starts after tabs were opened offers them', () => {
   // A tab was offered only when it loaded, and a tab that was already open
   // never loads again, so a room started later announced nothing.
-  assert.match(background, /if \(roomRole === 'host'\) sweepTabs\(\)\.catch/);
-  assert.match(background, /if \(!before && prefs\.granted\) sweepTabs\(\)\.catch/);
+  // Every room member may offer a tab, so the sweep is not host-only and no
+  // grant flag gates it.
+  assert.match(background, /sweepTabs\(\)\.catch\(\(\) => \{\}\);/);
+  assert.doesNotMatch(background, /prefs\.granted/);
   assert.match(background, /async function sweepTabs\(\) \{/);
 });
 

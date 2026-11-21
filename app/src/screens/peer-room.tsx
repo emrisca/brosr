@@ -44,14 +44,12 @@ function Metric({ label, children }: { label: string; children: ReactNode }) {
 
 function PeerRow({ peer, hostId }: { peer: PanelPeer; hostId: string }) {
   const host = !peer.self && peer.id === hostId;
-  const label = peer.self ? 'You' : host ? 'Host' : peer.granted ? 'Control' : 'Viewing';
+  const label = peer.self ? 'You' : host ? 'Host' : 'Member';
   const detail = peer.self
     ? 'In the room'
     : host
       ? 'Runs this room'
-      : peer.granted
-        ? 'Can pause and share tabs'
-        : 'Following the room';
+      : 'Can play, pause and share tabs';
 
   return (
     <div className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-muted p-2">
@@ -70,7 +68,7 @@ function PeerRow({ peer, hostId }: { peer: PanelPeer; hostId: string }) {
         </span>
       </div>
       <Badge
-        variant={peer.self ? 'secondary' : host ? 'default' : peer.granted ? 'secondary' : 'outline'}
+        variant={peer.self ? 'secondary' : host ? 'default' : 'outline'}
         className="shrink-0"
       >
         {label}
@@ -117,7 +115,7 @@ export function PeerRoom({ joined, onLeave }: Props) {
   const hostAddress = `${joined.host.includes(':') ? `[${joined.host}]` : joined.host}:${joined.port}`;
   const people: PanelPeer[] = panel?.peers?.length
     ? panel.peers
-    : [{ id: joined.peer, name: joined.name, self: true, granted: false }];
+    : [{ id: joined.peer, name: joined.name, self: true }];
   const peopleCount = Math.max(live?.peers ?? 0, people.length);
   const waiting = Math.max(0, peopleCount - people.length);
   const connection = !live

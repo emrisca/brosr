@@ -35,7 +35,7 @@ function inviteLink(href, roomName) {
   if (!href) return '';
   try {
     const url = new URL(href);
-    for (const key of ['role', 'peer', 'name', 'panel', 'selftest', 'bias', 'grant', 'capture']) {
+    for (const key of ['role', 'peer', 'name', 'panel', 'selftest', 'bias', 'capture']) {
       url.searchParams.delete(key);
     }
     url.searchParams.set('role', 'peer');
@@ -861,20 +861,6 @@ async function setShowOwnCursor(on) {
   }
 }
 
-function renderHistory(data) {
-  const list = $('history');
-  list.replaceChildren();
-  const history = Array.isArray(data.controlHistory)
-    ? data.controlHistory.slice(-3).reverse()
-    : [];
-  if (!history.length) return;
-  for (const entry of history) {
-    const row = document.createElement('li');
-    row.textContent = `${entry.peerId} ${entry.allowed ? 'granted' : 'revoked'}`;
-    list.append(row);
-  }
-}
-
 // A tile dropped on the panel arrives as a URL parameter, because this page
 // cannot read the pref that the dock writes.
 const PANEL_SITES = (() => {
@@ -1191,7 +1177,6 @@ function render(reply) {
   for (const peer of peers) {
     const row = document.createElement('li');
     row.dataset.peer = peer.id || '';
-    if (peer.granted) row.dataset.granted = '1';
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
     if (peer.colour) swatch.style.background = peer.colour;
@@ -1215,12 +1200,6 @@ function render(reply) {
       time.title = 'Presence latency, 95th percentile.';
       time.textContent = `${Math.round(presence.p95)} ms`;
       row.append(time);
-    }
-    if (peer.granted) {
-      const badge = document.createElement('span');
-      badge.className = 'grant';
-      badge.textContent = 'Control';
-      row.append(badge);
     }
     list.append(row);
   }
@@ -1425,28 +1404,6 @@ async function refresh() {
   } catch {
     // A tab without the content script rejects the message.
     offline('This tab is not in a room.');
-  }
-}
-
-async function control(allowed, peer) {
-  const tab = await targetTab();
-  if (!tab) return notice('Open a room tab first.', true);
-  const peerId = String(peer || '').trim();
-  if (!peerId) return notice('Choose a peer first.', true);
-  try {
-    const reply = await api.tabs.sendMessage(tab.id, {
-      type: 'brosr:grant',
-      peerId,
-      allowed,
-    });
-    if (reply && reply.ok) {
-      await refresh();
-      notice(allowed ? `Control granted to ${peerId}.` : `Control revoked from ${peerId}.`);
-    } else {
-      notice('Only the host can change control.', true);
-    }
-  } catch {
-    notice('The room tab did not answer.', true);
   }
 }
 
@@ -1823,10 +1780,6 @@ setInterval(async () => {
         notice: $('notice').textContent,
         status: $('status').textContent,
         peers: [...document.querySelectorAll('#peers .name')].map((node) => node.textContent),
-        grantedPeers: [...document.querySelectorAll('#peers li[data-granted="1"]')].map(
-          (node) => node.dataset.peer
-        ),
-        history: [...document.querySelectorAll('#history li')].map((node) => node.textContent),
         geometry: (() => {
           const box = (node) => {
             if (!node) return null;
@@ -1856,59 +1809,3 @@ setInterval(async () => {
   }
 }, 500);
 
-if (new URLSearchParams(location.search).get('selftest') === '1') {
-  // Drive Grant and then Revoke. A headless tab can take twenty seconds to
-  // register with the background page, so this retries until each lands. The
-  // grant holds for a moment so a peer tab can report that it received it.
-  let tries = 0;
-  let stage = 'grant';
-  let sent = false;
-  let holdUntil = 0;
-  let selftestPeer = null;
-  const timer = setInterval(async () => {
-    tries += 1;
-    await refresh();
-    if (false) {
-      if (tries > 120) clearInterval(timer);
-      return;
-    }
-    const text = String($('notice').textContent);
-    if (stage === 'grant') {
-      if (text.includes('Control granted')) {
-        if (!holdUntil) holdUntil = Date.now() + 2500;
-        if (Date.now() < holdUntil) return;
-        stage = 'revoke';
-        sent = false;
-        return;
-      }
-      const guest = ((lastReply && lastReply.data && lastReply.data.peerList) || []).find(
-        (peer) => peer && peer.id && !peer.self
-      );
-      if (!guest) {
-        if (tries > 120) clearInterval(timer);
-        return;
-      }
-      if (!sent) {
-        selftestPeer = guest.id;
-        const button = document.querySelector(
-          `#peers li[data-peer="${guest.id}"] .peer-control`
-        );
-        if (button) button.click();
-        sent = true;
-      }
-      return;
-    }
-    if (text.includes('Control revoked')) {
-      clearInterval(timer);
-      return;
-    }
-    if (!sent) {
-      const button = selftestPeer
-        ? document.querySelector(`#peers li[data-peer="${selftestPeer}"] .peer-control`)
-        : null;
-      if (button) button.click();
-      sent = true;
-    }
-    if (tries > 120) clearInterval(timer);
-  }, 500);
-}

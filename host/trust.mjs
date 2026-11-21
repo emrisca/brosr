@@ -1,12 +1,12 @@
 // The trusted input helper. It owns one debugger session beside the start path,
-// binds a loopback listener only while a peer holds a grant, and closes the
-// listener when that grant ends or the room stops. Gecko answers over BiDi and
+// binds a loopback listener only while a peer holds a trusted session, and
+// closes the listener when that session ends or the room stops. Gecko answers over BiDi and
 // Chromium over CDP, and the watcher does not know which one it holds.
 //
 // Three rules from the plan:
 // 1. Loopback only, random port, a token the page cannot read.
 // 2. Close the session with the last grant and on app exit.
-// 3. Refuse to start the agent at all when the room has no trusted grant.
+// 3. Refuse to start the agent at all when the room has no trusted session.
 
 import fs from 'node:fs';
 import http from 'node:http';

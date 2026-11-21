@@ -326,7 +326,6 @@ function runTwoPeerSim({
     });
   }
 
-  hostClient.setGrant('peer', true);
   for (let t = 1000; t <= endAt; t += 250) schedule(t, () => reportHost(false));
   for (const e of events) schedule(e.at, () => e.fn({ hostVideo, peerVideo }));
 
@@ -354,7 +353,7 @@ function runTwoPeerSim({
   return { snapshots, end: snapshots.at(-1), hostClient, peerClient };
 }
 
-test('granted peer jumping forward while playing does not snap back to host in-flight ticks', () => {
+test('a peer jumping forward while playing does not snap back to host in-flight ticks', () => {
   const { snapshots, end } = runTwoPeerSim({
     latencyMs: 40,
     events: [{ at: 1520, fn: ({ peerVideo }) => { peerVideo.currentTime = 60; } }],
@@ -369,7 +368,7 @@ test('granted peer jumping forward while playing does not snap back to host in-f
   assert.ok(Math.abs(end.host - end.peer) < 0.25, `final drift ${end.host - end.peer}`);
 });
 
-test('host jumping rapidly while granted peer has slow async YouTube seek does not ping-pong or snap back', () => {
+test('host jumping rapidly while a peer has slow async YouTube seek does not ping-pong or snap back', () => {
   const { snapshots, end } = runTwoPeerSim({
     latencyMs: 40,
     peerSeekLatencyMs: 750,
@@ -391,7 +390,7 @@ test('host jumping rapidly while granted peer has slow async YouTube seek does n
   assert.ok(Math.abs(end.host - end.peer) < 1.0, `final drift too large: ${end.host - end.peer}`);
 });
 
-test('granted peer jumping into unbuffered range on host does not pause-freeze the room', () => {
+test('peer jumping into unbuffered range on host does not pause-freeze the room', () => {
   const { snapshots, end } = runTwoPeerSim({
     latencyMs: 40,
     hostBufferedEnd: 25,
@@ -406,7 +405,7 @@ test('granted peer jumping into unbuffered range on host does not pause-freeze t
   assert.ok(Math.abs(end.host - end.peer) < 0.25);
 });
 
-test('simultaneous host and granted peer jumps resolve deterministically with host winning', () => {
+test('simultaneous host and peer jumps resolve deterministically with host winning', () => {
   const { snapshots, end } = runTwoPeerSim({
     latencyMs: 40,
     events: [
@@ -426,7 +425,7 @@ test('simultaneous host and granted peer jumps resolve deterministically with ho
   assert.ok(Math.abs(end.host - end.peer) < 0.25);
 });
 
-test('granted peer rapid consecutive jumps preempt cleanly without reverting', () => {
+test('peer rapid consecutive jumps preempt cleanly without reverting', () => {
   const { snapshots, end } = runTwoPeerSim({
     latencyMs: 40,
     hostSeekLatencyMs: 400,
@@ -458,7 +457,6 @@ test('stale-rev peer seek arriving after HOST_MEDIA_PRIORITY_MS is rejected by h
     },
   });
   host.receive(encode({ type: 'hello', peerId: 'peer', name: 'Peer', roomTime: local }), local);
-  host.setGrant('peer', true);
 
   // Host jumps -> mediaRev becomes 1.
   host.sendHostMedia({ key: KEY, position: 120, playing: true, action: 'seek', rate: 1 }, local);
@@ -561,7 +559,6 @@ test('host room tab with media.pick() === null anchors non-seek peer acts to fre
     },
   });
   host.receive(encode({ type: 'hello', peerId: 'peer', name: 'Peer', roomTime: local }), local);
-  host.setGrant('peer', true);
 
   // Host film tab reports active playing state at 120s (duration 600s).
   assert.equal(
@@ -831,7 +828,7 @@ test('active local scrub drag (seeking) blocks routine ticks until seeked lands,
   assert.equal(remote.isLocalSeeking(now), false);
 });
 
-test('multi-controller hand-off, late-joining peer rev sync, and host-priority rejection never drop or poison seeks', () => {
+test('multi-peer hand-off, late-joining peer rev sync, and host-priority rejection never drop or poison seeks', () => {
   let local = 10000;
   const hostRelayed = [];
   const peerARelayed = [];
@@ -893,15 +890,13 @@ test('multi-controller hand-off, late-joining peer rev sync, and host-priority r
   }
   sentHost.length = 0;
 
-  // Peer A and Peer B join late -> receive snapshot (with mediaRev: 5) and control grants.
+  // Peer A and Peer B join late -> receive a snapshot with mediaRev: 5.
   local += 600;
   peerA.hello();
   peerB.hello();
   flushTo(sentA, [host]);
   flushTo(sentB, [host]);
   flushTo(sentHost, [peerA, peerB]);
-  host.setGrant('peerA', true);
-  host.setGrant('peerB', true);
   flushTo(sentHost, [peerA, peerB]);
 
   // Peer B's VERY FIRST seek after late join must carry rev: 6 and succeed (never stale-rev!).

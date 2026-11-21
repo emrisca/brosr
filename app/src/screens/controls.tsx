@@ -279,30 +279,16 @@ export function RoomControls({ open, onOpenChange }: Props) {
                           {peer.self ? ' (you)' : ''}
                         </span>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <Badge variant={peer.granted ? 'secondary' : 'outline'}>
-                          {peer.granted ? 'Control' : 'No control'}
-                        </Badge>
-                        {!peer.self ? (
-                          <Button
-                            size="xs"
-                            variant={peer.granted ? 'ghost' : 'secondary'}
-                            disabled={disabled}
-                            onClick={() =>
-                              act('grant', { peerId: peer.id, allowed: !peer.granted })
-                            }
-                          >
-                            {peer.granted ? 'Revoke' : 'Grant'}
-                          </Button>
-                        ) : null}
-                      </div>
+                      <Badge
+                        variant={
+                          peer.self || peer.id === state.hostId ? 'secondary' : 'outline'
+                        }
+                      >
+                        {peer.self ? 'You' : peer.id === state.hostId ? 'Host' : 'Member'}
+                      </Badge>
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Control lets a person pause the film, open tabs, and use the browser. It is
-                  per person and can be revoked at any time.
-                </p>
               </section>
 
               <Separator />
@@ -433,13 +419,6 @@ export function RoomControls({ open, onOpenChange }: Props) {
                   on={state.sync}
                   disabled={disabled}
                   onChange={(next) => act('set', { key: 'sync', on: next })}
-                />
-                <Toggle
-                  label="Suffer the same fate"
-                  note="Pause everyone while the host or a person with control buffers. People without control never hold the room."
-                  on={state.sameFate}
-                  disabled={disabled}
-                  onChange={(next) => act('set', { key: 'fate', on: next })}
                 />
                 <Toggle
                   label="Action notices"

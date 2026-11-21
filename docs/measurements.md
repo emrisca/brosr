@@ -11,7 +11,7 @@ Part of the [Brosr design index](README.md).
 | Playhead drift, 40 min | 250 ms p95 | A fixture video with a real element, sampled every 5 s |
 | Seeks per 10 min | 1 or fewer | A counter in the media adapter |
 | Relay traffic, 4 peers | 15 KB/s per peer | A relay byte counter |
-| Input to visible response, LAN | 60 ms p50 | The game fixture timestamps the keydown |
+| Room-app state to visible response, LAN | 60 ms p50 | The canvas fixture timestamps a stroke message |
 | Onboarding to first room | 3 min | A stopwatch, on a person who has not seen the app |
 
 A speed or smoothness claim without one of these counters does not ship.
@@ -24,7 +24,8 @@ Windows page counters cover loopback only.
 
 - **Unit, Node.** Protocol encode and decode, snapshot merge, and per-peer ordering. Clock
   estimator against a fake clock with constant delay and jitter. Drift controller against
-  scripted playhead sequences. Permission gate and the allowlist matcher. The drift controller
+  scripted playhead sequences. Room-app message validation and the tab-host check. The drift
+  controller
   is the one place a bug ruins a film, so it gets the most cases.
 - **Extension, geckodriver.** Firefox started with a test profile and a signed XPI, driven
   through WebDriver. Fixture pages cover the cases. `media.html` plays an encoded clip through
@@ -39,7 +40,7 @@ Windows page counters cover loopback only.
   and asserts `isTrusted` and the field value. The suite skips it on a build without the remote
   agent.
 - **Failure injection.** 200 ms delay, 5% loss and reorder. Also a peer that ignores pings, a
-  bridge background page the browser restarted, and a page that navigates inside an input
-  batch.
+  bridge background page the browser restarted, and a page that navigates while a room app
+  holds unsent state.
 - **Manual.** The start path, the install flow and the sidebar get a written script. Playwright
   cannot drive Firefox's own chrome.

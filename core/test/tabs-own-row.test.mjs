@@ -82,7 +82,7 @@ test('a peer that leaves drops its shared tabs from Live tabs', () => {
   assert.match(block, /publishSharedTabs\(\)/);
 });
 
-test('TAB_APP receiver enforces host/grant authorization, ownerId, and withdraws on revocation', () => {
+test('TAB_APP receiver enforces the owner decision and drops only the sender own row', () => {
   const start = source.indexOf('if (message.name === TAB_APP) {');
   const end = source.indexOf('window.postMessage(', start);
   assert.ok(start > 0 && end > start, 'TAB_APP block is missing');
@@ -92,6 +92,5 @@ test('TAB_APP receiver enforces host/grant authorization, ownerId, and withdraws
   assert.match(block, /action: 'close'/);
   assert.match(block, /action: 'open'/);
   assert.match(block, /forgetSharedTab\(sharedTabs, close\.key, \{ ownerId: message\.from \}\)/);
-  assert.match(source, /onControl: \(\{ peerId: targetPeer, allowed \}\) => \{/);
-  assert.match(source, /granted: Boolean\(client\.isGranted\(\)\),/);
+  assert.doesNotMatch(block, /isGranted/);
 });

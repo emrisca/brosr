@@ -686,23 +686,6 @@ li .latency {
   font-variant-numeric: tabular-nums;
 }
 
-li .grant {
-  display: inline-flex;
-  flex: none;
-  gap: 6px;
-  align-items: center;
-  color: var(--room-dim);
-  font-size: 11px;
-}
-
-li .grant::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--room-live);
-}
-
 .empty {
   justify-content: space-between;
   color: var(--room-dim);
@@ -771,25 +754,6 @@ button:focus-visible,
   border: 1px solid var(--room-border);
   background: var(--room-surface);
   font-size: 11px;
-}
-
-.control .history {
-  margin: 0;
-}
-
-.control .history:empty {
-  display: none;
-}
-
-.control .history li {
-  min-height: 0;
-  padding: 2px 0;
-  color: var(--room-dim);
-  font-size: 11px;
-}
-
-.control .history li:hover {
-  background: transparent;
 }
 
 .invite label {

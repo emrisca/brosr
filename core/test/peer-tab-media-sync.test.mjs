@@ -127,7 +127,7 @@ test('tabSyncRequest validates peer-tab sync requests', () => {
   assert.equal(tabSyncRequest(null), null);
 });
 
-test('host joining a granted peer Anidap tab syncs to peer playhead even after slow HLS load and old YouTube greet', () => {
+test('host joining a peer Anidap tab syncs to peer playhead even after slow HLS load and old YouTube greet', () => {
   let now = 10000;
   const hostSent = [];
   const peerSent = [];
@@ -144,7 +144,6 @@ test('host joining a granted peer Anidap tab syncs to peer playhead even after s
       return true;
     },
   });
-  host.setGrant('peer-1', true);
 
   const peer = createRoomClient({
     role: 'peer',
@@ -154,7 +153,6 @@ test('host joining a granted peer Anidap tab syncs to peer playhead even after s
     send: (frame) => peerSent.push(decode(frame)),
     onMedia: () => true,
   });
-  peer.receive(encode({ type: 'control', from: 'host-1', peerId: 'peer-1', allowed: true }));
 
   // Peer is watching Anidap at 90s inside the aniembed.se cross-origin iframe.
   const peerVideo = fakeVideo({ currentTime: 90, paused: false });
@@ -295,10 +293,13 @@ test('background queries published tab media state and lets active joined paused
 
   await ask(
     peerBg.messageListener,
-    { type: 'brosr:room-hello', role: 'peer', granted: true },
+    { type: 'brosr:room-hello', role: 'peer' },
     { tab: { id: 1, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-1&role=peer' } }
   );
   await ask(peerBg.messageListener, { type: 'brosr:tab-share', tabId: 42, shared: true });
+  // The hello sweep and the explicit share can name the same tab, so wait for
+  // the announcement to land before reading its media state.
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   const snapshot = await ask(peerBg.messageListener, {
     type: 'brosr:tab-media-state',
@@ -427,8 +428,6 @@ test('host joining a paused peer tab after recent host act on another film still
   });
 
   host.receive(encode({ type: 'hello', peerId: 'peer-1', name: 'Alice', roomTime: now }), now);
-  host.setGrant('peer-1', true);
-  peer.receive(encode({ type: 'control', from: 'host-1', peerId: 'peer-1', allowed: true, roomTime: now }), now);
 
   // Host was actively watching YouTube and just paused it 100ms ago (mediaRev = 1, lastHostActAt = now).
   host.sendHostMedia(
@@ -507,7 +506,6 @@ test('peer B joining peer A offered tab syncs even when host has not joined that
 
   host.receive(encode({ type: 'hello', peerId: 'peer-a', name: 'Alice', roomTime: now }), now);
   host.receive(encode({ type: 'hello', peerId: 'peer-b', name: 'Bob', roomTime: now }), now);
-  host.setGrant('peer-a', true);
   while (hostSent.length) {
     const f = hostSent.shift();
     peerA.receive(f, now);
@@ -568,7 +566,7 @@ test('background falls back to cached tab media state when brosr:media-read race
 
   await ask(
     peerBg.messageListener,
-    { type: 'brosr:room-hello', role: 'peer', granted: true },
+    { type: 'brosr:room-hello', role: 'peer' },
     { tab: { id: 1, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-1&role=peer' } }
   );
   await ask(peerBg.messageListener, { type: 'brosr:tab-share', tabId: 42, shared: true });
@@ -640,7 +638,7 @@ test('background falls back to cached tab media state when brosr:media-read race
   });
   await ask(
     joinerBg.messageListener,
-    { type: 'brosr:room-hello', role: 'peer', granted: false },
+    { type: 'brosr:room-hello', role: 'peer' },
     { tab: { id: 10, url: 'http://127.0.0.1:8787/?room=r1&peer=peer-2&role=peer' } }
   );
   const joined = await ask(joinerBg.messageListener, {

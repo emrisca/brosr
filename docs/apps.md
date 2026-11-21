@@ -128,9 +128,8 @@ with, so a room whose host page closed has peers and no host, and the landing pa
 - The button navigates the page to the same URL with `role=host` and `peer=host`. The core falls
   back to the id `host` for a host socket, and the relay names the host by that id, so the two
   travel together. One without the other joins as a second peer and the room stays hostless.
-- The room, the name, the relay port and the key in the fragment ride along, and a guest grant
-  drops, because a grant belongs to the guest role.
-- The offer grants nothing new. Any peer holding the room link could already open it with
+- The room, the name, the relay port and the key in the fragment ride along.
+- The offer gives nothing new. Any peer holding the room link could already open it with
   `role=host`, and the button only reads the state the relay already reported.
 
 ### Watch, the sites that play in sync

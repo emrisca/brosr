@@ -240,7 +240,7 @@ and are tagged explicitly.
       `/status` counts (`ae56e90`) and `peer.mjs` journals `peerIds`; the LAN hour should
       confirm four entries with no extra entry across Windows and Mac.
 
-### Input and grants
+### Input and room apps
 
 - [x] Wheel events through synthetic replay, BiDi, and CDP (unit and actuator boundary).
       `wheelRecord` and `replayInput` handle deltas, `deltaMode`, coordinates, and modifiers;
@@ -249,13 +249,12 @@ and are tagged explicitly.
       `host/test/trust.test.mjs`). Live two-browser confirmation remains open.
 - [x] Pointer lock refusal written down and enforced under Guardrail #5. Documented in
       [safety.md](safety.md) and enforced with structured `{ allow: false, reason, message }`
-      decisions across capture, batching, grant checks, replay, and trusted helpers
+      decisions across capture, batching, replay, and trusted helpers
       (`core/test/input-trust-parity.test.mjs`).
 - [ ] **(Hardware / two-machine)** A two-machine canvas game, ten minutes, no visible desync.
       Both presses so far were on one machine.
 - [ ] **(Live)** Wheel events through the relay on a live room.
-- [ ] **(Live)** The grant UI in the panel end to end: grant a peer, relay a click, revoke, and
-      show the bar in both places.
+- [ ] **(Live)** A room app edit on two peers, with no duplicate cursor or key injection.
 
 ### App, install and onboarding
 

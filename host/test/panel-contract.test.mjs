@@ -10,13 +10,9 @@ const app = path.join(here, '..', '..', 'app', 'src');
 
 test('the app sends the field names the CLI schema accepts', () => {
   const controls = fs.readFileSync(path.join(app, 'screens', 'controls.tsx'), 'utf8');
-  assert.match(controls, /act\('grant', \{ peerId: peer\.id, allowed: !peer\.granted \}\)/);
   assert.match(controls, /act\('tab', \{ tabId: tab\.id, shared: !tab\.shared \}\)/);
+  assert.doesNotMatch(controls, /act\('grant'/);
 
-  assert.deepEqual(
-    parsePanelArgs(['--action=grant', '--peerId=guest-1', '--allowed=true']).values,
-    { peerId: 'guest-1', allowed: true }
-  );
   assert.deepEqual(
     parsePanelArgs(['--action=tab', '--tabId=9', '--shared=false']).values,
     { tabId: 9, shared: false }

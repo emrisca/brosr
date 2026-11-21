@@ -9,8 +9,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 test('the app field names parse into one panel request', () => {
   assert.deepEqual(
-    parsePanelArgs(['--action=grant', '--peerId=guest-1', '--allowed=true']),
-    { action: 'grant', values: { peerId: 'guest-1', allowed: true }, guest: false }
+    parsePanelArgs(['--action=room-name', '--value=Friday film']),
+    { action: 'room-name', values: { value: 'Friday film' }, guest: false }
   );
   assert.deepEqual(
     parsePanelArgs(['--action=tab', '--tabId=42', '--shared=false']),
@@ -28,10 +28,6 @@ test('the app field names parse into one panel request', () => {
 
 test('the old short names still normalize to the same fields', () => {
   assert.deepEqual(
-    parsePanelArgs(['--action=grant', '--peer=guest-1', '--allow=false']).values,
-    { peerId: 'guest-1', allowed: false }
-  );
-  assert.deepEqual(
     parsePanelArgs(['--action=tab', '--tab=7', '--shared=true']).values,
     { tabId: 7, shared: true }
   );
@@ -39,20 +35,20 @@ test('the old short names still normalize to the same fields', () => {
 
 test('an unknown field or action is refused instead of ignored', () => {
   assert.throws(
-    () => parsePanelArgs(['--action=grant', '--peerId=guest-1', '--allowed=true', '--colour=red']),
+    () => parsePanelArgs(['--action=tab', '--tabId=7', '--shared=true', '--colour=red']),
     /unknown panel field/
   );
   assert.throws(() => parsePanelArgs(['--action=shrug']), /unknown panel action/);
   assert.throws(
-    () => parsePanelArgs(['--action=status', '--peerId=guest-1']),
+    () => parsePanelArgs(['--action=status', '--tabId=7']),
     /not used by the status action/
   );
 });
 
 test('a required field is named in the error', () => {
   assert.throws(
-    () => parsePanelArgs(['--action=grant', '--peerId=guest-1']),
-    /needs --allowed/
+    () => parsePanelArgs(['--action=scroll-site', '--site=https://example.com/']),
+    /needs --on/
   );
   assert.throws(() => parsePanelArgs(['--action=tab', '--tabId=4']), /needs --shared/);
   assert.throws(
@@ -111,7 +107,6 @@ test('a refused panel command carries a machine-readable reason', () => {
   const source = fs.readFileSync(path.join(here, '..', 'browser-entry.mjs'), 'utf8');
   assert.match(source, /const refusal = \(message, reason\)/);
   assert.match(source, /refuse\(error, error\.reason \|\| 'command'\)/);
-  assert.match(source, /'not-in-room'/);
   const host = fs.readFileSync(path.join(here, '..', '..', 'host', 'panel.mjs'), 'utf8');
   assert.match(host, /error\.reason = String\(data\.reason\)/);
 });
@@ -125,9 +120,9 @@ test('panel payloads seal under panelToken and reject plaintext or wrong tokens'
 
   const payload = {
     requestId: 'req-1',
-    action: 'grant',
-    peerId: 'guest-1',
-    allowed: true,
+    action: 'tab',
+    tabId: 7,
+    shared: true,
     tabs: [{ id: 7, url: 'https://bank.private.example/account', title: 'Private Banking' }],
   };
   const envelope = sealPanelPayload(token, payload, { room: 'room-alpha' });
@@ -135,7 +130,7 @@ test('panel payloads seal under panelToken and reject plaintext or wrong tokens'
   assert.equal(typeof envelope.sealed, 'string');
   const wire = JSON.stringify(envelope);
   assert.equal(wire.includes(token), false, 'raw panelToken never appears on the wire');
-  assert.equal(wire.includes('grant'), false, 'action never appears in plaintext');
+  assert.equal(wire.includes('tabId'), false, 'fields never appear in plaintext');
   assert.equal(wire.includes('bank.private.example'), false, 'private tab URL never appears');
   assert.equal(wire.includes('Private Banking'), false, 'private tab title never appears');
 
@@ -147,7 +142,7 @@ test('panel payloads seal under panelToken and reject plaintext or wrong tokens'
   // Unsealed plaintext frames with raw data.token are refused.
   const plaintext = openPanelPayload(
     token,
-    { token, requestId: 'req-1', action: 'grant', peerId: 'guest-1', allowed: true },
+    { token, requestId: 'req-1', action: 'tab', tabId: 7, shared: true },
     { room: 'room-alpha' }
   );
   assert.deepEqual(plaintext, { ok: false, payload: null, reason: 'unsealed' });

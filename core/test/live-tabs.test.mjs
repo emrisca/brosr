@@ -71,12 +71,12 @@ test('a media frame updates one row and adds none', () => {
   assert.equal(noteSharedMedia([a, b], null).length, 2);
 });
 
-test('a granted peer counts as control and a stranger cannot claim the host', () => {
+test('a peer offer keeps the peer role and its own owner id', () => {
   const peer = sharedTab(
     { action: 'open', url: film, key: '3', owner: 'Bo', role: 'host' },
     { from: 'peer-2', hostId: 'host-1' }
   );
-  assert.equal(peer.role, 'control');
+  assert.equal(peer.role, 'peer');
   assert.equal(peer.ownerId, 'peer-2');
 });
 
@@ -130,7 +130,7 @@ test('the list keeps a readable cap', () => {
   assert.equal(list[0].key, String(MAX_SHARED_TABS + 4));
 });
 
-test('tabActionDecision enforces host/grant auth and ownerId with structured reasons (Guardrail #5)', () => {
+test('tabActionDecision lets any member offer a tab and limits changes to its owner (Guardrail #5)', () => {
   const hostOffer = sharedTab(
     { action: 'open', url: film, key: '964436478', owner: 'Host' },
     { from: 'host', hostId: 'host' }
@@ -141,47 +141,57 @@ test('tabActionDecision enforces host/grant auth and ownerId with structured rea
   );
   const list = [hostOffer, peerOffer];
 
-  // Ungranted peer cannot open, update media, or close any tab.
+  // Any room member may offer a new tab and becomes that row's tab host.
   assert.deepEqual(
-    tabActionDecision({ action: 'open', key: 'evil', from: 'adv', hostId: 'host', granted: false, list }),
-    { allow: false, reason: 'no-control' }
-  );
-  assert.deepEqual(
-    tabActionDecision({ action: 'media', key: '964436478', from: 'adv', hostId: 'host', granted: false, list }),
-    { allow: false, reason: 'no-control' }
-  );
-  assert.deepEqual(
-    tabActionDecision({ action: 'close', key: '964436478', from: 'adv', hostId: 'host', granted: false, list }),
-    { allow: false, reason: 'no-control' }
+    tabActionDecision({ action: 'open', key: 'evil', from: 'adv', list }),
+    { allow: true, reason: 'ok' }
   );
 
-  // Even a granted peer cannot overwrite, toggle media on, or close the host row.
+  // Only the owner may change the video, media state, or close an existing row.
+  for (const action of ['open', 'media', 'close']) {
+    assert.deepEqual(
+      tabActionDecision({ action, key: '964436478', from: 'peer-1', list }),
+      { allow: false, reason: 'not-owner' }
+    );
+    assert.deepEqual(
+      tabActionDecision({ action, key: '200', from: 'host', list }),
+      { allow: false, reason: 'not-owner' }
+    );
+  }
+
+  // The owner keeps its own row.
   assert.deepEqual(
-    tabActionDecision({ action: 'open', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
-    { allow: false, reason: 'not-owner' }
+    tabActionDecision({ action: 'open', key: '964436478', from: 'host', list }),
+    { allow: true, reason: 'ok' }
   );
   assert.deepEqual(
-    tabActionDecision({ action: 'media', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
-    { allow: false, reason: 'not-owner' }
-  );
-  assert.deepEqual(
-    tabActionDecision({ action: 'close', key: '964436478', from: 'peer-1', hostId: 'host', granted: true, list }),
-    { allow: false, reason: 'not-owner' }
+    tabActionDecision({ action: 'close', key: '200', from: 'peer-1', list }),
+    { allow: true, reason: 'ok' }
   );
 
-  // Host and granted peer can manage their own entries.
+  // A media or close frame needs a row that exists.
   assert.deepEqual(
-    tabActionDecision({ action: 'open', key: '964436478', from: 'host', hostId: 'host', granted: false, list }),
-    { allow: true, reason: 'ok' }
+    tabActionDecision({ action: 'media', key: 'missing', from: 'peer-1', list }),
+    { allow: false, reason: 'no-offer' }
   );
   assert.deepEqual(
-    tabActionDecision({ action: 'close', key: '200', from: 'peer-1', hostId: 'host', granted: true, list }),
-    { allow: true, reason: 'ok' }
+    tabActionDecision({ action: 'close', key: 'missing', from: 'peer-1', list }),
+    { allow: false, reason: 'no-offer' }
   );
-  assert.deepEqual(
-    tabActionDecision({ action: 'open', key: '201', from: 'peer-1', hostId: 'host', granted: true, list }),
-    { allow: true, reason: 'ok' }
-  );
+
+  // A malformed frame is refused by name.
+  assert.deepEqual(tabActionDecision({ action: 'open', key: 'x' }), {
+    allow: false,
+    reason: 'no-sender',
+  });
+  assert.deepEqual(tabActionDecision({ action: 'rename', key: 'x', from: 'host' }), {
+    allow: false,
+    reason: 'bad-action',
+  });
+  assert.deepEqual(tabActionDecision({ action: 'open', key: '', from: 'host' }), {
+    allow: false,
+    reason: 'no-key',
+  });
 });
 
 test('rememberSharedTab, forgetSharedTab, and noteSharedMedia enforce ownerId', () => {
@@ -232,33 +242,42 @@ test('rememberSharedTab preserves playing state and row order on same-URL title 
   assert.equal(refreshed[1].playing, true);
 });
 
-test('tabMediaControlDecision enforces controller authority, local tab presence, and clamped skips', () => {
+test('tabMediaControlDecision opens transport to any local peer and clamps skips', () => {
+  assert.deepEqual(tabMediaControlDecision({ key: '10', action: 'toggle', joined: true }), {
+    allow: true,
+    reason: 'ok',
+    key: '10',
+    action: 'toggle',
+    delta: 0,
+  });
   assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'peer', granted: false, joined: true }),
-    { allow: false, reason: 'no-control' }
-  );
-  assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'host', mine: false, joined: false }),
+    tabMediaControlDecision({ key: '10', action: 'toggle', mine: false, joined: false }),
     { allow: false, reason: 'not-local' }
   );
+  assert.deepEqual(tabMediaControlDecision({ key: '', action: 'toggle', mine: true }), {
+    allow: false,
+    reason: 'no-key',
+  });
   assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'seek', role: 'host', mine: true }),
+    tabMediaControlDecision({ key: '10', action: 'seek', mine: true }),
     { allow: false, reason: 'bad-action' }
   );
   assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'skip', delta: 0, role: 'host', mine: true }),
+    tabMediaControlDecision({ key: '10', action: 'skip', delta: 0, mine: true }),
     { allow: false, reason: 'bad-delta' }
   );
-  assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'toggle', role: 'host', mine: true }),
-    { allow: true, reason: 'ok', key: '10', action: 'toggle', delta: 0 }
-  );
-  assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'skip', delta: -10, role: 'peer', granted: true, joined: true }),
-    { allow: true, reason: 'ok', key: '10', action: 'skip', delta: -10 }
-  );
-  assert.deepEqual(
-    tabMediaControlDecision({ key: '10', action: 'skip', delta: 9999, role: 'host', joined: true }),
-    { allow: true, reason: 'ok', key: '10', action: 'skip', delta: MAX_TAB_SKIP_SECONDS }
-  );
+  assert.deepEqual(tabMediaControlDecision({ key: '10', action: 'skip', delta: -10, joined: true }), {
+    allow: true,
+    reason: 'ok',
+    key: '10',
+    action: 'skip',
+    delta: -10,
+  });
+  assert.deepEqual(tabMediaControlDecision({ key: '10', action: 'skip', delta: 9999, joined: true }), {
+    allow: true,
+    reason: 'ok',
+    key: '10',
+    action: 'skip',
+    delta: MAX_TAB_SKIP_SECONDS,
+  });
 });

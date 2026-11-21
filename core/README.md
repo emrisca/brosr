@@ -14,7 +14,7 @@ script and a Node test drive the same modules.
 | `room.mjs` | Peers, sequence, URL, scroll ratio, viewport drift, both rate limits |
 | `live-tabs.mjs` | Shared tab offers: validation, owner and host role, dedupe, forget on close, playback state, grouping per person |
 | `overlay.mjs` | Cursor overlay inside one closed shadow root |
-| `input.mjs` | Batcher, grants, origin allowlist, sensitive fields, targeting, replay |
+| `input.mjs` | Receiver-side guards: pointer lock, scroll policy, sensitive fields, tab-opening clicks |
 | `trust.mjs` | Record to BiDi action mapping and the page-side trusted client |
 | `seal.mjs` | Room key, HKDF-SHA256 expansion, XChaCha20-Poly1305 frames, invite link |
 | `sync.mjs` | The client that wires the rest, relays app messages, with an injected transport |
@@ -34,7 +34,6 @@ const client = createRoomClient({
   viewport: () => ({ url: location.href, scroll: 0, fingerprint }),
   navigate: (url) => location.assign(url),
   scrollTo: (ratio) => window.scrollTo(0, ratio * maxScroll),
-  input: { capture: true, grantTo: null, tabId: 'tab-1', origin: location.origin },
   send: (frame) => socket.send(frame),
 });
 
@@ -55,8 +54,8 @@ Each one cost a spike run to learn.
    reaches any of the targets. A seek can also leave the element paused.
 4. The host announces the page, not the tab. Room parameters stay out of the followed URL, or
    every peer reloads with the host's role.
-5. An input frame names its sender. The receiver looks up the grant by peer, and it refuses a
-   frame without `peerId`.
+5. A shared tab belongs to the person who offered it. Any peer may play, pause or seek it, but
+   only its host changes the source.
 
 `npm test` runs the suite with the Node test runner and no dependencies. The wire test also runs
 against the axum relay when `RELAY_BIN` names its binary.
@@ -65,6 +64,7 @@ A room whose invite carries a key seals every frame it sends, and it drops an un
 instead of trusting it. A key that fails to derive refuses the connection rather than falling
 back to plain text.
 
-Nothing here opens a socket, draws outside the shadow root, or reads a cookie. Input and grants
-live in `input.mjs`. `trust.mjs` turns one record into one browser action, and `host/trust.mjs`
-owns the loopback agent that applies it while a grant is active.
+Nothing here opens a socket, draws outside the shadow root, or reads a cookie. `input.mjs` holds
+the receiver-side guards. `trust.mjs` turns one record into one browser action, and
+`host/trust.mjs` owns the loopback agent that applies it. The room path does not relay DOM
+input, so this agent stays outside the tab-host control split.

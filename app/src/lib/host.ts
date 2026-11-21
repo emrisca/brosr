@@ -120,7 +120,6 @@ export type PanelPeer = {
   id: string;
   name: string;
   self?: boolean;
-  granted?: boolean;
   colour?: string | null;
   build?: BridgeBuild;
 };
@@ -148,7 +147,6 @@ export type PanelState = {
     buffering?: boolean;
     ad?: boolean;
   } | null;
-  sameFate: boolean;
   sync: boolean;
   notices: boolean;
   auto: boolean;
@@ -165,7 +163,6 @@ export type PanelState = {
 
 export type PanelAction =
   | 'status'
-  | 'grant'
   | 'cursor-site'
   | 'cursor-forget'
   | 'scroll-site'
@@ -175,8 +172,6 @@ export type PanelAction =
   | 'trust';
 
 export type PanelValues = Partial<{
-  peerId: string;
-  allowed: boolean;
   site: string;
   on: boolean;
   value: string;

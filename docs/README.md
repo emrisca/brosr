@@ -10,7 +10,7 @@ The design is split by subject so a reader can open one file. The old single fil
 | [sync.md](sync.md) | The five sync layers, the wire protocol, the media policy and input. |
 | [tab-share-plan.md](tab-share-plan.md) | Planned opt-in single-tab screen-share fallback (room panel, E2EE WebRTC signaling, alternatives). |
 | [architecture.md](architecture.md) | The parts of a room, the browser surface and the transport. |
-| [safety.md](safety.md) | Grants, the origin allowlist, sealing and rate limits. |
+| [safety.md](safety.md) | Remote input policy, tab authority, sealing and rate limits. |
 | [privacy.md](privacy.md) | What stays end-to-end sealed, what the relay sees, and what never crosses it. |
 | [milestones.md](milestones.md) | M0 to M8, each with its done-when and the as-built notes. |
 | [measurements.md](measurements.md) | The numbers a claim must meet, and the test lanes. |

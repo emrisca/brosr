@@ -20,6 +20,7 @@
         <circle cx="13" cy="9.5" r="1.2" fill="currentColor"></circle>
       </svg>
       <span class="brand-name">Brosr</span>
+      <span class="brand-tag">One browser for the whole room</span>
     </div>
     <div class="room-bar">
       <p class="room-state" id="room-state">
@@ -34,65 +35,98 @@
     <section class="live" id="live-tabs" aria-labelledby="live-title" data-brosr-local="1" hidden>
       <div class="live-head">
         <div class="live-heading">
-          <h2 class="live-title" id="live-title">Live tabs</h2>
-          <p class="live-note">Offers from the host and anyone with control. Open a tab to join and sync, Stop or close it to leave. Controllers can play, pause, skip, or focus a tab to change video.</p>
+          <h2 class="live-title" id="live-title"><span class="live-pulse" aria-hidden="true"></span>Live tabs</h2>
+          <p class="live-note">Everyone can play, pause and seek. Whoever shared a tab hosts it and is the only one who changes its video.</p>
         </div>
         <p class="live-count" id="live-count" aria-live="polite"></p>
       </div>
       <div class="live-groups" id="live-groups"></div>
-      <p class="live-empty" id="live-empty">Nobody has shared a tab yet. This section fills when a person with control opens one.</p>
+      <p class="live-empty" id="live-empty">Nobody has shared a tab yet. When someone in the room shares one, it shows up here under their name.</p>
     </section>
 
-    <section class="bento" id="tiles" aria-label="Room apps" data-brosr-local="1">
+    <section class="deck" id="tiles" aria-label="Room apps" data-brosr-local="1">
       <a class="tile tile-youtube" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="youtube-title" data-brosr-local="1">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <rect x="3" y="6" width="18" height="12" rx="3"></rect>
-                <path d="M10.5 9.5l4.5 2.5-4.5 2.5v-5z"></path>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="youtube-title">YouTube</h2>
-              <p class="tile-note">Videos with one playhead for the room.</p>
-            </div>
-          </div>
-        </div>
-        <span class="tile-open">
-          Open YouTube
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
+        <span class="tile-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="3" y="6" width="18" height="12" rx="3"></rect>
+            <path d="M10.5 9.5l4.5 2.5-4.5 2.5v-5z"></path>
           </svg>
         </span>
+        <div class="tile-copy">
+          <h2 class="tile-name" id="youtube-title">YouTube</h2>
+          <p class="tile-note">Videos with one playhead for the room.</p>
+        </div>
+        <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M7 17 17 7M8 7h9v9"></path>
+        </svg>
       </a>
 
       <a class="tile tile-music" href="https://music.youtube.com/" target="_blank" rel="noopener noreferrer" aria-labelledby="music-title" data-brosr-local="1">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M9 18V6l10-2v12"></path>
-                <circle cx="6.5" cy="18" r="2.5"></circle>
-                <circle cx="16.5" cy="16" r="2.5"></circle>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="music-title">YouTube Music</h2>
-              <p class="tile-note" id="music-note">Music with one playhead for the room.</p>
-            </div>
-          </div>
-        </div>
-        <span class="tile-open">
-          Open YouTube Music
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
+        <span class="tile-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M9 18V6l10-2v12"></path>
+            <circle cx="6.5" cy="18" r="2.5"></circle>
+            <circle cx="16.5" cy="16" r="2.5"></circle>
           </svg>
         </span>
+        <div class="tile-copy">
+          <h2 class="tile-name" id="music-title">YouTube Music</h2>
+          <p class="tile-note" id="music-note">Music with one playhead for the room.</p>
+        </div>
+        <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M7 17 17 7M8 7h9v9"></path>
+        </svg>
+      </a>
+
+      <a class="tile tile-play" href="./chess/" target="_blank" rel="noopener" aria-labelledby="play-title" data-brosr-local="1">
+        <span class="tile-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M7 20h10M8.5 17h7l-1.2-4.5 3-2.2-3.6-5.1-3 2.8 1.2 2.1-3.2 3.2 1.1 2.2-1 1.5z"></path>
+          </svg>
+        </span>
+        <div class="tile-copy">
+          <h2 class="tile-name" id="play-title">Play</h2>
+          <p class="tile-note">Chess with both players at one board.</p>
+        </div>
+        <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M7 17 17 7M8 7h9v9"></path>
+        </svg>
+      </a>
+
+      <a class="tile tile-canvas" href="./canvas/" target="_blank" rel="noopener" aria-labelledby="canvas-title" data-brosr-local="1">
+        <span class="tile-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
+            <path d="M13.5 5.5l4 4"></path>
+          </svg>
+        </span>
+        <div class="tile-copy">
+          <h2 class="tile-name" id="canvas-title">Canvas</h2>
+          <p class="tile-note">One surface. Every stroke lands for the room.</p>
+        </div>
+        <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M7 17 17 7M8 7h9v9"></path>
+        </svg>
+      </a>
+
+      <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title" data-brosr-local="1">
+        <span class="tile-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M5 4h10l4 4v12H5V4z"></path>
+            <path d="M8 10h8M8 14h8M8 18h5"></path>
+          </svg>
+        </span>
+        <div class="tile-copy">
+          <h2 class="tile-name" id="notes-title">Notes</h2>
+          <p class="tile-note">A page for the room, saved on the host.</p>
+        </div>
+        <svg class="tile-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+          <path d="M7 17 17 7M8 7h9v9"></path>
+        </svg>
       </a>
 
       <article class="tile tile-watch" aria-labelledby="watch-title" data-brosr-local="1">
-        <div class="tile-head">
+        <div class="watch-bar">
           <div class="tile-heading">
             <span class="tile-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
@@ -105,13 +139,19 @@
               <p class="tile-note">Starred picks from FMHY, with one playhead for everyone.</p>
             </div>
           </div>
+          <div class="site-filter">
+            <label class="site-filter-label" for="site-filter">Filter sites</label>
+            <span class="site-filter-field">
+              <svg class="site-filter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <circle cx="11" cy="11" r="6.5"></circle>
+                <path d="m16 16 4 4"></path>
+              </svg>
+              <input class="site-filter-input" id="site-filter" type="search" placeholder="Filter by name or host" autocomplete="off" spellcheck="false" aria-controls="watch-sites" data-brosr-local="1">
+            </span>
+            <span class="site-filter-count" id="site-filter-count" aria-live="polite"></span>
+          </div>
         </div>
-        <div class="site-filter">
-          <label class="site-filter-label" for="site-filter">Filter</label>
-          <input class="site-filter-input" id="site-filter" type="search" placeholder="Name or host" autocomplete="off" spellcheck="false" aria-controls="watch-sites" data-brosr-local="1">
-          <span class="site-filter-count" id="site-filter-count" aria-live="polite"></span>
-          <p class="site-empty" id="site-empty" hidden>No site matches that name.</p>
-        </div>
+        <p class="site-empty" id="site-empty" hidden>No site matches that name.</p>
         <div class="site-groups" id="watch-sites" data-brosr-local="1">
           <section class="site-group site-group-wide" aria-labelledby="watch-aggregators">
             <h3 class="site-group-title" id="watch-aggregators">Stream Aggregators</h3>
@@ -177,74 +217,6 @@
           </section>
         </div>
       </article>
-
-      <a class="tile tile-play" href="./chess/" target="_blank" rel="noopener" aria-labelledby="play-title" data-brosr-local="1">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M7 20h10M8.5 17h7l-1.2-4.5 3-2.2-3.6-5.1-3 2.8 1.2 2.1-3.2 3.2 1.1 2.2-1 1.5z"></path>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="play-title">Play</h2>
-              <p class="tile-note">Chess with both players at one board.</p>
-            </div>
-          </div>
-        </div>
-        <span class="tile-open">
-          Open chess
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
-          </svg>
-        </span>
-      </a>
-
-      <a class="tile tile-notes" href="./notes/" target="_blank" rel="noopener" aria-labelledby="notes-title" data-brosr-local="1">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M5 4h10l4 4v12H5V4z"></path>
-                <path d="M8 10h8M8 14h8M8 18h5"></path>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="notes-title">Notes</h2>
-              <p class="tile-note">A page for the room, saved on the host.</p>
-            </div>
-          </div>
-        </div>
-        <span class="tile-open">
-          Open notes
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
-          </svg>
-        </span>
-      </a>
-
-      <a class="tile tile-canvas" href="./canvas/" target="_blank" rel="noopener" aria-labelledby="canvas-title" data-brosr-local="1">
-        <div class="tile-head">
-          <div class="tile-heading">
-            <span class="tile-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-                <path d="M4 20l3.2-1 10.4-10.4a2.2 2.2 0 0 0-3.2-3.2L4 15.8 4 20z"></path>
-                <path d="M13.5 5.5l4 4"></path>
-              </svg>
-            </span>
-            <div class="tile-copy">
-              <h2 class="tile-name" id="canvas-title">Canvas</h2>
-              <p class="tile-note">Draw on one surface. Every stroke lands for the room.</p>
-            </div>
-          </div>
-        </div>
-        <span class="tile-open">
-          Open canvas
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-            <path d="M7 17 17 7M8 7h9v9"></path>
-          </svg>
-        </span>
-      </a>
     </section>
   </main>
 
@@ -310,7 +282,8 @@
 
       // The host id is what the room names the host by, and the core falls
       // back to "host" for a host socket. Setting both keeps the new host and
-      // its id in step. A grant belongs to the guest role, so it drops here.
+      // its id in step. An old invite may still carry a grant query, so it
+      // drops here.
       if (takeover) {
         takeover.addEventListener('click', function (event) {
           if (event && event.isTrusted === false) return;
@@ -577,11 +550,14 @@
       read();
       setInterval(read, 2000);
     })();
-    // A tab in the room is an offer. This section lists what the host and
-    // people with control published, one group per person. A row opens a copy
-    // only on a click, and closing that copy leaves the sync. The core posts
-    // the list on this window and leaves it on the document, so a reload
-    // starts with the last state.
+    // A tab in the room is an offer. Anyone in the room can share a tab, and
+    // the person who shares it hosts it: only they change its video. Everyone
+    // who holds the tab, the person hosting it or anyone who joined it, can
+    // play, pause and seek. There is no grant to ask for. This section lists
+    // the offers in one group per person hosting them. A row opens a copy
+    // only on a click, and Stop leaves the sync with the tab still open. The
+    // core posts the list on this window and leaves it on the document, so a
+    // reload starts with the last state.
     (function () {
       var section = document.getElementById('live-tabs');
       var groupsBox = document.getElementById('live-groups');
@@ -600,8 +576,20 @@
         }
       }
 
+      // The badge names the room host. Everyone else is a member, and no
+      // badge implies authority over anyone else, because the room hands none
+      // out.
       function roleName(role) {
-        return role === 'host' ? 'Host' : 'Control';
+        return role === 'host' ? 'Host' : 'Member';
+      }
+
+      function initialOf(name) {
+        var text = String(name || '').trim();
+        return text ? text.charAt(0).toUpperCase() : '?';
+      }
+
+      function plural(n, one, many) {
+        return n === 1 ? '1 ' + one : n + ' ' + many;
       }
 
       // A tab with a player says whether it plays. A tab without one keeps no
@@ -646,7 +634,7 @@
         back.dataset.key = tab.key;
         back.dataset.action = 'skip-back';
         back.textContent = '-10s';
-        back.title = 'Skip back 10 seconds';
+        back.title = 'Skip back 10 seconds for the room';
         back.setAttribute('aria-label', 'Skip back 10 seconds');
         back.addEventListener('click', function (event) {
           if (!event.isTrusted) return;
@@ -672,7 +660,7 @@
         fwd.dataset.key = tab.key;
         fwd.dataset.action = 'skip-forward';
         fwd.textContent = '+10s';
-        fwd.title = 'Skip forward 10 seconds';
+        fwd.title = 'Skip forward 10 seconds for the room';
         fwd.setAttribute('aria-label', 'Skip forward 10 seconds');
         fwd.addEventListener('click', function (event) {
           if (!event.isTrusted) return;
@@ -690,7 +678,7 @@
         focus.dataset.key = tab.key;
         focus.textContent = 'Focus';
         focus.title = mine
-          ? 'Switch to this tab to change video or scrub'
+          ? 'Switch to this tab. You host it, so you can change its video there'
           : 'Switch to your synced copy of this tab';
         focus.addEventListener('click', function (event) {
           if (!event.isTrusted) return;
@@ -700,8 +688,12 @@
       }
 
       function row(tab, state, mine) {
+        var joined = (state.joined || []).indexOf(tab.key) !== -1;
         var item = document.createElement('li');
-        item.className = 'live-row';
+        item.className = mine ? 'live-row is-mine' : joined ? 'live-row is-joined' : 'live-row';
+        if (typeof tab.playing === 'boolean') {
+          item.classList.add(tab.playing ? 'is-playing' : 'is-paused');
+        }
         var text = document.createElement('span');
         text.className = 'live-tab';
         var title = document.createElement('span');
@@ -719,22 +711,24 @@
         text.append(title, meta);
         item.append(text);
 
-        var joined = (state.joined || []).indexOf(tab.key) !== -1;
-        var canControl = Boolean(state.canControl || state.role === 'host');
         var actions = document.createElement('div');
         actions.className = 'live-row-actions';
 
-        if (canControl && (mine || joined) && typeof tab.playing === 'boolean') {
+        // Everyone who holds the tab can play, pause and seek it. Holding
+        // means this browser shared it or joined it, so a row that is only on
+        // offer has no copy here to drive yet.
+        if ((mine || joined) && typeof tab.playing === 'boolean') {
           actions.append(mediaControls(tab));
         }
 
-        // The publisher already has this tab, so its own row reports Sharing
-        // and lets them jump right back to it or drive playback inline.
+        // The person hosting the tab already has it, so their own row reports
+        // Sharing and lets them jump right back to it.
         if (mine) {
           actions.append(focusButton(tab, true));
           var mark = document.createElement('span');
           mark.className = 'live-state is-mine';
           mark.textContent = 'Sharing';
+          mark.title = 'You host this tab, so only you change its video';
           actions.append(mark);
           item.append(actions);
           return item;
@@ -769,12 +763,13 @@
         button.className = 'live-action';
         button.dataset.key = tab.key;
         button.setAttribute('aria-pressed', 'false');
+        button.title = 'Open a synced copy of this tab';
         if (waiting) button.disabled = true;
-        button.textContent = waiting ? 'Opening' : 'Open';
+        button.textContent = waiting ? 'Joining' : 'Join';
         button.addEventListener('click', function (event) {
           if (!event.isTrusted) return;
           pending = tab.key;
-          button.textContent = 'Opening';
+          button.textContent = 'Joining';
           button.disabled = true;
           window.postMessage(
             { source: 'brosr-app', type: 'join-tab', key: tab.key },
@@ -793,7 +788,7 @@
         return item;
       }
 
-      // Stop leaves the tab open. The row goes back to Open at once, and the
+      // Stop leaves the tab open. The row goes back to Join at once, and the
       // core drops the copy from this browser without closing it.
       function stopTab(key) {
         if (!current) return;
@@ -808,19 +803,28 @@
         );
       }
 
+      function isMine(entry, state) {
+        return Boolean(state.peerId && entry.ownerId === state.peerId);
+      }
+
       function group(entry, state) {
-        var mine = Boolean(state.peerId && entry.ownerId === state.peerId);
+        var mine = isMine(entry, state);
         var box = document.createElement('section');
         box.className = mine ? 'live-group is-mine' : 'live-group';
         var head = document.createElement('header');
         head.className = 'live-owner';
+        var avatar = document.createElement('span');
+        avatar.className = 'live-avatar';
+        avatar.setAttribute('aria-hidden', 'true');
+        avatar.textContent = initialOf(entry.owner || 'Guest');
         var who = document.createElement('span');
         who.className = 'live-owner-name';
         who.textContent = entry.owner || 'Guest';
         var role = document.createElement('span');
         role.className = entry.role === 'host' ? 'live-role is-host' : 'live-role';
         role.textContent = roleName(entry.role);
-        head.append(who, role);
+        role.title = entry.role === 'host' ? 'Room host' : 'Room member';
+        head.append(avatar, who, role);
         if (mine) {
           var you = document.createElement('span');
           you.className = 'live-you';
@@ -830,7 +834,7 @@
         var tabs = entry.tabs || [];
         var groupCount = document.createElement('span');
         groupCount.className = 'live-group-count';
-        groupCount.textContent = tabs.length === 1 ? '1 tab' : tabs.length + ' tabs';
+        groupCount.textContent = plural(tabs.length, 'tab', 'tabs');
         head.append(groupCount);
         var list = document.createElement('ul');
         list.className = 'live-list';
@@ -839,6 +843,13 @@
         });
         box.append(head, list);
         return box;
+      }
+
+      // Your own group leads, then the room host, then everyone else in the
+      // order the core sent them.
+      function rank(entry, state) {
+        if (isMine(entry, state)) return 0;
+        return entry.role === 'host' ? 1 : 2;
       }
 
       function render(state) {
@@ -851,12 +862,34 @@
         section.hidden = false;
         groupsBox.textContent = '';
         var total = 0;
-        state.groups.forEach(function (entry) {
-          total += (entry.tabs || []).length;
-          groupsBox.append(group(entry, state));
-        });
+        var people = 0;
+        var playing = 0;
+        state.groups
+          .map(function (entry, index) {
+            return { entry: entry, index: index };
+          })
+          .sort(function (a, b) {
+            return rank(a.entry, state) - rank(b.entry, state) || a.index - b.index;
+          })
+          .forEach(function (item) {
+            var tabs = item.entry.tabs || [];
+            if (!tabs.length) return;
+            total += tabs.length;
+            people += 1;
+            tabs.forEach(function (tab) {
+              if (tab.playing === true) playing += 1;
+            });
+            groupsBox.append(group(item.entry, state));
+          });
         empty.hidden = total !== 0;
-        count.textContent = total === 0 ? '' : total === 1 ? '1 tab' : total + ' tabs';
+        section.classList.toggle('is-empty', total === 0);
+        count.textContent =
+          total === 0
+            ? ''
+            : plural(total, 'tab', 'tabs') +
+              ' · ' +
+              plural(people, 'person', 'people') +
+              (playing ? ' · ' + playing + ' playing' : '');
       }
 
       function read() {

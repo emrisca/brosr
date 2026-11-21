@@ -73,7 +73,6 @@ export function openPanelPayload(token, data, { room = '' } = {}) {
 // this table is refused, so a spelling mistake cannot become a silent no-op.
 export const PANEL_ACTIONS = Object.freeze({
   status: Object.freeze({}),
-  grant: Object.freeze({ peerId: 'string', allowed: 'boolean' }),
   'cursor-site': Object.freeze({ site: 'string', on: 'boolean' }),
   'cursor-forget': Object.freeze({ site: 'string', on: 'boolean' }),
   'scroll-site': Object.freeze({ site: 'string', on: 'boolean' }),
@@ -86,8 +85,6 @@ export const PANEL_ACTIONS = Object.freeze({
 // The app uses the long names. The short names predate the app and stay for
 // the host commands that already shipped.
 export const PANEL_ALIASES = Object.freeze({
-  peer: 'peerId',
-  allow: 'allowed',
   tab: 'tabId',
 });
 
@@ -96,7 +93,6 @@ const FIELD_TYPES = Object.freeze(
 );
 
 const REQUIRED = Object.freeze({
-  grant: Object.freeze(['peerId', 'allowed']),
   'cursor-site': Object.freeze(['site', 'on']),
   'cursor-forget': Object.freeze(['site']),
   'scroll-site': Object.freeze(['site', 'on']),

@@ -45,7 +45,7 @@ import {
   restoreCursor,
   siteOf,
 } from './cursor.mjs';
-import { createTrustClient, prepareRecords } from './trust.mjs';
+import { createTrustClient } from './trust.mjs';
 
 // Gecko exposes browser, Chrome exposes chrome. The core runs in both.
 const api = globalThis.browser || globalThis.chrome || null;
@@ -270,7 +270,6 @@ const TAB_PARAMS = [
   'panel',
   'selftest',
   'capture',
-  'grant',
 ];
 function cursorKey(href) {
   try {
@@ -679,15 +678,14 @@ async function startPageMedia() {
     // put every guest the age of the report past the film.
     state.at = Date.now();
     // A film paused for an unbuffered seek is not a starved element, but the
-    // room should see the wait. Same fate can then hold every player instead
-    // of letting this one run away from its target. The check also expires the
-    // wait, so a room hold releases when the range arrives or the deadline
-    // passes even while no frame reaches this tab.
+    // panel should show the wait. The check also expires the wait, so the
+    // indicator clears when the range arrives or the deadline passes even
+    // while no frame reaches this tab.
     if (remote.bufferWaitActive()) state.buffering = true;
     // A person's play, pause, seek or rate change is an act. The four-a-second
-    // tick only reads the clock, and a granted peer that sent its own lag as
-    // an anchor pulled the host's playhead back and beat the host's own play
-    // and pause. An act crosses the room, a tick stays home. The action keeps
+    // tick only reads the clock, and a peer that sent its own lag as an anchor
+    // pulled the host's playhead back and beat the host's own play and pause.
+    // An act crosses the room, a tick stays home. The action keeps
     // its name so the host can apply a pause at the host's own playhead.
     state.action = typeof userAction === 'string' ? userAction : Boolean(userAction);
     if (state.key !== relayKey) {
@@ -790,7 +788,6 @@ export async function start() {
         roomName: params.get('rname') || 'Room',
         bias: Number(params.get('bias') || 0),
         relayPort: params.get('relay') || '8787',
-        grant: params.get('grant') || null,
         // The key travels in the fragment. sessionStorage keeps it across the
         // navigation a peer follows, so the next page stays sealed.
         key: params.get('k') || hashParams.get('k') || null,
@@ -822,8 +819,8 @@ export async function start() {
   const hostId = config.hostId || 'host';
   const name = config.name || peerId;
   const roomName = cleanRoomName(config.roomName || 'Room');
-  // A tab in the room is an offer, never an instruction. The host and granted
-  // peers publish what they have open, and a peer opens a copy only when it
+  // A tab in the room is an offer, never an instruction. Any room member
+  // publishes what they have open, and a peer opens a copy only when it
   // clicks a row. The key names the publisher's tab, so one row follows it.
   let sharedTabs = [];
   let pendingTabSync = null;
@@ -913,9 +910,6 @@ export async function start() {
   applyOwnCursor(showOwnCursor ? ownCursor : null);
   const sharePointer = readSetting('brosr-share-pointer') !== '0';
   let showNames = readSetting('brosr-cursor-names') !== '0';
-  // A host keeps its choice between rooms. A guest starts off and takes the
-  // host's setting from the room snapshot or a fate frame.
-  const sameFate = role === 'host' && readSetting('brosr-same-fate') === '1';
   // A host names the sites that show pointers. A peer keeps the last list it
   // learned, or the two brosr apps until the host sends its own.
   const savedSites = cleanCursorSites((() => {
@@ -978,8 +972,7 @@ export async function start() {
   let sealState = 'off';
   let sealError = null;
   // The tab the room panel chose for trusted typing. The helper reads this
-  // from the status this page publishes, so the choice travels beside the
-  // grant without another channel.
+  // from the status this page publishes.
   let trustTarget = null;
   let sealedOut = 0;
   let sealedIn = 0;
@@ -1008,7 +1001,7 @@ export async function start() {
   // A join link keeps the room and the relay port, because a guest has to
   // reach the same relay. Identity params are dropped, because the panel gives
   // the guest its own role, peer id and name.
-  const joinParams = ['role', 'peer', 'host', 'name', 'bias', 'panel', 'selftest', 'grant', 'capture'];
+  const joinParams = ['role', 'peer', 'host', 'name', 'bias', 'panel', 'selftest', 'capture'];
   const joinUrl = (href) => {
     try {
       const url = new URL(href);
@@ -1078,7 +1071,6 @@ export async function start() {
     alignOffset: savedAlign || 0,
     customCursor: savedCursor,
     sharePointer,
-    sameFate,
     cursorSites,
     scrollSites,
     cursorForgot,
@@ -1135,7 +1127,6 @@ export async function start() {
         // again on the machine that asked for it.
         if (message.from === peerId) return;
         const activeHost = client.hostId ? client.hostId() : hostId;
-        const senderGranted = client.hasGrant ? client.hasGrant(message.from) : false;
         // A publisher reports that a tab started or stopped playing. The row
         // updates in place, and no tab opens from this frame.
         const media = tabMedia(message.data);
@@ -1145,7 +1136,6 @@ export async function start() {
             key: media.key,
             from: message.from,
             hostId: activeHost,
-            granted: senderGranted,
             list: sharedTabs,
           });
           if (!check.allow) return;
@@ -1153,7 +1143,7 @@ export async function start() {
           publishSharedTabs();
           return;
         }
-        // A joiner (including the host) asked the owner of a shared tab for
+        // A joiner (host or peer) asked the owner of a shared tab for
         // its live playback state so the newly opened copy starts in sync.
         const syncReq = tabSyncRequest(message.data);
         if (syncReq) {
@@ -1161,12 +1151,11 @@ export async function start() {
             (entry) => entry && entry.key === syncReq.key && entry.ownerId === peerId
           );
           if (!owns) return;
-          if (role !== 'host' && !client.isGranted()) return;
           const sendSnapshot = (state) => {
             if (!state || typeof state !== 'object' || !state.key) return;
             if (role === 'host') {
               client.sendHostMedia({ ...state, action: false, at: Number(state.at) || Date.now() });
-            } else if (client.isGranted()) {
+            } else {
               client.sendMedia({ ...state, action: 'seek' });
             }
           };
@@ -1200,7 +1189,6 @@ export async function start() {
             key: close.key,
             from: message.from,
             hostId: activeHost,
-            granted: senderGranted,
             list: sharedTabs,
           });
           if (!check.allow) return;
@@ -1222,7 +1210,6 @@ export async function start() {
           key: offer.key,
           from: message.from,
           hostId: activeHost,
-          granted: senderGranted,
           list: sharedTabs,
         });
         if (!check.allow) return;
@@ -1266,42 +1253,6 @@ export async function start() {
     // The room tab owns the socket, so it forwards each pointer to the rest of
     // this browser. Every tab draws it, because a cursor is not tied to one
     // site.
-    onControl: ({ peerId: targetPeer, allowed }) => {
-      if (allowed || !targetPeer) return;
-      const dropped = [];
-      sharedTabs = sharedTabs.filter((entry) => {
-        if (!entry || entry.ownerId !== targetPeer) return true;
-        dropped.push(entry.key);
-        return false;
-      });
-      if (dropped.length) {
-        for (const key of dropped) {
-          const wasJoined = joinedTabs.delete(key);
-          if (wasJoined && api && api.runtime && api.runtime.sendMessage) {
-            api.runtime
-              .sendMessage({ type: 'brosr:tab-close-local', key })
-              .catch(() => {});
-          }
-        }
-        saveJoinedTabs();
-        publishSharedTabs();
-      }
-      if (targetPeer === peerId && api && api.runtime && api.runtime.sendMessage) {
-        const seen = status();
-        api.runtime
-          .sendMessage({
-            type: 'brosr:room-status',
-            room,
-            peerId,
-            role,
-            source,
-            panelUrl,
-            granted: false,
-            data: seen,
-          })
-          .catch(() => {});
-      }
-    },
     onPresence: (position) => {
       if (!api || !api.runtime || !api.runtime.sendMessage) return;
       const at = Date.now();
@@ -1311,45 +1262,10 @@ export async function start() {
         .sendMessage({ type: 'brosr:presence-draw', position })
         .catch(() => {});
     },
-    onHold: (hold) => {
-      if (!hold || !hold.key) return;
-      // This tab may hold the film itself. Apply the hold here before asking
-      // the background, because a room tab is not in the film tab list.
-      if (hasLocalMedia) {
-        const element = client.media.pick(hold.key);
-        const reading = element ? client.media.state(element) : null;
-        if (reading && reading.key === hold.key) {
-          if (hold.active) {
-            client.media.apply(element, { action: 'pause' });
-          } else {
-            client.media.apply(element, { action: 'seek', position: hold.position });
-            client.media.apply(element, { action: 'tick', rate: 1 });
-            if (hold.playing) client.media.apply(element, { action: 'play' });
-          }
-          return;
-        }
-      }
-      if (!api || !api.runtime || !api.runtime.sendMessage) return;
-      api.runtime
-        .sendMessage({
-          type: 'brosr:media-apply',
-          from: hold.peerId || null,
-          name: null,
-          action: hold.active ? 'hold' : 'tick',
-          key: hold.key,
-          position: hold.position,
-          playing: Boolean(hold.playing && !hold.active),
-          rate: 1,
-          volume: 1,
-          hold: Boolean(hold.active),
-          at: Date.now(),
-        })
-        .catch(() => {});
-    },
     onMedia: (message) => {
       // The host's film is the anchor. Its own frame coming back would seek the
       // film against itself, and a page player answers a seek loop with an
-      // error overlay. The sender decides, never the film key. A granted peer
+      // error overlay. The sender decides, never the film key. Every room peer
       // watches the same film, so a key check would drop every command it sends.
       if (role === 'host' && message.peerId && message.peerId === peerId) {
         echoMedia += 1;
@@ -1413,17 +1329,6 @@ export async function start() {
         .catch(() => {});
       return true;
     },
-    input: {
-      // A grant arrives on the socket long after this page loaded, so the
-      // listeners are installed now and every record waits for the grant.
-      capture: true,
-      grantTo: config.grant || null,
-      tabId: peerId,
-      origin: location.origin,
-      // A granted peer's records reach the browser pipeline instead of the
-      // DOM. The client falls back to synthetic replay if the agent refuses.
-      trusted: trust ? (records) => trust.send(prepareRecords(records, document)) : null,
-    },
     // One time base for the clock, the media ticks and the presence stamps.
     // The exchange compares stamps from two machines, so it needs the wall
     // clock. performance.now() starts at zero in each process, and the offset
@@ -1462,7 +1367,7 @@ export async function start() {
   };
 
   // The app control panel asks for one snapshot and sends one change at a
-  // time. The room tab already owns the roster, grants and media view, so this
+  // time. The room tab already owns the roster and media view, so this
   // handler turns those into JSON instead of adding a second state store.
   // The session log needs the film tab's own counters. The host tab can ask
   // the background page for the one tab that owns the film, then carry the
@@ -1506,7 +1411,6 @@ export async function start() {
       id: peerId,
       name,
       self: true,
-      granted: true,
       colour: live.colour || null,
       build: live.build || bridgeBuild,
     };
@@ -1516,14 +1420,8 @@ export async function start() {
         (peer) => peer && peer.id !== peerId && !peer.self
       ),
     ];
-    // A copied report read on its own must name its own author. The app log
-    // uses the same rule, but it keeps the host's own control state honest.
-    const logPeers = [
-      { ...self, granted: Boolean(live.granted) },
-      ...(Array.isArray(live.peerList) ? live.peerList : []).filter(
-        (peer) => peer && peer.id !== peerId && !peer.self
-      ),
-    ];
+    // A copied report read on its own must name its own author.
+    const logPeers = peers;
     const diagnostics = {
       room,
       roomName: live.roomName || roomName,
@@ -1552,14 +1450,8 @@ export async function start() {
       mediaDropTicks: live.mediaDropTicks,
       lastMediaDrop: live.lastMediaDrop,
       mediaDropHistory: live.mediaDropHistory,
-      holds: live.holds,
-      lastHoldEvent: live.lastHoldEvent,
       hostPriority: live.hostPriority,
       lastSeek: live.lastSeek,
-      controlSent: live.controlSent,
-      controlReceived: live.controlReceived,
-      lastControl: live.lastControl,
-      controlHistory: live.controlHistory,
       seeks: live.seeks,
       nudges: live.nudges,
       corrections: live.corrections,
@@ -1569,7 +1461,6 @@ export async function start() {
       mediaEchoLocal: live.mediaEchoLocal,
       firstDrift: live.firstDrift,
       convergedAt: live.convergedAt,
-      stutter: live.stutter,
       debug: live.debug,
       reading: film.reading,
       readingReply: film.reply,
@@ -1586,7 +1477,6 @@ export async function start() {
       socket: live.socket,
       peers,
       media: live.media || null,
-      sameFate: Boolean(live.sameFate),
       sync: !browser || browser.sync !== false,
       notices: !browser || browser.notices !== false,
       auto: Boolean(browser && browser.auto),
@@ -1636,12 +1526,7 @@ export async function start() {
     };
 
     try {
-      if (data.action === 'grant') {
-        if (role !== 'host') throw refusal('Only the host can change control.', 'not-host');
-        if (!client.setGrant(String(data.peerId || ''), Boolean(data.allowed))) {
-          throw refusal('That person is no longer in the room.', 'not-in-room');
-        }
-      } else if (data.action === 'cursor-site' || data.action === 'cursor-forget') {
+      if (data.action === 'cursor-site' || data.action === 'cursor-forget') {
         if (role !== 'host') throw refusal('Only the host can change cursor sites.', 'not-host');
         const site = cursorSiteOf(String(data.site || ''));
         if (!site) throw refusal('That site is not valid.', 'bad-site');
@@ -1684,12 +1569,6 @@ export async function start() {
         if (key === 'sync') await runtime({ type: 'brosr:sync-toggle', on });
         else if (key === 'notices') await runtime({ type: 'brosr:notice-toggle', on });
         else if (key === 'auto') await runtime({ type: 'brosr:tabs-auto', on });
-        else if (key === 'fate') {
-          if (!client.setSameFate(on)) {
-            throw refusal('Only the host can change this setting.', 'not-host');
-          }
-          writeSetting('brosr-same-fate', on ? '1' : '0');
-        }
         else throw refusal('Unknown room setting.', 'bad-setting');
       } else if (data.action === 'tab') {
         const tabId = Number(data.tabId);
@@ -1943,7 +1822,7 @@ export async function start() {
   };
   showLayoutNotice.shown = null;
 
-  // The landing page draws one group per person with control. It reads this
+  // The landing page draws one group per person sharing tabs. It reads this
   // when it is already open, and the dataset below when it is not.
   let sharedTabsJson = '';
   const publishSharedTabs = () => {
@@ -1951,7 +1830,7 @@ export async function start() {
       role,
       peerId,
       hostId,
-      canControl: Boolean(role === 'host' || client.isGranted()),
+      canControl: true,
       joined: [...joinedTabs],
       groups: groupSharedTabs(sharedTabs, { hostId }),
     };
@@ -1980,7 +1859,7 @@ export async function start() {
     if (startedPlay && typeof startedPlay.catch === 'function') startedPlay.catch(() => {});
   };
 
-  // A peer that starts ahead proves the controller closes the gap.
+  // A peer that starts ahead proves the timekeeper closes the gap.
   const applyBias = () => {
     if (!video || !bias) return;
     const max = Number.isFinite(video.duration) ? video.duration - 1 : bias;
@@ -2058,14 +1937,14 @@ export async function start() {
       client.receive(frame, Date.now());
       // The hello is the moment a peer appears. Reading it here keeps the
       // replay timely on a room tab the browser has throttled.
-      if (role === 'host' || client.isGranted()) {
-        let kind = '';
-        try {
-          kind = JSON.parse(frame).type || '';
-        } catch {
-          kind = '';
-        }
-        if (kind === 'hello') replayTabsSoon();
+      let parsed = null;
+      try {
+        parsed = JSON.parse(frame);
+      } catch {
+        parsed = null;
+      }
+      if (parsed && parsed.type === 'hello' && parsed.peerId !== peerId) {
+        replayTabsSoon();
       }
       publish();
     };
@@ -2074,9 +1953,6 @@ export async function start() {
       // page and scroll instead of starting over.
       client.hello();
       client.tick(Date.now());
-      // A grant frame sent before the socket opened went nowhere. The room
-      // opened with a grant is sent again now, so the peer can start capturing.
-      if (isHost() && input && input.grantTo) client.setGrant(input.grantTo, true);
       publish();
     };
     socket.onerror = () => publish();
@@ -2150,8 +2026,8 @@ export async function start() {
       }
       return;
     }
-    // Inline Live Tabs media controls (play/pause/skip). Authorized only for
-    // the host or a currently granted peer, and only on a tab held locally.
+    // Inline Live Tabs media controls (play/pause/skip). Any room member can
+    // control a tab they published or joined locally.
     if (message.type === 'tab-media-control') {
       const key = String(message.key || '');
       const offer = sharedTabs.find((tab) => tab && tab.key === key);
@@ -2161,8 +2037,6 @@ export async function start() {
         key,
         action: message.action,
         delta: message.delta,
-        role,
-        granted: Boolean(client.isGranted()),
         mine,
         joined,
       });
@@ -2214,7 +2088,6 @@ export async function start() {
         .sendMessage({
           type: 'brosr:room-hello',
           role,
-          granted: Boolean(client.isGranted()),
           build: bridgeBuild,
           cursor: showOwnCursor ? wireCursor(ownCursor) : null,
         })
@@ -2242,10 +2115,6 @@ export async function start() {
           role,
           source,
           panelUrl,
-          // Control is what lets a peer share its tabs. The background reads
-          // this copy, because the grant arrives on the room socket and never
-          // passes through the browser chrome.
-          granted: Boolean(seen.granted),
           data: seen,
         })
         .catch(() => {});
@@ -2474,10 +2343,6 @@ export async function start() {
         }
         return reply({ ok: true, html: document.documentElement.outerHTML, url: here });
       }
-      if (message.type === 'brosr:grant') {
-        const applied = client.setGrant(String(message.peerId || ''), Boolean(message.allowed));
-        return reply({ ok: Boolean(applied), granted: Boolean(message.allowed) });
-      }
       if (message.type === 'brosr:active-page') {
         // The browser names the tab a person is looking at, so presence and
         // the host's site list follow the site they browse and not only the
@@ -2581,10 +2446,15 @@ export async function start() {
           }
           return reply({ ok: sent });
         }
-        // A peer joining an offered tab (owned by host or another granted peer)
+        const hasAct = Boolean(state && state.action && state.action !== 'tick');
+        if (hasAct && pendingTabSync && (!joinedKey || pendingTabSync.key === joinedKey)) {
+          pendingTabSync = null;
+        }
+        // A peer joining an offered tab (owned by host or another peer)
         // applies cached room state or re-requests sync as soon as its joined
-        // tab mounts — even when ungranted and even if host has not joined it.
+        // tab mounts — even if host has not joined it.
         if (
+          !hasAct &&
           joinedKey &&
           state &&
           state.key &&
@@ -2610,20 +2480,10 @@ export async function start() {
             pingPendingTabSync(nowAt);
           }
         }
-        // A granted peer drives the room from its own film tab. The background
-        // already stopped this report when playback sync is off, so the room
-        // tab only has to put it on the socket under this peer's id.
-        if (!client.isGranted()) return reply({ ok: false, reason: 'no-grant' });
-        // A stutter is not a playhead act, but it still travels while the
-        // player samples. The host checks the peer's grant before it holds the
-        // room, so an ungranted stutter changes nothing.
-        client.noteMedia(state);
-        // A granted peer drives the room with an act, never with its own
-        // clock. Its film may sit behind the anchor, and that lag sent four
-        // times a second dragged the host's film back and made the host's own
-        // play and pause lose to it.
-        if (!state.action) return reply({ ok: true, skipped: 'tick' });
-        return reply({ ok: client.sendMedia(state), granted: true });
+        // Any peer drives the room with an explicit act, never with its own
+        // routine clock ticks.
+        if (!hasAct) return reply({ ok: true, skipped: 'tick' });
+        return reply({ ok: client.sendMedia(state) });
       }
       if (message.type === 'brosr:tabs-announce') {
         // The background saw a tab this person chose to share. It goes out on
@@ -2706,6 +2566,9 @@ export async function start() {
         const key = String(message.key || '');
         if (!key) return reply({ ok: false, reason: 'key' });
         joinedTabs.delete(key);
+        if (pendingTabSync && pendingTabSync.key === key) {
+          pendingTabSync = null;
+        }
         saveJoinedTabs();
         publishSharedTabs();
         return reply({ ok: true });

@@ -1,25 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GrantBook,
-  InputBatcher,
   BLOCKED_ORIGINS,
-  isSensitiveField,
-  originAllowed,
-  replayInput,
-  resolvePath,
   canvasPoint,
+  inputCaptureDecision,
+  isLocalControl,
+  isSensitiveField,
+  isTabOpeningClick,
+  isTabOpeningKey,
+  originAllowed,
+  pointerLockDecision,
+  resolvePath,
+  scrollPolicyDecision,
+  wheelRecord,
 } from '../input.mjs';
-import { decode } from '../protocol.mjs';
-
-function fixedClock(value = 0) {
-  let now = value;
-  const clock = () => now;
-  clock.advance = (ms) => {
-    now += ms;
-  };
-  return clock;
-}
 
 function field(props = {}) {
   return {
@@ -31,43 +25,8 @@ function field(props = {}) {
   };
 }
 
-test('a grant names one peer, one tab and one origin', () => {
-  const now = fixedClock(0);
-  const book = new GrantBook({ now });
-  assert.equal(book.allows('peer', { kind: 'click' }), false);
-  book.grant('peer', { tabId: 'tab-1', origin: 'https://a.test' });
-  assert.equal(book.allows('peer', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }), true);
-  assert.equal(book.allows('peer', { tabId: 'tab-2', origin: 'https://a.test', kind: 'click' }), false);
-  assert.equal(book.allows('peer', { tabId: 'tab-1', origin: 'https://b.test', kind: 'click' }), false);
-  assert.equal(book.allows('other', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }), false);
-});
-
-test('a cursor needs no grant, while scroll and wheel are always refused', () => {
-  const book = new GrantBook();
-  assert.equal(book.allows('anyone', { kind: 'move' }), true);
-  assert.equal(book.allows('anyone', { kind: 'scroll' }), false);
-  assert.equal(book.decide('anyone', { kind: 'scroll' }).reason, 'scroll');
-  book.grant('peer', { tabId: '*' });
-  assert.equal(book.decide('peer', { kind: 'wheel' }).allow, false);
-  assert.equal(book.decide('peer', { kind: 'wheel' }).reason, 'scroll');
-});
-
-test('a grant expires and a closed tab revokes it', () => {
-  const now = fixedClock(0);
-  const book = new GrantBook({ now });
-  book.grant('peer', { tabId: 'tab-1', origin: 'https://a.test', ttlMs: 1000 });
-  now.advance(1001);
-  assert.equal(book.allows('peer', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }), false);
-  assert.equal(book.active().length, 0);
-
-  book.grant('peer', { tabId: 'tab-2', origin: 'https://a.test' });
-  assert.equal(book.active().length, 1);
-  book.endTab('tab-2');
-  assert.equal(book.active().length, 0);
-});
-
 test('a password field, a credential hint and a card field count as sensitive', () => {
-  assert.equal(isSensitiveField({ ...field({ autocomplete: 'current-password' }) }), true);
+  assert.equal(isSensitiveField(field({ autocomplete: 'current-password' })), true);
   assert.equal(isSensitiveField({ ...field(), type: 'password' }), true);
   assert.equal(isSensitiveField(field({ autocomplete: 'cc-number' })), true);
   assert.equal(isSensitiveField(field({ name: 'cardNumber' })), true);
@@ -107,223 +66,62 @@ test('a canvas fraction maps to a point inside the canvas', () => {
   assert.deepEqual(canvasPoint(canvas, { x: 4, y: -1 }), { x: 500, y: 50 });
 });
 
-test('the batcher keeps the last move and the order of clicks', () => {
-  const sent = [];
-  const batcher = new InputBatcher({ send: (frame) => sent.push(decode(frame)) });
-  batcher.move({ kind: 'move', x: 1, y: 2 });
-  batcher.move({ kind: 'move', x: 3, y: 4 });
-  batcher.push({ kind: 'click', path: '#go' });
-  assert.equal(batcher.flush(), 2);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].type, 'input');
-  assert.equal(sent[0].seq, 1);
-  assert.deepEqual(
-    sent[0].records.map((record) => record.kind),
-    ['move', 'click']
+test('pointer lock is local and always returns a named decision', () => {
+  assert.deepEqual(pointerLockDecision({ doc: { pointerLockElement: null } }), {
+    allow: true,
+    reason: 'ok',
+  });
+  assert.equal(pointerLockDecision({ requested: true }).reason, 'pointer-lock-local');
+  assert.equal(
+    pointerLockDecision({ record: { kind: 'pointerlock' } }).reason,
+    'pointer-lock-local'
   );
-  assert.equal(sent[0].records[0].x, 3, 'only the newest move survived');
-  assert.equal(batcher.stats().movesDropped, 1);
-  assert.equal(batcher.flush(), 0, 'an empty flush sends nothing');
-});
-
-test('a large batch splits into frames with increasing sequence numbers', () => {
-  const sent = [];
-  const batcher = new InputBatcher({ send: (frame) => sent.push(decode(frame)) });
-  for (let index = 0; index < 120; index += 1) {
-    batcher.push({ kind: 'text', path: '#field', value: 'x'.repeat(200), index });
-  }
-  batcher.flush();
-  assert.ok(sent.length > 1, 'the batch needed more than one frame');
-  const seqs = sent.map((message) => message.seq);
-  assert.deepEqual([...seqs].sort((a, b) => a - b), seqs);
-  assert.equal(new Set(seqs).size, seqs.length);
-  let total = sent.reduce((sum, message) => sum + message.records.length, 0);
-  assert.equal(total, 120);
-});
-
-test('replay drops a record without a grant, without a target, or on a password field', () => {
-  const allowedElement = {
-    tagName: 'BUTTON',
-    ownerDocument: null,
-    getAttribute: () => '',
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
-    dispatchEvent: () => true,
-  };
-  const password = { ...field({ id: 'password' }), getBoundingClientRect: () => ({ left: 0, top: 0 }) };
-  password.type = 'password';
-  const root = {
-    activeElement: null,
-    defaultView: {
-      Event: class {},
-      MouseEvent: class {
-        constructor(type) {
-          this.type = type;
-        }
-      },
-      KeyboardEvent: class {},
-      WheelEvent: class {},
-    },
-    querySelectorAll: (path) => {
-      if (path === '#allowed') return [allowedElement];
-      if (path === '#password') return [password];
-      if (path === '#denied') return [allowedElement];
-      return [];
-    },
-    dispatchEvent: () => true,
-  };
-
-  const result = replayInput(
-    [
-      { kind: 'click', path: '#allowed' },
-      { kind: 'click', path: '#denied' },
-      { kind: 'click', path: '#missing' },
-      { kind: 'click', path: '#password' },
-      { kind: 'move', x: 1, y: 1 },
-    ],
-    { root, allowed: (record) => record.path !== '#denied' }
+  assert.equal(
+    pointerLockDecision({ doc: { pointerLockElement: { tagName: 'CANVAS' } } }).reason,
+    'pointer-lock-active'
   );
-
-  assert.equal(result.applied, 1);
-  assert.equal(result.dropped, 3);
-  assert.equal(result.reasons.grant, 1);
-  assert.equal(result.reasons.target, 1);
-  assert.equal(result.reasons.sensitive, 1);
-  assert.equal(result.reasons.move, undefined, 'a move is not a failure');
+  assert.equal(
+    pointerLockDecision({ record: { kind: 'click', pointerLock: true } }).reason,
+    'pointer-lock-active'
+  );
 });
 
-test('a click that names a target survives a layout mismatch', () => {
-  const button = {
-    tagName: 'BUTTON',
-    ownerDocument: null,
-    getAttribute: () => '',
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
-    dispatchEvent: () => true,
-  };
-  const root = {
-    activeElement: null,
-    defaultView: {
-      Event: class {},
-      MouseEvent: class {
-        constructor(type) {
-          this.type = type;
-        }
-      },
-      KeyboardEvent: class {},
-      WheelEvent: class {},
-    },
-    querySelectorAll: (path) => (path === '#go' ? [button] : []),
-    dispatchEvent: () => true,
-  };
-
-  const matched = replayInput([{ kind: 'click', path: '#go' }], { root });
-  assert.equal(matched.applied, 1, 'the same layout still applies the click');
-
-  // Two windows of another size resolve the same selector, so the granted
-  // click lands. The old size guard dropped every one of them.
-  const mismatch = replayInput([{ kind: 'click', path: '#go' }], { root, layoutMatches: false });
-  assert.equal(mismatch.applied, 1, 'a named target is placed by selector, not by size');
-  assert.equal(mismatch.reasons.layout, undefined);
-
-  // A record with no address has to be placed by coordinates. That is the one
-  // record a mismatch still drops, because a point lands somewhere else.
-  const blind = replayInput([{ kind: 'click' }], { root, layoutMatches: false });
-  assert.equal(blind.applied, 0);
-  assert.equal(blind.reasons.layout, 1);
+test('scroll and wheel are refused with a named reason', () => {
+  assert.equal(scrollPolicyDecision({ kind: 'wheel' }).allow, false);
+  assert.equal(scrollPolicyDecision({ kind: 'wheel' }).reason, 'scroll');
+  assert.equal(scrollPolicyDecision({ kind: 'scroll' }).reason, 'scroll');
+  assert.deepEqual(scrollPolicyDecision({ kind: 'click' }), { allow: true, reason: 'ok' });
+  assert.equal(wheelRecord({ clientX: 1, clientY: 2, deltaY: 120 }), null);
 });
 
-test('a granted click follows a link, because a dispatched click cannot', () => {
-  const navigations = [];
-  const link = {
+test('local controls and tab-opening clicks are refused before capture', () => {
+  const local = {
+    getAttribute: (name) => (name === 'data-brosr-local' ? '1' : ''),
+    closest: () => null,
+  };
+  assert.equal(isLocalControl(local), true);
+
+  const blank = {
     tagName: 'A',
-    href: 'https://example.test/canvas/',
-    target: '',
-    ownerDocument: { location: { assign: (url) => navigations.push(url) } },
-    closest: (selector) => (selector === 'a[href]' ? link : null),
-    getAttribute: () => null,
-    hasAttribute: () => false,
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
-    dispatchEvent: () => true,
+    href: 'https://example.test/',
+    target: '_blank',
+    getAttribute: (name) =>
+      name === 'target' ? '_blank' : name === 'href' ? 'https://example.test/' : '',
+    closest: (selector) => (selector === 'a[href]' ? blank : null),
   };
-  const root = {
-    activeElement: null,
-    location: { assign: (url) => navigations.push(url) },
-    defaultView: {
-      Event: class {},
-      MouseEvent: class {
-        constructor(type) {
-          this.type = type;
-        }
-      },
-      KeyboardEvent: class {},
-      WheelEvent: class {},
-    },
-    querySelectorAll: (path) => (path === '#tile' ? [link] : []),
-    dispatchEvent: () => true,
-  };
-
-  const result = replayInput([{ kind: 'click', path: '#tile' }], { root });
-  assert.equal(result.applied, 1);
-  assert.deepEqual(navigations, ['https://example.test/canvas/']);
-
-  // The page sees the click first. A handler that cancels it keeps the last
-  // word, so the link does not open behind its back.
-  navigations.length = 0;
-  link.dispatchEvent = (event) => event.type !== 'click';
-  replayInput([{ kind: 'click', path: '#tile' }], { root });
-  assert.deepEqual(navigations, []);
-});
-
-test('a replayed click never opens a new tab for room tiles or external links', () => {
-  const opened = [];
-  const navigations = [];
-  function link(href) {
-    const node = {
-      tagName: 'A',
-      href,
-      target: '_blank',
-      ownerDocument: null,
-      closest: (selector) => (selector === 'a[href]' ? node : null),
-      getAttribute: (name) => (name === 'target' ? '_blank' : name === 'href' ? href : null),
-      hasAttribute: () => false,
-      getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }),
-      dispatchEvent: () => true,
-    };
-    return node;
-  }
-  const tile = link('https://room.test/canvas/');
-  const outside = link('https://www.youtube.com/');
-  const root = {
-    activeElement: null,
-    location: { origin: 'https://room.test', assign: (url) => navigations.push(url) },
-    defaultView: {
-      Event: class {},
-      MouseEvent: class {
-        constructor(type) {
-          this.type = type;
-        }
-      },
-      KeyboardEvent: class {},
-      WheelEvent: class {},
-    },
-    querySelectorAll: (path) => {
-      if (path === '#tile') return [tile];
-      if (path === '#outside') return [outside];
-      return [];
-    },
-    dispatchEvent: () => true,
-  };
-
-  const result = replayInput(
-    [
-      { kind: 'click', path: '#tile' },
-      { kind: 'click', path: '#outside' },
-    ],
-    { root, openTab: (href) => opened.push(href) }
+  assert.equal(isTabOpeningClick(blank, { button: 0 }), true);
+  assert.equal(isTabOpeningClick(blank, { button: 1 }), true);
+  assert.equal(isTabOpeningKey(null, { key: 't', meta: true }), true);
+  assert.equal(
+    inputCaptureDecision({ event: { isTrusted: false } }).reason,
+    'untrusted'
   );
-
-  assert.equal(result.applied, 0, 'new-tab clicks are dropped before dispatch');
-  assert.equal(result.dropped, 2);
-  assert.equal(result.reasons['new-tab'], 2);
-  assert.deepEqual(opened, [], 'tabs never relay open');
-  assert.deepEqual(navigations, [], 'a new-tab link never replaces this page');
+  assert.equal(
+    inputCaptureDecision({ event: { isTrusted: true, target: blank, button: 0 } }).reason,
+    'new-tab'
+  );
+  assert.equal(
+    inputCaptureDecision({ event: { isTrusted: true, target: local } }).reason,
+    'local-control'
+  );
 });

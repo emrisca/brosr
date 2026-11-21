@@ -11,7 +11,7 @@ Short answer to "is this possible": yes, for pages whose state can be reproduced
 machine, which is most pages people actually share. No, for anything that needs identical
 pixels. The use-case table below states the line.
 
-Status: **the sync core, the media adapters, input with grants, trusted typing and the
+Status: **the sync core, the media adapters, shared tab control, room app sync and the
 packaged app are built.** A room runs in Firefox or Brave, and `v0.3.18` is the current
 release. The spike lives in [spike/](../spike/), the shared code in [core/](../core/), and
 [progress-log.md](progress-log.md) records each step.
@@ -48,10 +48,9 @@ machine render its own.
 | --- | --- | --- |
 | Watch a YouTube video together | Yes | One video element, one clock. Both sides set `currentTime` and call `play()`. The peer adjusts for drift against the host. |
 | Read or scroll a long article together | Yes | URL plus scroll offset plus live cursors. |
-| Two-player browser game on one page | Yes, when the page listens for ordinary DOM events | Input replay at the event level. A deterministic page stays in step because the room copies no page state. |
-| Type into a form for someone | Yes, with the BiDi actuator | The trusted path exists in Firefox through the remote agent and in Chromium through
-`chrome.debugger`. [sync.md](sync.md) covers it. |
+| Two-player browser game on one page | Room apps only | Canvas, Notes and Chess sync their own state through app messages. The room does not mirror DOM input into another browser. |
+| Type into a form for someone | No | Relayed DOM input is not part of the tab-host model. Each person types in their own copy, and room apps sync their own fields. |
 | Netflix, Disney+, Prime Video | No | The DRM layer controls the media pipeline. Script calls on `currentTime` fail. |
 | Live streams (Twitch, YouTube Live) | Partly | Play and pause sync. There is no shared playhead to seek to. |
 | A page where only one person logs in | No | Auth is per machine by design. Each person signs in on their own copy. |
-| A page that checks `event.isTrusted` | Yes, with the BiDi actuator | The trusted actuator enters through the browser's input pipeline. |
+| A page that checks `event.isTrusted` | No | The room never injects events into another person's page. |

@@ -15,10 +15,11 @@ test('a room tab always installs input capture', () => {
   assert.doesNotMatch(source, /params\.get\('capture'\)/);
 });
 
-test('a grant is sent again once the socket is open', () => {
-  // A grant frame sent before the socket opened went nowhere, and the peer then
-  // never started capturing. The open handler has to send it again.
-  assert.match(source, /socket\.onopen[\s\S]*?client\.setGrant\(input\.grantTo, true\)/);
+test('the room entry carries no grant frame', () => {
+  // Input relay is gone with the grant system, so the open handler only greets
+  // the room and publishes.
+  assert.doesNotMatch(source, /setGrant|isGranted|grantTo/);
+  assert.match(source, /socket\.onopen = \(\) => \{[\s\S]*?client\.hello\(\);/);
 });
 
 test('your own cursor is a switch beside sharing it', () => {
@@ -30,12 +31,12 @@ test('your own cursor is a switch beside sharing it', () => {
   assert.match(source, /if \(showOwnCursor && api && api\.runtime && api\.runtime\.sendMessage\)/);
 });
 
-test('a granted peer sends an act and not its own clock', () => {
+test('a peer sends an act and not its own clock', () => {
   // A peer's own sample inside the anchor window pulled the host playhead back
   // and beat the host's play and pause. Only a real act crosses the room.
-  assert.match(source, /if \(!state\.action\) return reply\(\{ ok: true, skipped: 'tick' \}\)/);
+  assert.match(source, /if \(!hasAct\) return reply\(\{ ok: true, skipped: 'tick' \}\)/);
   // The echo window names the act the frame caused. A routine tick opens no
-  // window, so a granted peer's own pause is not kept home by housekeeping.
+  // window, so a peer's own pause is not kept home by housekeeping.
   assert.match(source, /const echo = remoteMediaEcho\(result, previous, message\)/);
   assert.match(source, /if \(echo\) remoteEcho = echo/);
   assert.match(source, /mediaEchoMatches\(remoteEcho, action\)/);
@@ -137,9 +138,10 @@ test('a film reading answers through sendResponse in both engines', () => {
   assert.match(body, /history: remote\.historyView\(\)/);
 });
 
-test('a click flushes at once, so a link cannot unload the page first', () => {
+test('the room entry no longer batches relayed input', () => {
   const sync = fs.readFileSync(path.join(here, '..', 'sync.mjs'), 'utf8');
-  assert.match(sync, /batcher\.push\(\{[\s\S]*?kind: 'click'[\s\S]*?batcher\.flush\(\);/);
+  assert.doesNotMatch(source, /InputBatcher|batcher/);
+  assert.doesNotMatch(sync, /InputBatcher|batcher/);
 });
 
 test('a guest keeps the film title carried by the room frame', () => {
@@ -219,7 +221,7 @@ test('a room frame keeps the anchor instant it arrived with', () => {
   // The expected position was worked out at that instant. A fresh stamp at the
   // handoff shortens the age the film tab adds, so the playhead lands short.
   const media = source.slice(source.indexOf('onMedia: (message) =>'));
-  const body = media.slice(0, media.indexOf('input: {'));
+  const body = media.slice(0, media.indexOf('rememberRoomMedia({'));
   assert.match(body, /const at = Number\(message\.at\) \|\| Date\.now\(\)/);
   assert.doesNotMatch(body, /at: Date\.now\(\)/);
 });

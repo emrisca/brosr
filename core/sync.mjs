@@ -18,27 +18,17 @@ import {
   nextColour,
 } from './cursor.mjs';
 import { Room } from './room.mjs';
-import {
-  GrantBook,
-  InputBatcher,
-  POINTER_INTERVAL_MS,
-  cssPath,
-  isLocalControl,
-  isSensitiveField,
-  isTabOpeningClick,
-  isTabOpeningKey,
-  originAllowed,
-  replayInput,
-} from './input.mjs';
 import { APP_NAME, acceptOffset, localPosition } from './align.mjs';
 
+// A pointer is sampled at 30 Hz. Fast enough to look live, slow enough to
+// keep presence small.
 export const HOST_TICK_MS = 250;
-// A local act by the host wins briefly. A granted peer's own pause or play can
+// A local act by the host wins briefly. A peer's own pause or play can
 // arrive just after it, and without this window the host's pause looked like it
 // did nothing. Half a second covers the frame that was already in flight; a
 // longer window swallowed a deliberate peer act.
 export const HOST_MEDIA_PRIORITY_MS = 500;
-// A granted peer's local seek/play/pause needs a short guard against already
+// A peer's local seek/play/pause needs a short guard against already
 // in-flight routine host ticks before the host acknowledges or supersedes it.
 export const PEER_ACT_GUARD_MS = 1500;
 // While the host's film tab is still executing an accepted peer seek/pause/play,
@@ -52,12 +42,6 @@ export const HOST_PEER_JOIN_APPLY_MS = 12000;
 // Freshness window for host playhead state reported via sendHostMedia when
 // media.pick() is null on the host room tab (separate film tab).
 export const HOST_KNOWN_MEDIA_MS = 8000;
-// A starved player reports every tick. One low sample is not worth holding the
-// whole room, so a stutter has to survive this long before it travels.
-export const STUTTER_GRACE_MS = 500;
-// A player paused under a hold may stop reporting, so a hold that nobody
-// clears must release on its own instead of freezing the room forever.
-export const STUTTER_MAX_MS = 10000;
 // The plan asks for 30 Hz presence, coalesced. Each frame gives the overlay a
 // fresh target, and the overlay eases between them.
 export const PRESENCE_TICK_MS = 33;
@@ -119,8 +103,7 @@ export function createRoomClient({
   scrollSites = null,
   // A viewer can hide every pointer name without hiding the pointers.
   showNames = true,
-  // The host can make the room wait for a starved host or granted peer.
-  sameFate = false,
+  // The host can make the room wait when any peer's player is starved.
   // A copy offset measured offline. A number is treated as a confident
   // measurement. An object is accepted only when it passes the same rules as
   // a wire payload. Zero is the default and changes nothing.
@@ -140,7 +123,6 @@ export function createRoomClient({
   // A site with its own player hands its adapter in here. The room then calls
   // the same four methods either way.
   mediaAdapter = null,
-  input = null,
   viewport = null,
   navigate = null,
   scrollTo = null,
@@ -152,12 +134,6 @@ export function createRoomClient({
   // A media frame for a film this tab does not hold. The room hands it to the
   // tab that does, and a false reply keeps the frame unhandled.
   onMedia = null,
-  // A room hold from a stutter. The page pauses its own player, or hands the
-  // hold to the tab that holds the film.
-  onHold = null,
-  // A control grant or revocation change. Used to withdraw a revoked peer's
-  // published Live Tabs immediately.
-  onControl = null,
   // The page this tab shows. Presence carries it so another tab knows where
   // the pointer is.
   pageUrl = null,
@@ -168,13 +144,12 @@ export function createRoomClient({
 } = {}) {
   const clientBuild = cleanBuild(build);
   const clock = new ClockEstimator({ now });
-  // The controller holds a seek on the same clock and window as the settle
+  // The drift logic holds a seek on the same clock and window as the settle
   // check below, so the two never disagree about when a seek may land.
   const drift = new DriftController({ now });
   let media = mediaAdapter || new MediaAdapter({ root: mediaRoot });
   const initialRoomName = cleanRoomName(roomName);
   const state = new Room({ role, peerId, roomName: initialRoomName, now });
-  let currentSameFate = Boolean(sameFate);
   // The measured gap between this peer's own copy and the room's, in ms. Zero
   // until this peer learns one, so a room that never measured a copy runs
   // exactly as it did before this lane existed.
@@ -188,15 +163,6 @@ export function createRoomClient({
   // Claims from other peers are kept for the room record, never applied to
   // this peer. A copy offset belongs to the person holding that copy.
   const alignPeers = new Map();
-  state.sameFate = currentSameFate;
-  // A room can hold for more than one starved source. One active hold is enough
-  // to pause every player; the last one to clear releases the room.
-  const stutters = new Map();
-  let lastHold = null;
-  let lastHoldEvent = null;
-  let ownBuffering = false;
-  let ownBufferingSince = null;
-  let ownStutterKey = '';
   let currentColour = isColour(colour) ? colour : '#e2603f';
   let currentRoomName = initialRoomName;
   let currentCursor = cleanCursor(customCursor);
@@ -251,13 +217,6 @@ export function createRoomClient({
     inputDropped: 0,
     inputReasons: {},
     capture: false,
-    controlSent: 0,
-    controlReceived: 0,
-    lastControl: null,
-    controls: [],
-    sentControls: [],
-    stutterSent: 0,
-    stutterReceived: 0,
     holds: 0,
     appSent: 0,
     appReceived: 0,
@@ -292,14 +251,8 @@ export function createRoomClient({
   let lastSeekTarget = null;
   let lastViewTick = -Infinity;
   let lastUrl = null;
-  const grants = new GrantBook({ now });
-  const remoteGrants = new Set();
-  let remoteGrant = false;
-  let batcher = null;
   // Trusted batches reach the browser one at a time. The last send has to land
   // before the next begins, or a slow one lets its letters interleave.
-  let trustedQueue = Promise.resolve();
-  let lastInputFlush = -Infinity;
   // The last trusted pointer position as a share of the viewport. Presence
   // reuses it so a peer sees the mouse, not a placeholder at the origin.
   let lastPointer = null;
@@ -459,15 +412,14 @@ export function createRoomClient({
     return [...next];
   }
 
-  // The mirror site list is separate from the pointer list and gates relayed
-  // clicks, keys and typing. Scrolling is never mirrored in either direction.
-  // A null list means every site, and an empty list means none.
+  // The mirror site list is separate from the pointer list and gates which
+  // pages accept a shared cursor. Scrolling is never mirrored. A null list
+  // means every site, and an empty list means none.
   function setScrollSites(value) {
     if (!isHost()) return null;
     const next = value === null ? null : cleanCursorSites(value) || [];
     allowedScrollSites = next;
     // A record queued before the change must not cross a site just switched off.
-    batcher?.clear();
     sendMessage({ type: 'scrollpolicy', peerId, sites: next, roomTime: roomTimeOf() });
     return next === null ? null : [...next];
   }
@@ -563,7 +515,6 @@ export function createRoomClient({
       from: peerId,
       ...(clientBuild ? { build: clientBuild } : {}),
       scrollSites: allowedScrollSites === null ? null : [...allowedScrollSites],
-      grantedPeers: grants.active().map((grant) => grant.peerId),
       mediaRev,
     });
     snapshot.peers = snapshot.peers.map(({ cursor: _cursor, ...peer }) => peer);
@@ -608,64 +559,14 @@ export function createRoomClient({
       currentRole = 'host';
       stats.role = 'host';
       state.role = 'host';
-      currentSameFate = Boolean(state.sameFate);
       sendSnapshot();
-      sendFate();
     }
     return next;
   }
 
-  function setGrant(peer, allowed) {
-    if (!isHost()) return false;
-    // A grant covers the browser, not one tab or one origin. The peer's
-    // actions can land on any page it can see, so the grant names every tab
-    // and no origin.
-    const tabId = '*';
-    const origin = '';
-    if (allowed) grants.grant(peer, { tabId, origin });
-    else {
-      grants.revoke(peer, tabId);
-      // A peer that loses control can no longer send its recovery frame, and
-      // the host ignores a stutter from an ungranted peer. Its hold would sit
-      // on the film until the expiry with nobody able to release it, so the
-      // hold goes at the moment control does.
-      if (stutters.delete(peer)) {
-        stats.holds = stutters.size;
-        notifyHold();
-      }
-    }
-    sendMessage({
-      type: 'control',
-      from: peerId,
-      peerId: peer,
-      allowed,
-      ...(allowed ? { mediaRev } : {}),
-      tabId,
-      origin,
-      roomTime: roomTimeOf(),
-    });
-    if (onControl) {
-      try {
-        onControl({ peerId: peer, allowed: Boolean(allowed), from: peerId });
-      } catch {
-        // A listener cannot break the room.
-      }
-    }
-    stats.controlSent += 1;
-    stats.sentControls.push({
-      peerId: peer,
-      allowed: Boolean(allowed),
-      roomTime: Math.round(roomTimeOf()),
-    });
-    if (stats.sentControls.length > 8) stats.sentControls.shift();
-    return true;
-  }
-
-  // A peer that holds control drives the room's playhead. Its room tab has no
+  // Any peer in the room can drive the shared playhead. Its room tab has no
   // player, so the state arrives from the tab that does. The background has
-  // already dropped that report when playback sync is off. The frame carries
-  // this peer's id, and the host checks that id against its grants before it
-  // moves its own film.
+  // already dropped that report when playback sync is off.
   function pendingPeerMedia(key, local = now()) {
     if (!pendingPeerApply) return null;
     if (local >= pendingPeerApply.until) {
@@ -756,7 +657,7 @@ export function createRoomClient({
   }
 
   function sendMedia(state) {
-    if (isHost() || !remoteGrant) return false;
+    if (isHost()) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
     const action =
       typeof state.action === 'string' && state.action ? state.action : 'tick';
@@ -803,7 +704,6 @@ export function createRoomClient({
   function sendHostMedia(state, local = now()) {
     if (!isHost()) return false;
     if (!state || typeof state !== 'object' || !state.key) return false;
-    noteMedia(state, local);
     // A room frame names one instant. The film tab reads a position, and the
     // room sends it a moment later, so a report that carries the instant it was
     // read is carried forward to the send. A report with no such instant is
@@ -887,172 +787,6 @@ export function createRoomClient({
     return true;
   }
 
-  function activeHold() {
-    return [...stutters.values()][0] || null;
-  }
-
-  // One hold is enough to pause the room. When it releases, the next active
-  // hold keeps the pause; only the last release resumes the players.
-  function notifyHold() {
-    if (!onHold) return;
-    const hold = activeHold();
-    if (hold) {
-      lastHold = hold;
-      lastHoldEvent = { ...hold, active: true, eventAt: now() };
-      try {
-        onHold({ ...hold, active: true });
-      } catch {
-        // A listener cannot break the room.
-      }
-      return;
-    }
-    if (!lastHold) return;
-    const released = { ...lastHold, active: false };
-    lastHoldEvent = { ...released, eventAt: now() };
-    lastHold = null;
-    try {
-      onHold(released);
-    } catch {
-      // A listener cannot break the room.
-    }
-  }
-
-  function broadcastStutter(peer, active, hold, local) {
-    sendMessage({
-      type: 'stutter',
-      peerId: peer,
-      // Guests accept a hold only from the host. The source travels separately,
-      // so every player knows whose connection is holding the room.
-      from: peerId,
-      key: String(hold.key),
-      position: Number(hold.position || 0),
-      playing: Boolean(hold.playing),
-      active: Boolean(active),
-      roomTime: roomTimeOf(local),
-    });
-    stats.stutterSent += 1;
-  }
-
-  function setStutter(peer, active, hold, local, { broadcast = false } = {}) {
-    if (!peer || !hold || !hold.key) return false;
-    if (active) {
-      stutters.set(peer, {
-        peerId: peer,
-        key: String(hold.key),
-        position: Number(hold.position || 0),
-        playing: Boolean(hold.playing),
-        at: local,
-      });
-    } else {
-      stutters.delete(peer);
-    }
-    stats.holds = stutters.size;
-    notifyHold();
-    if (broadcast) broadcastStutter(peer, active, hold, local);
-    return true;
-  }
-
-  function clearStutters() {
-    stutters.clear();
-    stats.holds = 0;
-    notifyHold();
-  }
-
-  // Silence is not a release. A film paused under a hold stops sending the
-  // buffering flag that would clear it, so the host drops an old hold and tells
-  // the room, because the starved tab may never send its recovery frame.
-  function expireHolds(local) {
-    if (!stutters.size) return false;
-    let expired = false;
-    for (const [peer, hold] of [...stutters]) {
-      if (local - Number(hold.at || local) < STUTTER_MAX_MS) continue;
-      stutters.delete(peer);
-      expired = true;
-      if (isHost()) broadcastStutter(peer, false, hold, local);
-    }
-    if (!expired) return false;
-    stats.holds = stutters.size;
-    notifyHold();
-    return true;
-  }
-
-  function sendFate() {
-    sendMessage({
-      type: 'fate',
-      peerId,
-      enabled: currentSameFate,
-      roomTime: roomTimeOf(),
-    });
-  }
-
-  function setSameFate(on) {
-    if (!isHost()) return false;
-    const next = Boolean(on);
-    if (next === currentSameFate) return currentSameFate;
-    currentSameFate = next;
-    state.sameFate = next;
-    sendFate();
-    if (!next) clearStutters();
-    return currentSameFate;
-  }
-
-  // The source says whether its player is starved. A stutter that survives the
-  // grace window travels once, and the recovery travels once. An ungranted peer
-  // never reaches the wire.
-  function noteMedia(mediaState, local = now()) {
-    if (!mediaState || !mediaState.key) return false;
-    if (!currentSameFate) {
-      ownBufferingSince = null;
-      ownBuffering = false;
-      return false;
-    }
-    const key = String(mediaState.key);
-    const buffering = Boolean(mediaState.buffering);
-    if (!buffering) {
-      ownBufferingSince = null;
-      if (!ownBuffering) return false;
-      ownBuffering = false;
-      if (isHost()) {
-        setStutter(peerId, false, mediaState, local, { broadcast: true });
-      } else if (remoteGrant) {
-        sendMessage({
-          type: 'stutter',
-          peerId,
-          key,
-          position: Number(mediaState.position || 0),
-          playing: Boolean(mediaState.playing),
-          active: false,
-          roomTime: roomTimeOf(local),
-        });
-        stats.stutterSent += 1;
-      }
-      return false;
-    }
-    if (ownBufferingSince === null || ownStutterKey !== key) {
-      ownBufferingSince = local;
-      ownStutterKey = key;
-    }
-    if (ownBuffering) return false;
-    if (local - ownBufferingSince < STUTTER_GRACE_MS) return false;
-    if (!isHost() && !remoteGrant) return false;
-    ownBuffering = true;
-    if (isHost()) {
-      setStutter(peerId, true, mediaState, local, { broadcast: true });
-    } else {
-      sendMessage({
-        type: 'stutter',
-        peerId,
-        key,
-        position: Number(mediaState.position || 0),
-        playing: Boolean(mediaState.playing),
-        active: true,
-        roomTime: roomTimeOf(local),
-      });
-      stats.stutterSent += 1;
-    }
-    return true;
-  }
-
   function canvasFraction(element, event) {
     if (!element || String(element.tagName || '').toLowerCase() !== 'canvas') return null;
     const rect = element.getBoundingClientRect();
@@ -1061,244 +795,6 @@ export function createRoomClient({
       x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
       y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
     };
-  }
-
-  function handleInput(message) {
-    if (!message.peerId) return { ok: false, reason: 'no-peer' };
-    if (!doc) return { ok: false, reason: 'no-document' };
-    const here = doc.location ? doc.location.href : '';
-    if (here && !originAllowed(here)) {
-      stats.inputDropped += message.records.length;
-      stats.inputReasons.origin = (stats.inputReasons.origin || 0) + message.records.length;
-      return { ok: false, reason: 'origin' };
-    }
-    // A site the host took off the mirror list takes no relayed click, key or
-    // text, even when the peer still holds a browser-wide grant.
-    if (here && !scrollAllowed(here)) {
-      stats.inputDropped += message.records.length;
-      stats.inputReasons.site = (stats.inputReasons.site || 0) + message.records.length;
-      return { ok: false, reason: 'site' };
-    }
-    if (!state.allowInput(message.peerId)) return { ok: false, reason: 'rate' };
-    const accepted = state.acceptInput({
-      peerId: message.peerId,
-      seq: message.seq,
-      records: message.records,
-    });
-    if (!accepted.accepted) return { ok: false, reason: accepted.reason };
-
-    // Scrolling stays local for every peer. Drop wheel/scroll records before
-    // trusted actuation or synthetic replay, even from an older bridge.
-    const scrollRecords = message.records.filter(
-      (record) => record && (record.kind === 'wheel' || record.kind === 'scroll')
-    );
-    const activeRecords =
-      scrollRecords.length > 0
-        ? message.records.filter(
-            (record) => !record || (record.kind !== 'wheel' && record.kind !== 'scroll')
-          )
-        : message.records;
-    if (scrollRecords.length > 0) {
-      stats.inputDropped += scrollRecords.length;
-      stats.inputReasons.scroll = (stats.inputReasons.scroll || 0) + scrollRecords.length;
-    }
-    if (!activeRecords.length) {
-      return { ok: true, applied: 0, dropped: scrollRecords.length, reason: 'scroll' };
-    }
-
-    const tabId = (input && input.tabId) || 'tab';
-    const origin = doc.location ? doc.location.origin : (input && input.origin) || '';
-    const allowed = (record) => grants.allows(message.peerId, { tabId, origin, kind: record.kind });
-    // Trusted actuation drives the browser's real input pipeline, so even
-    // FREE_KINDS (move/scroll) require an active grant for this peer.
-    const hasActiveGrant = () =>
-      grants.decide(message.peerId, { tabId, origin, kind: 'click' }).allow;
-    const trustedAllowed = (record) => hasActiveGrant() && allowed(record);
-    const replay = (records = activeRecords) => {
-      const applied = replayInput(records, {
-        root: doc,
-        // A peer that laid out the page differently sends a point that lands
-        // elsewhere here. Drop the record and say so.
-        layoutMatches: !stats.layoutMismatch,
-        allowed,
-        onDrop: (reason) => {
-          stats.inputReasons[reason] = (stats.inputReasons[reason] || 0) + 1;
-        },
-      });
-      if (applied.reasons.layout) {
-        stats.layoutNotice = {
-          at: Math.round(now()),
-          peerId: message.peerId,
-          dropped: applied.reasons.layout,
-        };
-      }
-      stats.inputApplied += applied.applied;
-      stats.inputDropped += applied.dropped;
-      return { ok: true, ...applied };
-    };
-
-    // A trusted room applies the batch in the browser's own input pipeline.
-    // The records arrive already placed against this layout, so the synthetic
-    // path is the fallback and not the first choice. A refusal replays, so a
-    // closed agent or a stale token never swallows a click silently.
-    if (input && typeof input.trusted === 'function') {
-      const sendable = activeRecords.filter(trustedAllowed);
-      const droppedNow = activeRecords.length - sendable.length;
-      if (droppedNow > 0) {
-        stats.inputDropped += droppedNow;
-        stats.inputReasons.grant = (stats.inputReasons.grant || 0) + droppedNow;
-      }
-      if (!sendable.length) {
-        return { ok: true, applied: 0, dropped: message.records.length, trusted: true };
-      }
-      // Two batches used to be in flight at once, and a slow one let the next
-      // overtake it, so a word arrived with its letters swapped. Each send now
-      // waits for the browser to apply the batch before it.
-      const dispatch = async () => {
-        // Re-check grants at dispatch time so a revocation mid-queue stops
-        // queued batches from executing.
-        const liveSendable = sendable.filter(trustedAllowed);
-        if (!liveSendable.length) {
-          stats.inputDropped += sendable.length;
-          stats.inputReasons.grant = (stats.inputReasons.grant || 0) + sendable.length;
-          return;
-        }
-        try {
-          const answer = await input.trusted(liveSendable);
-          if (!answer || !answer.ok) {
-            const reason = String((answer && answer.reason) || '');
-            const policyRefused =
-              Boolean(answer) &&
-              (answer.allow === false ||
-                reason === 'pointer-lock-active' ||
-                reason === 'pointer-lock-local' ||
-                reason === 'scroll' ||
-                reason === 'new-tab' ||
-                reason === 'local-control' ||
-                answer.status === 403 ||
-                reason === 'status 403');
-            if (policyRefused) {
-              const key = reason || 'pointer-lock-active';
-              stats.inputDropped += liveSendable.length;
-              stats.inputReasons[key] = (stats.inputReasons[key] || 0) + liveSendable.length;
-              return;
-            }
-            if (!hasActiveGrant()) {
-              stats.inputDropped += liveSendable.length;
-              stats.inputReasons.grant = (stats.inputReasons.grant || 0) + liveSendable.length;
-              return;
-            }
-            replay(liveSendable);
-            return;
-          }
-          stats.inputApplied += Number(answer.applied) || liveSendable.length;
-          const skipped = Number(answer.skipped) || 0;
-          if (skipped) {
-            stats.inputDropped += skipped;
-            stats.inputReasons.kind = (stats.inputReasons.kind || 0) + skipped;
-          }
-        } catch {
-          if (!hasActiveGrant()) {
-            stats.inputDropped += liveSendable.length;
-            stats.inputReasons.grant = (stats.inputReasons.grant || 0) + liveSendable.length;
-            return;
-          }
-          replay(liveSendable);
-        }
-      };
-      trustedQueue = trustedQueue.then(dispatch);
-      return { ok: true, trusted: true, sent: sendable.length };
-    }
-    return replay();
-  }
-
-  function setupInput() {
-    if (!input || !input.capture || !doc) return;
-    batcher = new InputBatcher({ now, send, peerId });
-    stats.capture = true;
-
-    // Synthetic events never travel back. That is the first loop guard, and
-    // the second is that only a granted peer captures at all. A site the host
-    // took off the mirror list is the third, so nothing is even queued there.
-    const siteOff = () => {
-      const href = doc.location ? doc.location.href : '';
-      return Boolean(href) && !scrollAllowed(href);
-    };
-    const skip = (event) =>
-      !event.isTrusted ||
-      siteOff() ||
-      isLocalControl(event.target);
-
-    doc.addEventListener(
-      'click',
-      (event) => {
-        if (skip(event) || !remoteGrant) return;
-        if (isSensitiveField(event.target)) return;
-        if (isTabOpeningClick(event.target, event)) return;
-        batcher.push({
-          kind: 'click',
-          path: cssPath(event.target),
-          button: event.button,
-          canvas: canvasFraction(event.target, event),
-        });
-        // A click is a whole act, and a click on a link unloads this page. A
-        // queued record would leave with the page still holding it, so the
-        // click goes out now instead of on the next tick.
-        batcher.flush();
-      },
-      true
-    );
-
-    // A page can leave without a click, and the last keys still belong to the
-    // room. One flush on the way out keeps the tail of the input.
-    const flushOut = () => batcher.flush();
-    if (typeof doc.defaultView?.addEventListener === 'function') {
-      doc.defaultView.addEventListener('pagehide', flushOut, { passive: true });
-    }
-
-    doc.addEventListener(
-      'keydown',
-      (event) => {
-        if (skip(event) || !remoteGrant) return;
-        if (isSensitiveField(event.target)) return;
-        if (isTabOpeningKey(event.target, event)) return;
-        batcher.push({
-          kind: 'key',
-          key: event.key,
-          code: event.code,
-          path: cssPath(event.target),
-          ctrl: event.ctrlKey,
-          alt: event.altKey,
-          shift: event.shiftKey,
-          meta: event.metaKey,
-        });
-      },
-      true
-    );
-
-    // Scrolling stays local for every peer; wheel events are never captured
-    // or relayed, even when a peer holds control.
-
-    // A synthetic key event inserts no character, so typing travels as the
-    // field value instead. The receiver writes it through the native setter,
-    // which is what React and Vue read. A password or credential field never
-    // reaches this record.
-    doc.addEventListener(
-      'input',
-      (event) => {
-        if (skip(event) || !remoteGrant) return;
-        const target = event.target;
-        const tag = String((target && target.tagName) || '').toLowerCase();
-        if (!['input', 'textarea', 'select'].includes(tag)) return;
-        if (isSensitiveField(target)) return;
-        batcher.push({
-          kind: 'text',
-          path: cssPath(target),
-          value: String(target.value ?? ''),
-        });
-      },
-      true
-    );
   }
 
   // Presence travels as a share of the viewport, so two window sizes put a
@@ -1467,53 +963,6 @@ export function createRoomClient({
       typeof message.action === 'string' && message.action !== 'tick'
         ? message.action
         : null;
-    // A hold freezes the room. A routine tick during the hold must not start
-    // the player underneath it; the hold release carries the resume position.
-    // The source's own seek is different: it is the new point that release
-    // must land on, so absorb it instead of dropping a person's command.
-    const hold = activeHold();
-    if (hold) {
-      if (explicit === 'seek' && message.peerId === hold.peerId) {
-        const picked = media.pick(message.key);
-        const read = picked ? media.state(picked) : null;
-        const limit = Number(read && read.duration);
-        const target =
-          limit > 0
-            ? Math.max(0, Math.min(Number(message.position || 0), limit))
-            : Math.max(0, Number(message.position || 0));
-        hold.position = target;
-        hold.playing = Boolean(message.playing);
-        if (lastHoldEvent && lastHoldEvent.active && lastHoldEvent.peerId === hold.peerId) {
-          lastHoldEvent = {
-            ...lastHoldEvent,
-            position: target,
-            playing: Boolean(message.playing),
-            eventAt: local,
-          };
-        }
-        const actor =
-          (state.peers.get(message.peerId) || {}).name || message.name || message.peerId;
-        stats.lastMediaAction = {
-          name: actor,
-          peerId: message.peerId || null,
-          action: 'seek',
-          position: target,
-          rate: Number(message.rate || 1),
-          text: actionText({ name: actor, action: 'seek', position: target }),
-          at: Math.round(local),
-        };
-        return { ok: true, held: true, action: 'seek' };
-      }
-      noteMediaDrop('hold', message, local);
-      return { ok: true, ignored: 'hold' };
-    }
-    // A host follows only a peer it granted control to. Without this check a
-    // viewer could pull the host's film around, and a grant would change
-    // nothing about playback.
-    if (isHost() && !grants.active().some((grant) => grant.peerId === message.peerId)) {
-      noteMediaDrop('no-grant', message, local);
-      return { ok: true, ignored: 'no-grant' };
-    }
     const incomingRev =
       message.rev !== undefined && message.rev !== null && Number.isFinite(Number(message.rev))
         ? Number(message.rev)
@@ -1536,11 +985,11 @@ export function createRoomClient({
       return { ok: true, ignored: 'host-priority' };
     }
     // Reject stale-revision peer acts on the same film that arrived after a
-    // newer host or same-peer media act. When a different granted controller
-    // acts concurrently at an equal peer-created rev (multi-controller hand-off),
-    // or on a different film key the host is not actively playing, accept it as
-    // the latest explicit controller act and bump mediaRev.
-    let multiControllerBump = false;
+    // newer host or same-peer media act. When a different peer acts concurrently
+    // at an equal peer-created rev (multi-peer hand-off), or on a different film
+    // key the host is not actively playing, accept it as the latest explicit act
+    // and bump mediaRev.
+    let multiActorBump = false;
     if (isHost() && incomingRev !== null) {
       const sameFilm = !lastMediaKey || message.key === lastMediaKey || Boolean(hostRead);
       if (explicit === null) {
@@ -1559,17 +1008,17 @@ export function createRoomClient({
           message.peerId &&
           message.peerId !== lastMediaActor;
         if (peerHandOff) {
-          multiControllerBump = true;
+          multiActorBump = true;
         } else {
           noteMediaDrop('stale-rev', message, local);
           if (hostRead) sendHostAnchor(hostRead, local);
           return { ok: true, ignored: 'stale-rev' };
         }
       } else if (!sameFilm && incomingRev <= mediaRev) {
-        multiControllerBump = true;
+        multiActorBump = true;
       }
     }
-    // Protect a granted peer's just-issued local act from already-in-flight
+    // Protect a peer's just-issued local act from already-in-flight
     // routine host ticks (or older rev frames) until the host acknowledges or
     // supersedes it on that film.
     if (!isHost() && pendingLocalAct) {
@@ -1601,11 +1050,9 @@ export function createRoomClient({
       stats.position = Math.round(read.position * 1000) / 1000;
       stats.playing = read.playing;
     }
-    // A granted peer's play, pause or rate change says what the room should
-    // do, not where the host's copy is. Its own playhead can sit behind the
-    // host, and using that position here pulled the host backwards at the
-    // moment control was granted. A seek is the one act that carries a new
-    // position, so only a seek uses the peer's timestamp.
+    // A peer's play, pause or rate change says what the room should do, not
+    // where the host's copy is. Its own playhead can sit behind the host, so
+    // only a seek carries a new position and uses the peer's timestamp.
     const derived = explicit
       ? null
       : mediaAction(lastMediaFrame, { ...message, position: message.position }, local);
@@ -1653,14 +1100,14 @@ export function createRoomClient({
         at: Math.round(local),
       };
     }
-    // The host's room tab holds no player. A granted peer drives the film
+    // The host's room tab holds no player. Any peer drives the film
     // through the tab that does, and the host keeps sending its own anchor.
     if (isHost()) {
       if (!onMedia) {
         noteMediaDrop('no-media', message, local);
         return { ok: false, reason: 'no-media' };
       }
-      const nextRev = multiControllerBump
+      const nextRev = multiActorBump
         ? Math.max(mediaRev, incomingRev || 0) + 1
         : incomingRev !== null && incomingRev > mediaRev
           ? incomingRev
@@ -1790,8 +1237,8 @@ export function createRoomClient({
     }
 
     // Wait for a seek to land before judging the next one.
-    // The controller holds a seek for its own cooldown, so the settle window
-    // never ends before the controller would allow another one.
+    // The drift logic holds a seek for its own cooldown, so the settle window
+    // never ends before another correction would be allowed.
     const settleMs = Math.max(SEEK_SETTLE_MS, drift.cooldownMs || 0);
     // The element can report a seek that never finishes. Waiting on it forever
     // leaves the peer behind by the whole gap, so the wait has a limit.
@@ -1950,73 +1397,17 @@ export function createRoomClient({
         }
         if (isHost()) {
           reconcileColour(message.peerId, message.colour);
-          // A peer that follows a navigation reloads and says hello again. Send
-          // the grant again, or the new page never learns it holds control.
+          // A peer that joins or reloads says hello; send the current roster
+          // and site policy.
           sendSnapshot();
           helloAnswer();
-          sendFate();
-          for (const hold of stutters.values()) {
-            broadcastStutter(hold.peerId, true, hold, local);
-          }
-          const held = grants.active().find((grant) => grant.peerId === message.peerId);
-          if (held) {
-            sendMessage({
-              type: 'control',
-              from: peerId,
-              peerId: message.peerId,
-              allowed: true,
-              tabId: held.tabId,
-              origin: held.origin,
-              roomTime: roomTimeOf(),
-            });
-          }
-          if (input && input.grantTo === message.peerId) setGrant(message.peerId, true);
-        }
-        return { ok: true };
-      }
-      case 'control': {
-        // The host is the authority. Control frames are ignored on the host,
-        // and guests only accept control changes authenticated from currentHost.
-        if (isHost()) return { ok: true, ignored: 'host' };
-        if (!message.from || message.from !== currentHost) {
-          return { ok: true, ignored: 'not-host' };
-        }
-        const allowed = Boolean(message.allowed);
-        stats.controlReceived += 1;
-        stats.controls.push({ peerId: message.peerId, allowed });
-        if (stats.controls.length > 8) stats.controls.shift();
-        stats.lastControl = {
-          peerId: message.peerId,
-          allowed,
-          mine: message.peerId === peerId,
-        };
-        if (allowed) remoteGrants.add(message.peerId);
-        else remoteGrants.delete(message.peerId);
-        if (message.peerId === peerId) {
-          remoteGrant = allowed;
-          stats.granted = remoteGrant;
-          if (
-            allowed &&
-            message.mediaRev !== undefined &&
-            message.mediaRev !== null &&
-            Number.isFinite(Number(message.mediaRev)) &&
-            Number(message.mediaRev) > mediaRev
-          ) {
-            mediaRev = Number(message.mediaRev);
-            lastSentRev = Math.max(lastSentRev, mediaRev);
-          }
-        }
-        if (onControl) {
-          try {
-            onControl({ peerId: message.peerId, allowed, from: message.from });
-          } catch {
-            // A listener cannot break the room.
-          }
         }
         return { ok: true };
       }
       case 'input':
-        return handleInput(message);
+        // Remote DOM input is not relayed. Room apps sync their own state
+        // through app messages, so an input frame is refused here.
+        return { ok: false, reason: 'input-disabled' };
       case 'snapshot':
         if (isHost()) return { ok: true, ignored: 'host' };
         if (!message.from || message.from !== currentHost) {
@@ -2034,24 +1425,7 @@ export function createRoomClient({
           lastSentRev = mediaRev;
           pendingLocalAct = null;
         }
-        if (Array.isArray(message.grantedPeers)) {
-          const previous = new Set(remoteGrants);
-          remoteGrants.clear();
-          for (const id of message.grantedPeers) {
-            if (typeof id === 'string' && id) remoteGrants.add(id);
-          }
-          if (onControl) {
-            for (const id of previous) {
-              if (!remoteGrants.has(id)) {
-                try {
-                  onControl({ peerId: id, allowed: false, from: message.from });
-                } catch {
-                  // A listener cannot break the room.
-                }
-              }
-            }
-          }
-        }
+
         if (message.scrollSites !== undefined) {
           allowedScrollSites =
             message.scrollSites === null ? null : cleanCursorSites(message.scrollSites) || [];
@@ -2066,10 +1440,6 @@ export function createRoomClient({
         if (!isHost() && message.roomName) {
           currentRoomName = cleanRoomName(message.roomName);
           state.roomName = currentRoomName;
-        }
-        if (!isHost()) {
-          currentSameFate = Boolean(state.sameFate);
-          if (!currentSameFate) clearStutters();
         }
         applyPeers();
         followSnapshot(message);
@@ -2158,8 +1528,7 @@ export function createRoomClient({
         }
         const next = message.sites === null ? null : cleanCursorSites(message.sites) || [];
         allowedScrollSites = next;
-        batcher?.clear();
-        if (onScrollPolicy) {
+            if (onScrollPolicy) {
           try {
             onScrollPolicy(next);
           } catch {
@@ -2167,34 +1536,6 @@ export function createRoomClient({
           }
         }
         return { ok: true, sites: next };
-      }
-      case 'fate': {
-        if (isHost()) return { ok: true, ignored: 'host' };
-        if (message.peerId !== currentHost) return { ok: true, ignored: 'not-host' };
-        currentSameFate = Boolean(message.enabled);
-        state.sameFate = currentSameFate;
-        if (!currentSameFate) clearStutters();
-        return { ok: true, sameFate: currentSameFate };
-      }
-      case 'stutter': {
-        stats.stutterReceived += 1;
-        if (!currentSameFate) return { ok: true, ignored: 'fate-off' };
-        if (isHost()) {
-          // The host is the authority. A peer needs a live grant, so an
-          // ungranted stutter never holds the room.
-          if (!grants.active().some((grant) => grant.peerId === message.peerId)) {
-            return { ok: true, ignored: 'no-grant' };
-          }
-          setStutter(message.peerId, message.active, message, local, { broadcast: true });
-          return { ok: true, accepted: true };
-        }
-        // A guest accepts only the host's rebroadcast. The peer's own frame has
-        // no from field, so it cannot hold the room on its own.
-        if (!message.from || message.from !== currentHost) {
-          return { ok: true, ignored: 'not-host' };
-        }
-        setStutter(message.peerId, message.active, message, local);
-        return { ok: true, accepted: true };
       }
       case 'media':
         return applyMedia(message, local);
@@ -2232,14 +1573,18 @@ export function createRoomClient({
         }
         return { ok: true };
       }
-      case 'bye':
+      case 'bye': {
         // A host that says goodbye hands the room to the smallest live id. A
         // peer that leaves only leaves.
-        if (message.peerId === currentHost) {
-          state.leave(message.peerId);
-          migrateHost(message.peerId);
+        const departed = message.peerId;
+        if (departed && departed !== peerId) {
+          state.leave(departed);
+        }
+        if (departed === currentHost) {
+          migrateHost(departed);
         }
         return { ok: true, host: currentHost };
+      }
       default:
         return { ok: true };
     }
@@ -2349,11 +1694,9 @@ export function createRoomClient({
   }
 
   function tick(local = now()) {
-    expireHolds(local);
     // A dropped socket leaves its entry behind. The count only means live peers
     // once the map forgets a peer that stopped sending presence.
-    const held = new Set(grants.active().map((grant) => grant.peerId));
-    const gone = state.prune({ at: local, keep: held });
+    const gone = state.prune({ at: local });
     // A host that stops sending presence has left, and the room elects again.
     if (currentHost && currentHost !== peerId && gone.includes(currentHost)) {
       migrateHost(currentHost);
@@ -2372,10 +1715,6 @@ export function createRoomClient({
       }
       if (dropped) stats.cursors = cursor.stats().peers;
     }
-    if (batcher && local - lastInputFlush >= POINTER_INTERVAL_MS) {
-      lastInputFlush = local;
-      batcher.flush();
-    }
     if (!isHost() && clock.due(local)) {
       sendMessage({ ...clock.ping(local), to: currentHost });
     }
@@ -2388,7 +1727,6 @@ export function createRoomClient({
       // why the film is not moving yet.
       const flags = media.flags(element);
       if (nowState) {
-        noteMedia({ ...nowState, buffering: Boolean(flags.buffering) }, local);
         if (
           !peerApplyStillPending(
             nowState.key,
@@ -2437,13 +1775,6 @@ export function createRoomClient({
   }
 
   function publish() {
-    // The page loop publishes on a timer and never calls tick(), so a hold that
-    // stopped hearing recovery reports has to expire here or it freezes the
-    // room for the rest of the session.
-    expireHolds(now());
-    const grantedPeers = new Set(
-      isHost() ? grants.active().map((grant) => grant.peerId) : remoteGrants
-    );
     return {
       role: currentRole,
       peerId,
@@ -2470,7 +1801,7 @@ export function createRoomClient({
       driftRate: drift.rate,
       align: alignState,
       peers: state.peers.size,
-      // The panel needs names and who holds control. The count stays a number so
+      // The panel needs live peer details. The count stays a number so
       // the harness assertions do not change.
       peerList: [...state.peers.values()].map((peer) => ({
         id: peer.id,
@@ -2479,27 +1810,8 @@ export function createRoomClient({
         cursor: peer.cursor || null,
         build: peer.build || null,
         self: peer.id === peerId,
-        granted: peer.id === peerId ? remoteGrant : grantedPeers.has(peer.id),
       })),
       roomName: currentRoomName,
-      sameFate: currentSameFate,
-      stutter: {
-        active: Boolean(activeHold()),
-        peerId: activeHold() ? activeHold().peerId : null,
-        holds: stutters.size,
-      },
-      holds: [...stutters.values()].map((hold) => {
-        const at = Number(hold.at || 0);
-        return {
-          peerId: hold.peerId,
-          key: hold.key,
-          position: Number(hold.position || 0),
-          playing: Boolean(hold.playing),
-          at,
-          ageMs: Math.max(0, Math.round(now() - at)),
-        };
-      }),
-      lastHoldEvent: lastHoldEvent ? { ...lastHoldEvent } : null,
       hostPriority: {
         lastActAt: Number.isFinite(lastHostActAt) ? Math.round(lastHostActAt) : null,
         remainingMs: Number.isFinite(lastHostActAt)
@@ -2540,12 +1852,7 @@ export function createRoomClient({
       presenceByPeer: Object.fromEntries(
         [...presenceByPeer].map(([id, list]) => [id, summarize(list)])
       ),
-      granted: remoteGrant,
-      controlSent: stats.controlSent,
-      controlReceived: stats.controlReceived,
-      lastControl: stats.lastControl,
-      controls: stats.controls,
-      controlHistory: stats.sentControls,
+
       lastMediaAction: stats.lastMediaAction,
       lastLocalMediaAction: stats.lastLocalMediaAction
         ? { ...stats.lastLocalMediaAction }
@@ -2557,11 +1864,11 @@ export function createRoomClient({
         ...entry,
         hostAct: entry.hostAct ? { ...entry.hostAct } : null,
       })),
-      capture: Boolean(batcher),
+      capture: false,
       inputApplied: stats.inputApplied,
       inputDropped: stats.inputDropped,
       inputReasons: stats.inputReasons,
-      input: batcher ? batcher.stats() : null,
+      input: null,
       app: {
         sent: stats.appSent,
         received: stats.appReceived,
@@ -2574,12 +1881,6 @@ export function createRoomClient({
 
   setupPointer();
   setupResize();
-  setupInput();
-
-  // A room opened with a grant names the peer it trusts. The peer needs the
-  // same frame the panel sends, or it never starts capturing, so this grant
-  // goes out on the wire through the one path that also grants here.
-  if (isHost() && input && input.grantTo) setGrant(input.grantTo, true);
 
   return {
     role: currentRole,
@@ -2587,18 +1888,9 @@ export function createRoomClient({
     peerId,
     receive,
     sendApp,
-    grants,
-    setGrant,
     sendMedia,
     sendHostMedia,
     pendingPeerMedia,
-    isGranted: () => remoteGrant,
-    hasGrant: (id) => {
-      const target = String(id || '');
-      if (!target) return false;
-      if (isHost()) return grants.active().some((grant) => grant.peerId === target);
-      return (target === peerId && remoteGrant) || remoteGrants.has(target);
-    },
     hostId: () => currentHost,
     tick,
     presence,
@@ -2606,8 +1898,6 @@ export function createRoomClient({
     setPageUrl,
     setColour,
     setRoomName,
-    setSameFate,
-    noteMedia,
     setCursor,
     setSharePointer,
     setCursorSites,

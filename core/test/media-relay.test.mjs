@@ -362,7 +362,7 @@ test('a buffer wait reports recovery after the deadline without another frame', 
   assert.equal(video.paused, false);
 });
 
-test('the relay keeps recent seek, buffer and hold history', () => {
+test('the relay keeps recent seek and buffer history', () => {
   let end = 60;
   const buffered = { length: 1, start: () => 0, end: () => end };
   const video = fakeVideo({ currentTime: 50, duration: 300, paused: false, buffered });
@@ -391,17 +391,6 @@ test('the relay keeps recent seek, buffer and hold history', () => {
   assert.equal(history.buffers[0].outcome, 'ready');
   assert.equal(history.buffers[0].durationMs, 1000);
 
-  now += 1000;
-  sync.handle({ key: ytKey, position: 100, playing: true, rate: 1, at: now, hold: true });
-  history = sync.historyView();
-  assert.equal(history.holds.length, 1);
-  assert.equal(history.holds[0].outcome, null);
-
-  now += 2000;
-  sync.handle({ key: ytKey, position: 100, playing: false, rate: 1, at: now, hold: false });
-  history = sync.historyView();
-  assert.equal(history.holds[0].outcome, 'released');
-  assert.equal(history.holds[0].durationMs, 2000);
 });
 
 test('a buffer that never arrives still seeks after the wait deadline', () => {

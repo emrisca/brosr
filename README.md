@@ -5,7 +5,7 @@
 [![Lint](https://github.com/emrisca/brosr/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/emrisca/brosr/actions/workflows/lint.yml)
 
 Brosr is a room of people sharing one browser session. Cursors, opt-in Live tabs, synced
-media playback and granted controls stay aligned across every window while scrolling stays
+media playback and shared tab controls stay aligned across every window while scrolling stays
 local. Brosr sends no video by default. A room costs about 10 KB/s per peer; a screen share
 needs 2 Mbps on a bad link. (For pages that cannot sync state, see the planned opt-in
 single-tab share in [docs/tab-share-plan.md](docs/tab-share-plan.md).)
@@ -88,14 +88,14 @@ and open the host browser, then it reads and changes room settings through the p
 Every browser in the room holds one WebSocket to the relay. Frames are sealed with the key from
 the invite fragment, so the relay forwards bytes it cannot read.
 
-A tab someone with control opens is offered, never forced. The landing page's Live tabs
-section is the single source of truth for offers, grouped dynamically by the person who shared
-each tab (`Host` or `Control`) with live playback badges and in-place title updates. A peer
-opens a copy by choice; a joined row offers Stop, and closing or stopping it leaves the sync
-without closing anyone else's tab. Whoever holds control can play/pause, skip (`-10s` / `+10s`),
-seek or change videos right from Live tabs or their player, and late joiners sync to the live
-playhead automatically. Scrolling always stays local. The room panel lists stopped copies, and
-Resume puts that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detail.
+A tab someone shares is offered, never forced. The landing page's Live tabs section is the
+single source of truth for offers, grouped dynamically by the person hosting each tab (`Host`
+or `Member`) with live playback badges and in-place title updates. A peer opens a copy by
+choice, a joined row offers Stop, and closing or stopping it leaves the sync without closing
+anyone else's tab. Anyone holding a shared tab can play, pause or skip (`-10s` / `+10s`). Only
+the person who shared it can change the video or source. Late joiners sync to the live playhead
+automatically. Scrolling always stays local. The room panel lists stopped copies, and Resume
+puts that same tab back in the room. [docs/sync.md](docs/sync.md) has the layer detail.
 
 ## What the repository holds
 
@@ -173,7 +173,7 @@ refuse `--load-extension`.
 | Build | Result |
 | --- | --- |
 | Brave 156.1.98.63 | The lane loaded the unpacked build and read a live dataset with `socket: 1` from the room page. The relay counted one peer. |
-| Zen 1.24.1b | The lane installed the XPI and read a live dataset, then read the panel in a tab. The panel reported `live`, a 14.13 contrast, the invite link and the grant history. |
+| Zen 1.24.1b | The lane installed the XPI and read a live dataset, then read the panel in a tab. The panel reported `live`, a 14.13 contrast, the invite link and the shared tab list. |
 
 The toolbar opens the panel as an anchored popup in both engines, declared as `default_popup` in
 the Gecko manifest and in the Chromium one. The panel page names its surface in the URL, so one
@@ -267,7 +267,7 @@ The `.runtime` directory stays out of git, because a run rebuilds it.
 | Netflix, Disney+ and Prime Video | The DRM layer controls the media pipeline, so a script cannot set the playhead. See [docs/tab-share-plan.md](docs/tab-share-plan.md) for the planned single-tab share fallback. |
 | Identical pixels | Each person renders the page on their own machine, so a different window size gives a different layout. See [docs/tab-share-plan.md](docs/tab-share-plan.md) for the planned single-tab share fallback. |
 | One shared login | Each person signs in on their own copy. Cookies never cross the relay. |
-| Trusted input by default | Rooms start with synthetic input only. Trusted native input (`--trusted`) opens a loopback remote agent only while an active control grant is held and closes it on revoke. |
+| Relayed clicking or typing | The room copies intent, not raw DOM input. Room apps sync their own state through app messages, so another person cannot click or type in your browser. |
 
 ## Contributing
 

@@ -1,14 +1,11 @@
-// Boundary tests for wheel events, pointer-lock refusal policy (Guardrail #5),
-// and BiDi/CDP action parity across core/input.mjs, core/trust.mjs, and host/chrome-cdp.mjs.
+// Boundary tests for pointer-lock refusal policy (Guardrail #5) and BiDi/CDP
+// action parity across core/input.mjs, core/trust.mjs, and host/chrome-cdp.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GrantBook,
-  InputBatcher,
   inputCaptureDecision,
   originDecision,
   pointerLockDecision,
-  replayInput,
   wheelRecord,
 } from '../input.mjs';
 import {
@@ -107,71 +104,6 @@ test('wheelRecord refuses to serialize wheel events because scrolling is strictl
   assert.equal(wheelRecord({ deltaX: 0, deltaY: Number.POSITIVE_INFINITY }), null);
 });
 
-test('replayInput drops wheel and scroll records while preserving non-scroll keys and clicks with modifiers', () => {
-  const canvas = makeElement({
-    tagName: 'CANVAS',
-    rect: { left: 100, top: 40, width: 400, height: 200 },
-  });
-  const box = makeElement({
-    tagName: 'DIV',
-    rect: { left: 20, top: 30, width: 100, height: 60 },
-  });
-  const root = makeRoot({ elements: { '#canvas': canvas, '#box': box, '@50,60': box } });
-
-  const result = replayInput(
-    [
-      {
-        kind: 'wheel',
-        path: '#canvas',
-        canvas: { x: 0.5, y: 0.25 },
-        deltaX: 15,
-        deltaY: -120,
-        deltaMode: 0,
-        ctrl: true,
-        shift: true,
-      },
-      {
-        kind: 'scroll',
-        point: { x: 50, y: 60 },
-        deltaX: 0,
-        deltaY: 40,
-        alt: true,
-      },
-      {
-        kind: 'wheel',
-        path: '#box',
-        deltaX: Number.NaN,
-        deltaY: 120,
-      },
-      {
-        kind: 'key',
-        path: '#box',
-        key: 'z',
-        code: 'KeyZ',
-        meta: true,
-        shift: true,
-      },
-      {
-        kind: 'click',
-        path: '#box',
-        ctrl: true,
-      },
-    ],
-    { root }
-  );
-
-  assert.equal(result.applied, 2);
-  assert.equal(result.dropped, 3);
-  assert.equal(result.reasons.scroll, 3);
-  assert.equal(canvas.events.length, 0);
-
-  const [keyDownEv, keyUpEv, mouseDownEv] = box.events;
-  assert.equal(keyDownEv.metaKey, true);
-  assert.equal(keyDownEv.shiftKey, true);
-  assert.equal(keyUpEv.metaKey, true);
-  assert.equal(mouseDownEv.ctrlKey, true);
-});
-
 test('pointerLockDecision always returns structured { allow, reason } (Guardrail #5)', () => {
   const unlocked = pointerLockDecision({ doc: { pointerLockElement: null } });
   assert.equal(unlocked.allow, true);
@@ -196,35 +128,7 @@ test('pointerLockDecision always returns structured { allow, reason } (Guardrail
   assert.equal(activeRecord.reason, 'pointer-lock-active');
 });
 
-test('GrantBook.decide, originDecision and inputCaptureDecision return structured allow + reason', () => {
-  let now = 0;
-  const book = new GrantBook({ now: () => now });
-  assert.deepEqual(book.decide('peer', { kind: 'move' }), { allow: true, reason: 'free-kind' });
-  assert.deepEqual(book.decide('peer', { kind: 'click' }), { allow: false, reason: 'no-grant' });
-
-  book.grant('peer', { tabId: 'tab-1', origin: 'https://a.test', ttlMs: 100 });
-  assert.deepEqual(
-    book.decide('peer', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }),
-    { allow: true, reason: 'ok' }
-  );
-  assert.deepEqual(
-    book.decide('peer', { tabId: 'tab-1', origin: 'https://b.test', kind: 'click' }),
-    { allow: false, reason: 'origin-mismatch' }
-  );
-  const lockGrant = book.decide('peer', {
-    tabId: 'tab-1',
-    origin: 'https://a.test',
-    kind: 'pointerlock',
-  });
-  assert.equal(lockGrant.allow, false);
-  assert.equal(lockGrant.reason, 'pointer-lock-local');
-
-  now = 200;
-  assert.deepEqual(
-    book.decide('peer', { tabId: 'tab-1', origin: 'https://a.test', kind: 'click' }),
-    { allow: false, reason: 'expired' }
-  );
-
+test('originDecision and inputCaptureDecision return structured allow + reason', () => {
   assert.equal(originDecision('https://www.paypal.com/checkout').allow, false);
   assert.equal(originDecision('https://www.paypal.com/checkout').reason, 'blocked-origin');
   assert.equal(originDecision('not-a-url').reason, 'invalid-origin');
@@ -234,53 +138,6 @@ test('GrantBook.decide, originDecision and inputCaptureDecision return structure
   assert.equal(capLocked.allow, false);
   assert.equal(capLocked.reason, 'pointer-lock-active');
   assert.equal(inputCaptureDecision({ event: { isTrusted: false } }).reason, 'untrusted');
-});
-
-test('InputBatcher and replayInput refuse remote input cleanly under pointer lock', () => {
-  const lockedDoc = { pointerLockElement: { tagName: 'CANVAS' } };
-  const refused = [];
-  const batcher = new InputBatcher({
-    doc: lockedDoc,
-    onRefuse: (decision) => refused.push(decision),
-  });
-
-  const pushRes = batcher.push({ kind: 'click', path: '#go' });
-  const moveRes = batcher.move({ kind: 'move', x: 10, y: 20 });
-  assert.equal(pushRes.allow, false);
-  assert.equal(pushRes.reason, 'pointer-lock-active');
-  assert.equal(moveRes.allow, false);
-  assert.equal(moveRes.reason, 'pointer-lock-active');
-  assert.equal(batcher.flush(), 0);
-  assert.equal(refused.length, 2);
-
-  // Even without an active doc lock, a pointer-lock request is refused.
-  const freeBatcher = new InputBatcher();
-  const reqRes = freeBatcher.push({ kind: 'pointerlock' });
-  assert.equal(reqRes.allow, false);
-  assert.equal(reqRes.reason, 'pointer-lock-local');
-  assert.equal(freeBatcher.flush(), 0);
-
-  // Replay refuses both active local pointer lock and explicit pointer-lock requests.
-  const button = makeElement({ tagName: 'BUTTON' });
-  const lockedRoot = makeRoot({ elements: { '#go': button }, pointerLockElement: button });
-  const drops = [];
-  const lockedReplay = replayInput(
-    [
-      { kind: 'click', path: '#go' },
-      { kind: 'wheel', path: '#go', deltaY: 120 },
-      { kind: 'move', x: 1, y: 2 },
-    ],
-    { root: lockedRoot, onDrop: (reason) => drops.push(reason) }
-  );
-  assert.equal(lockedReplay.applied, 0);
-  assert.equal(lockedReplay.dropped, 3);
-  assert.equal(lockedReplay.reasons['pointer-lock-active'], 3);
-  assert.deepEqual(drops, ['pointer-lock-active', 'pointer-lock-active', 'pointer-lock-active']);
-
-  const openRoot = makeRoot({ elements: { '#go': button } });
-  const reqReplay = replayInput([{ kind: 'pointerlock', path: '#go' }], { root: openRoot });
-  assert.equal(reqReplay.applied, 0);
-  assert.equal(reqReplay.reasons['pointer-lock-local'], 1);
 });
 
 test('trustDecision, prepareRecords and createTrustClient preserve refusal reasons', async () => {
@@ -297,10 +154,7 @@ test('trustDecision, prepareRecords and createTrustClient preserve refusal reaso
     trustDecision({ kind: 'wheel', path: '#q', deltaY: Number.NaN }, openDoc).reason,
     'scroll'
   );
-  assert.equal(
-    trustDecision({ kind: 'wheel', path: '#q', deltaY: 120 }, openDoc).allow,
-    false
-  );
+  assert.equal(trustDecision({ kind: 'wheel', path: '#q', deltaY: 120 }, openDoc).allow, false);
   assert.equal(
     trustDecision({ kind: 'scroll', path: '#q', deltaY: 120 }, openDoc).reason,
     'scroll'
@@ -338,27 +192,15 @@ test('trustDecision, prepareRecords and createTrustClient preserve refusal reaso
 });
 
 test('scroll records are refused while pointer, special keys and modifiers maintain full BiDi <-> CDP parity', () => {
-  // 1. Wheel and scroll records are never converted into BiDi actions.
   assert.equal(
-    actionsForRecord({
-      kind: 'wheel',
-      point: { x: 10.4, y: 20.6 },
-      deltaX: 3.2,
-      deltaY: -120.8,
-    }),
+    actionsForRecord({ kind: 'wheel', point: { x: 10.4, y: 20.6 }, deltaX: 3.2, deltaY: -120.8 }),
     null
   );
   assert.equal(
-    actionsForRecord({
-      kind: 'scroll',
-      point: { x: 50, y: 60 },
-      deltaX: 0,
-      deltaY: 120,
-    }),
+    actionsForRecord({ kind: 'scroll', point: { x: 50, y: 60 }, deltaX: 0, deltaY: 120 }),
     null
   );
 
-  // 2. Modified click produces tick-aligned BiDi key+pointer and CDP modifiers: 2.
   const clickActions = actionsForRecord({
     kind: 'click',
     point: { x: 120, y: 240 },
@@ -371,11 +213,10 @@ test('scroll records are refused while pointer, special keys and modifiers maint
   const clickCdp = cdpEvents(clickActions);
   assert.equal(clickCdp[0].params.key, 'Control');
   assert.equal(clickCdp[0].params.modifiers, 2);
-  const pressed = clickCdp.find((e) => e.params.type === 'mousePressed');
+  const pressed = clickCdp.find((event) => event.params.type === 'mousePressed');
   assert.ok(pressed);
   assert.equal(pressed.params.modifiers, 2);
 
-  // 4. Special keys encode as WebDriver BiDi single code points and map cleanly in CDP.
   const enterActions = actionsForRecord({ kind: 'key', key: 'Enter' });
   assert.equal(enterActions[0].actions[0].value, BIDI_KEYS.Enter);
   assert.equal(Array.from(enterActions[0].actions[0].value).length, 1);
@@ -385,7 +226,6 @@ test('scroll records are refused while pointer, special keys and modifiers maint
   assert.equal(enterCdp[0].params.windowsVirtualKeyCode, 13);
   assert.equal(enterCdp[0].params.text, '\r');
 
-  // 5. Modifier chord Ctrl+a sends rawKeyDown with modifiers: 2 (no literal text insertion).
   const chordActions = actionsForRecord({ kind: 'key', key: 'a', ctrl: true });
   const chordCdp = cdpEvents(chordActions);
   assert.equal(chordCdp.length, 4);
@@ -394,16 +234,19 @@ test('scroll records are refused while pointer, special keys and modifiers maint
   assert.equal(chordCdp[1].params.modifiers, 2);
   assert.equal(chordCdp[1].params.text, undefined);
 
-  // 6. Pressing Control itself with ctrl: true does not duplicate Control keyDown.
   const selfMod = actionsForRecord({ kind: 'key', key: 'Control', ctrl: true });
   assert.equal(selfMod[0].actions.length, 2);
 
-  // 7. Space character inside text gets code: 'Space' in CDP, and unmapped multi-char keys return null.
   assert.deepEqual(keyFor(' '), { key: ' ', code: 'Space', keyCode: 32, text: ' ' });
   assert.equal(actionsForRecord({ kind: 'key', key: 'Dead' }), null);
 
-  // 8. Invalid wheel deltas or non-finite points never produce NaN payloads.
-  assert.equal(actionsForRecord({ kind: 'wheel', point: { x: Number.NaN, y: 10 }, deltaY: 120 }), null);
-  assert.equal(actionsForRecord({ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: Number.POSITIVE_INFINITY }), null);
+  assert.equal(
+    actionsForRecord({ kind: 'wheel', point: { x: Number.NaN, y: 10 }, deltaY: 120 }),
+    null
+  );
+  assert.equal(
+    actionsForRecord({ kind: 'wheel', point: { x: 10, y: 20 }, deltaY: Number.POSITIVE_INFINITY }),
+    null
+  );
   assert.equal(actionsForRecord({ kind: 'pointerlock' }), null);
 });

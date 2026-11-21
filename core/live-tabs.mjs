@@ -1,4 +1,4 @@
-// A shared tab is a tab someone with control chose to publish. Peers see it in
+// A shared tab is a tab someone in the room chose to publish. Peers see it in
 // a list and open a copy only when they click. Nothing opens by itself.
 
 import { shareable } from './tabs.mjs';
@@ -25,7 +25,7 @@ export function sharedTab(data, { from = '', hostId = null } = {}) {
   // The sender names itself, so a peer cannot borrow the host's row by saying
   // it is the host. Only the receiver's own host id grants that role.
   const ownerId = String(from || data.ownerId || '');
-  const role = ownerId && hostId && ownerId === String(hostId) ? 'host' : 'control';
+  const role = ownerId && hostId && ownerId === String(hostId) ? 'host' : 'peer';
   return {
     key: String(data.key),
     url: String(data.url),
@@ -39,15 +39,13 @@ export function sharedTab(data, { from = '', hostId = null } = {}) {
   };
 }
 
-// Guardrail #5: every policy returns allow plus a named reason. A TAB_APP
-// open/media/close frame is accepted only from the room host or a currently
-// granted peer, and cannot overwrite, update, or close another owner's row.
+// Guardrail #5: every policy returns allow plus a named reason. Any room member
+// may open a new tab offer and become its tab host (ownerId). Only the tab host
+// can change its video (open on an existing key), update media state, or close it.
 export function tabActionDecision({
   action,
   key,
   from = '',
-  hostId = null,
-  granted = false,
   list = [],
 } = {}) {
   const sender = String(from || '');
@@ -57,8 +55,6 @@ export function tabActionDecision({
   }
   const id = key === undefined || key === null ? '' : String(key);
   if (!id) return { allow: false, reason: 'no-key' };
-  const isHost = Boolean(hostId && sender === String(hostId));
-  if (!isHost && !granted) return { allow: false, reason: 'no-control' };
   const current = Array.isArray(list) ? list : [];
   const existing = current.find((entry) => entry && entry.key === id);
   if (existing && existing.ownerId && existing.ownerId !== sender) {
@@ -96,22 +92,18 @@ export function rememberSharedTab(list, tab) {
 }
 
 // Guardrail #5: explicit decision for inline Live Tabs media controls.
-// Only the room host or a currently granted peer may drive playback, and only
-// on a tab this browser holds (published or joined).
+// Anyone in the room may play, pause, or skip on a shared tab this browser
+// holds locally (published or joined).
 export const MAX_TAB_SKIP_SECONDS = 600;
 export function tabMediaControlDecision({
   key,
   action,
   delta = 0,
-  role = 'peer',
-  granted = false,
   mine = false,
   joined = false,
 } = {}) {
   const id = key === undefined || key === null ? '' : String(key);
   if (!id) return { allow: false, reason: 'no-key' };
-  const canControl = role === 'host' || granted === true;
-  if (!canControl) return { allow: false, reason: 'no-control' };
   if (!mine && !joined) return { allow: false, reason: 'not-local' };
   const act = String(action || '');
   if (act !== 'toggle' && act !== 'play' && act !== 'pause' && act !== 'skip') {
@@ -173,8 +165,7 @@ export function noteSharedMedia(list, media, { ownerId = null } = {}) {
   });
 }
 
-// The landing page draws one group per person with control. The host sorts
-// first because that is the person a room expects to drive.
+// The landing page draws one group per tab host. The room host sorts first.
 export function groupSharedTabs(list, { hostId = null } = {}) {
   const groups = new Map();
   for (const tab of Array.isArray(list) ? list : []) {
@@ -185,7 +176,7 @@ export function groupSharedTabs(list, { hostId = null } = {}) {
       groups.set(key, {
         ownerId: id || null,
         owner: tab.owner || 'Guest',
-        role: id && hostId && id === String(hostId) ? 'host' : tab.role || 'control',
+        role: id && hostId && id === String(hostId) ? 'host' : tab.role === 'host' ? 'host' : 'peer',
         tabs: [],
       });
     }

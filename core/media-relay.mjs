@@ -236,13 +236,6 @@ export function projectPosition(state, now = Date.now()) {
 // its own. A stale copy reads as no copy.
 export const RELAY_STALE_MS = 8000;
 
-// A hold is carried by a single frame, and that frame can be lost. The source
-// that stuttered normally sends the release, but a peer that just lost control
-// cannot send anything, and a room tab that restarted forgot the hold it was
-// carrying. A tab that waits forever for a release freezes the film for the
-// rest of the session, so a hold also expires on its own.
-export const RELAY_HOLD_MAX_MS = 15000;
-
 // A frame this tab applies changes its player, and the player then emits the
 // action it was told to perform. Only that action is an echo. A blanket window
 // around every correction swallowed a real pause or seek made just after the
@@ -252,7 +245,7 @@ export const MEDIA_ECHO_MS = 600;
 export function remoteMediaEcho(result, previous, frame, at = Date.now()) {
   if (!result || !frame) return null;
   const actions = new Set();
-  if (result.skipped === 'buffer' || result.action === 'hold') actions.add('pause');
+  if (result.skipped === 'buffer') actions.add('pause');
   if (result.action === 'seek' || result.action === 'seek-retry') actions.add('seek');
   if (result.rateChanged) actions.add('rate');
   if (result.ok && !result.skipped) {
@@ -541,11 +534,6 @@ export class RemoteMediaSync {
     // The rate the room asked for. A nudge is this tab's own correction, so it
     // never becomes the rate this tab reports back to the room.
     this.roomRate = null;
-    // A room hold pauses the film until the source that stuttered is ready.
-    // Without this flag a routine host tick would start it again underneath
-    // the hold.
-    this.held = false;
-    this.heldAt = 0;
     this.stats = {
       applied: 0,
       seeks: 0,
@@ -553,21 +541,19 @@ export class RemoteMediaSync {
       stuckSeeks: 0,
       bufferWaits: 0,
       bufferHolds: 0,
-      holds: 0,
       expiredHolds: 0,
       rateChanges: 0,
       lastRate: null,
       last: null,
     };
-    // The report needs the path, not only the totals: which point was wanted,
-    // how long the wait lasted, and whether the hold released or expired.
-    this.history = { seeks: [], buffers: [], holds: [] };
+    // The report needs the path, not only the totals: which point was wanted
+    // and how long the wait lasted.
+    this.history = { seeks: [], buffers: [] };
     // The rate corrections this tab ran. A film that keeps getting slower is
     // visible here: each entry names the room rate beside the rate the element
     // ran, so a correction that leaked back out shows as a step.
     this.rateTrace = [];
     this.bufferWait = null;
-    this.holdEvent = null;
   }
 
   markEcho(action, now = this.now()) {
@@ -821,7 +807,6 @@ export class RemoteMediaSync {
     return {
       seeks: copy(this.history.seeks),
       buffers: copy(this.history.buffers),
-      holds: copy(this.history.holds),
     };
   }
 
@@ -843,25 +828,6 @@ export class RemoteMediaSync {
     event.outcome = outcome;
     event.durationMs = Math.max(0, Math.round(now - Number(event.at || now)));
     this.bufferWait = null;
-  }
-
-  beginHold(now, frame) {
-    this.holdEvent = this.recordEvent('holds', {
-      at: now,
-      position: Math.round(Number(frame.position || 0) * 1000) / 1000,
-      playing: Boolean(frame.playing),
-      releasedAt: null,
-      outcome: null,
-    });
-  }
-
-  finishHold(now, outcome) {
-    if (!this.holdEvent) return;
-    const event = this.holdEvent;
-    event.releasedAt = now;
-    event.outcome = outcome;
-    event.durationMs = Math.max(0, Math.round(now - Number(event.at || now)));
-    this.holdEvent = null;
   }
 
   recordSeek(now, target, kind) {
@@ -962,54 +928,6 @@ export class RemoteMediaSync {
     // against that rate and never against the corrected element.
     const asked = Number(frame.rate);
     const roomRate = Number.isFinite(asked) && asked > 0 ? asked : this.roomRate || 1;
-    // A hold is not a playhead correction. It pauses this tab and keeps it
-    // paused until the room sends the release that carries the source's
-    // position. A normal tick during that window must not resume the film.
-    if (frame.hold === true) {
-      if (!video.paused) {
-        this.markEcho('pause', now);
-        video.pause();
-      }
-      // A hold can be the room's answer to this very buffer wait. Keep the
-      // wait, or the release starts the film at the old point and the hold
-      // begins again. A hold that came from another source also keeps the
-      // wait; the film stays paused until the range arrives either way.
-      this.bufferWaitActive(now);
-      if (!this.held) this.beginHold(now, frame);
-      else if (this.holdEvent) {
-        this.holdEvent.position = Math.round(Number(frame.position || 0) * 1000) / 1000;
-        this.holdEvent.playing = Boolean(frame.playing);
-      }
-      this.held = true;
-      this.heldAt = now;
-      this.stats.holds += 1;
-      this.stats.last = 'hold';
-      return { ok: true, action: 'hold' };
-    }
-    if (this.held && frame.hold !== false) {
-      if (now - this.heldAt < RELAY_HOLD_MAX_MS) {
-        if (!video.paused) {
-          this.markEcho('pause', now);
-          video.pause();
-        }
-        // The room hold may be the answer to this buffer wait. Once the range
-        // arrives or the wait deadline passes, stop reporting buffering so the
-        // room can release; the release frame then seeks instead of waiting.
-        this.bufferWaitActive(now);
-        this.stats.skips += 1;
-        this.stats.last = 'held';
-        return { ok: true, skipped: 'held' };
-      }
-      // The release never came. Honour the hold for its lifetime and then
-      // follow the room again rather than stay paused until a page reload.
-      this.finishHold(now, 'expired');
-      this.held = false;
-      this.stats.expiredHolds += 1;
-    }
-    if (frame.hold === false) {
-      if (this.held) this.finishHold(now, 'released');
-      this.held = false;
-    }
     // The host sits in an ad, so its frame names the ad clock and not the film.
     // Applying it would drag this tab off the film and back again on every
     // tick. The ad lasts seconds, so the tab waits it out and the room resumes.

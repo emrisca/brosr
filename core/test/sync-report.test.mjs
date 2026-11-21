@@ -30,14 +30,12 @@ const reply = {
         name: 'Ada',
         self: true,
         build: { version: '0.4.0' },
-        granted: false,
       },
       {
         id: 'guest-1',
         name: 'Bob',
         self: false,
         build: { version: '0.3.9' },
-        granted: true,
       },
     ],
     media: {
@@ -119,25 +117,6 @@ const reply = {
         hostAct: { action: 'seek', position: 62.4, rate: 1, at: NOW - 1000 },
       },
     ],
-    holds: [
-      {
-        peerId: 'guest-1',
-        key: 'youtube:abc',
-        position: 62.4,
-        playing: false,
-        at: NOW - 2000,
-        ageMs: 2000,
-      },
-    ],
-    lastHoldEvent: {
-      peerId: 'guest-1',
-      key: 'youtube:abc',
-      active: false,
-      position: 62.4,
-      playing: false,
-      at: NOW - 2000,
-      eventAt: NOW - 1000,
-    },
     hostPriority: { lastActAt: NOW - 1000, remainingMs: 0 },
     lastMediaFrame: {
       key: 'youtube:abc',
@@ -156,15 +135,10 @@ const reply = {
     mediaEcho: 2,
     firstDrift: 0.8,
     convergedAt: NOW - 500,
-    controlSent: 1,
-    controlReceived: 0,
-    lastControl: { peerId: 'guest-1', allowed: true, mine: false },
-    controlHistory: [{ peerId: 'guest-1', allowed: true, roomTime: 5000 }],
     latency: { n: 10, p50: 20, p95: 45, max: 80 },
     clockOffset: 12,
     driftRate: 1.002,
     sampleCount: 12,
-    sameFate: true,
     seal: { mode: 'on' },
     debug: {
       expected: 62.7,
@@ -184,7 +158,7 @@ const reading = {
   relay: {
     applies: 42,
     last: { drift: -0.2 },
-    stats: { applied: 30, bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9, holds: 3 },
+    stats: { applied: 30, bufferWaits: 3, bufferHolds: 2, stuckSeeks: 1, seeks: 5, skips: 9 },
     localDrops: { echo: 2 },
     lastLocalDrop: { reason: 'echo', action: 'pause', at: NOW - 250 },
     history: {
@@ -194,9 +168,6 @@ const reading = {
       ],
       buffers: [
         { at: NOW - 3000, target: 60, resolvedAt: NOW - 2000, outcome: 'ready', durationMs: 1000 },
-      ],
-      holds: [
-        { at: NOW - 5000, position: 60, playing: false, releasedAt: NOW - 4000, outcome: 'released', durationMs: 1000 },
       ],
     },
   },
@@ -223,7 +194,7 @@ test('the sync report carries the room, both sides and the film reading', () => 
   assert.match(text, /Local gap: 0\.50 s behind the room/);
   assert.match(
     text,
-    /Reading: 42 frames · 30 applied · 9 skipped · 3 holds · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
+    /Reading: 42 frames · 30 applied · 9 skipped · 0\.20 s on the last frame · 0\.50 s from the room · 3 buffer waits · 1 stuck seek/
   );
   assert.match(text, /Last media action: Bob paused the video at 2026-11-18T19:04:11\.000Z/);
   assert.match(
@@ -235,7 +206,6 @@ test('the sync report carries the room, both sides and the film reading', () => 
     /Relay seeks: 1:01\.9 \(seek\) at 19:04:10\.000Z; 1:02\.2 \(retry\) at 19:04:11\.000Z/
   );
   assert.match(text, /Relay buffer waits: 1:00\.0 ready after 1\.0 s at 19:04:09\.000Z/);
-  assert.match(text, /Relay holds: 1:00\.0, paused, released after 1\.0 s at 19:04:07\.000Z/);
   assert.match(
     text,
     /Host act behind drop: seek, target 1:02\.4, at 2026-11-18T19:04:11\.000Z/
@@ -257,20 +227,11 @@ test('the sync report carries the room, both sides and the film reading', () => 
   );
   assert.match(
     text,
-    /Holds: Bob for 2\.0 s at 1:02\.4, paused/
-  );
-  assert.match(
-    text,
-    /Last hold: released by Bob at 2026-11-18T19:04:11\.000Z \(1:02\.4, paused\)/
-  );
-  assert.match(
-    text,
     /Host priority: clear, last host act at 2026-11-18T19:04:11\.000Z/
   );
   assert.match(text, /Last media frame: 1:02\.4, paused, 1\.00 s ago/);
   assert.match(text, /Last seek: 1:01\.9 at 2026-11-18T19:04:11\.000Z/);
   assert.match(text, /"mediaDrops":\{"host-priority":2,"hold":1\}/);
-  assert.match(text, /"holds":\[\{"peerId":"guest-1"/);
   assert.match(text, /"hostPriority":\{"lastActAt":\d+,"remainingMs":0\}/);
   assert.match(text, /"mediaDropTicks":\{"hold":12\}/);
   assert.match(text, /"lastLocalDrop":\{"reason":"echo"/);
@@ -297,7 +258,7 @@ test('the report adds the host to a roster that only names peers', () => {
   const text = buildSyncReport(data, reading, { now: NOW });
   assert.match(text, /Peers: 2/);
   assert.match(text, /- Ada \(host-1\) bridge 0\.4\.0 \[you\]/);
-  assert.match(text, /- Bob \(guest-1\) bridge 0\.3\.9 \[control\]/);
+  assert.match(text, /- Bob \(guest-1\) bridge 0\.3\.9$/m);
 });
 
 test('the sync report leaves invite keys and token parameters out', () => {

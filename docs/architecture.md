@@ -16,9 +16,9 @@ Part of the [Brosr design index](README.md).
 |  room profile: the blocker, the bridge, P-Stream, and more    |
 |                                                               |
 |  tab A ......... room tab                                     |
-|    content script: cursors, scroll, media, input capture      |
+|    content script: cursors, scroll, media, room-app state     |
 |  panel ......... room UI                                      |
-|    members, grants, playback, "Alice has control"              |
+|    members, shared tabs, playback, "Alice hosts this tab"      |
 |  background page . sync core, sealing, relay client, ordering |
 +------------------------------+--------------------------------+
                                | sealed frames
@@ -44,10 +44,11 @@ Part of the [Brosr design index](README.md).
 4. **Relay.** One Rust binary with axum. It forwards sealed frames between the members of a
    room and stores nothing.
 
-**Authority.** The room has one host, the person who created it. The host sequences layers 1
-and 3, so two people pressing play at once is not a race. Layer 4 has no single authority,
-because both players must press a key at the same moment. Each peer numbers its own input
-stream, and receivers apply them in per-peer order.
+**Authority.** The room has one host, the person who created it. The host sequences navigation
+and the shared playhead, so two people pressing play at once is not a race. A shared tab also
+has its own host: the person who offered it. Any peer may play, pause or seek that tab, but only
+its host changes the source. Room apps carry their own state through app messages, so no peer
+injects DOM input into another browser.
 
 **Late join.** A joiner receives a snapshot: URL, tab list, scroll ratio, media position with
 its room timestamp, and the member list with colours. Then it applies the live stream from the
@@ -65,8 +66,8 @@ The app owns everything around the room.
   `--user-data-dir`, so a room is a separate instance beside the person's daily browser. The
   cost is that logins and add-ons do not carry over, and setup says so.
 - **Panel.** The room UI is the extension's own popup, declared as `default_popup` in both
-  manifests. It shows members with colours, who holds a grant, playback state, relay status and
-  the invite link. The toolbar icon and the room chord open it, and it never opens a window of
+  manifests. It shows members with colours, who hosts each shared tab, playback state, relay
+  status and the invite link. The toolbar icon and the room chord open it, and it never opens a window of
   its own.
 - **Add-ons.** Full uBlock Origin installs from its add-on page in one click. The bridge needs
   a signed build or a temporary add-on, and setup shows which. On Chromium the bridge, the
