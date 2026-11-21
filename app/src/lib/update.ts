@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 
@@ -41,7 +42,7 @@ export async function installUpdate(
 ): Promise<void> {
   let total = 0;
   let done = 0;
-  await update.downloadAndInstall((event) => {
+  await update.download((event) => {
     if (event.event === 'Started') {
       total = event.data.contentLength ?? 0;
     } else if (event.event === 'Progress') {
@@ -51,5 +52,14 @@ export async function installUpdate(
       onProgress(100);
     }
   });
+  // Pause background host polling and stop the active room plus the detached
+  // invite lobby before the installer overwrites bundled node.exe / relay.
+  await invoke('prepare_update').catch(() => {});
+  try {
+    await update.install();
+  } catch (error) {
+    await invoke('resume_host').catch(() => {});
+    throw error;
+  }
   await relaunch();
 }

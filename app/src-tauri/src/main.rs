@@ -9,6 +9,8 @@ use std::io::{BufRead, BufReader};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
@@ -214,11 +216,84 @@ fn run_host(app: &AppHandle, args: Vec<String>) -> Result<Value, String> {
     serde_json::from_str(line).map_err(|error| format!("The host answer did not parse: {error}"))
 }
 
+// Gate host CLI invocations during an in-place update so background polling
+// timers cannot respawn bundled node.exe after prepare_update shuts it down.
+struct HostGate {
+    paused: AtomicBool,
+    active: AtomicUsize,
+}
+
+struct HostCallGuard<'a> {
+    gate: &'a HostGate,
+}
+
+impl Drop for HostCallGuard<'_> {
+    fn drop(&mut self) {
+        self.gate.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl HostGate {
+    const fn new() -> Self {
+        Self {
+            paused: AtomicBool::new(false),
+            active: AtomicUsize::new(0),
+        }
+    }
+
+    fn enter(&self) -> Result<HostCallGuard<'_>, String> {
+        self.active.fetch_add(1, Ordering::SeqCst);
+        let guard = HostCallGuard { gate: self };
+        if self.paused.load(Ordering::SeqCst) {
+            return Err("Brosr is updating.".to_string());
+        }
+        Ok(guard)
+    }
+
+    fn pause_and_wait(&self, timeout: Duration) -> bool {
+        self.paused.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + timeout;
+        while self.active.load(Ordering::SeqCst) > 0 {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        true
+    }
+
+    fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+    }
+}
+
+static HOST_GATE: HostGate = HostGate::new();
+
 #[tauri::command]
 async fn host(app: AppHandle, args: Vec<String>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || run_host(&app, args))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = HOST_GATE.enter()?;
+        run_host(&app, args)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn prepare_update(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        HOST_GATE.pause_and_wait(Duration::from_secs(5));
+        let _ = run_host(&app, vec!["shutdown".to_string()]);
+        #[cfg(windows)]
+        std::thread::sleep(Duration::from_millis(150));
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resume_host() {
+    HOST_GATE.resume();
 }
 
 fn main() {
@@ -227,7 +302,7 @@ fn main() {
         // process plugin restarts the app after an install.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![host])
+        .invoke_handler(tauri::generate_handler![host, prepare_update, resume_host])
         .run(tauri::generate_context!())
         .expect("error while running Brosr");
 }
@@ -321,5 +396,27 @@ mod tests {
         assert!(err.contains("BROSR_NODE"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_gate_blocks_new_calls_and_waits_for_active_call_to_finish() {
+        let gate = HostGate::new();
+        let active_guard = gate.enter().expect("initial call enters");
+
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                std::thread::sleep(Duration::from_millis(60));
+                drop(active_guard);
+            });
+            assert!(gate.pause_and_wait(Duration::from_secs(2)));
+        });
+
+        let err = gate.enter().err().expect("paused gate must reject");
+        assert!(err.contains("updating"));
+
+        gate.resume();
+        let resumed = gate.enter().expect("resumed gate allows calls");
+        drop(resumed);
+        assert!(gate.pause_and_wait(Duration::from_millis(50)));
     }
 }

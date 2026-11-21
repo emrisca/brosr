@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { formatAddress, isAllowedHost, isLoopbackHost, isTailnetHost } from '../core/friends.mjs';
 import { addInvite, lobbyBinds, LOBBY_PORT, readInvites, STATE } from './friends.mjs';
@@ -68,14 +68,35 @@ function sameBinds(saved, binds) {
 }
 
 async function stopLobby(pid) {
-  if (!alive(pid)) return;
+  if (!alive(pid)) return false;
   try {
-    process.kill(pid, 'SIGTERM');
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
   } catch {
     // A lobby that exited first has nothing to stop.
   }
   const until = Date.now() + 1500;
   while (Date.now() < until && alive(pid)) await delay(50);
+  return !alive(pid);
+}
+
+// Stop the detached invite lobby recorded in state so in-place app updates can
+// overwrite the bundled Node runtime cleanly on Windows.
+export async function stopLobbyProcess() {
+  const saved = readLobby();
+  if (!saved || !Number.isInteger(saved.pid)) {
+    return { stopped: false, pid: null };
+  }
+  const wasAlive = alive(saved.pid);
+  if (wasAlive) await stopLobby(saved.pid);
+  clearLobby(saved.pid);
+  return { stopped: wasAlive && !alive(saved.pid), pid: saved.pid };
 }
 
 function remoteHost(value) {

@@ -307,3 +307,94 @@ test('release workflow publishes atomically via draft release after uploading la
     'release.yml must upload latest.json before flipping --draft=false'
   );
 });
+
+test('windows NSIS hooks and pre-update flow release bundled node.exe and relay locks', () => {
+  const conf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+  const hooksRel = conf?.bundle?.windows?.nsis?.installerHooks;
+  assert.equal(
+    typeof hooksRel,
+    'string',
+    'tauri.conf.json must configure bundle.windows.nsis.installerHooks'
+  );
+  const hooksFile = path.resolve(path.dirname(tauriConfPath), hooksRel);
+  assert.equal(fs.existsSync(hooksFile), true, `missing NSIS hooks file at ${hooksFile}`);
+  const hooks = fs.readFileSync(hooksFile, 'utf8');
+  assert.match(hooks, /!macro\s+NSIS_HOOK_PREINSTALL/);
+  assert.match(hooks, /!macro\s+NSIS_HOOK_PREUNINSTALL/);
+  assert.match(hooks, /\$\{__FILEDIR__\}/);
+  assert.match(hooks, /stop-helpers\.ps1/);
+  assert.match(hooks, /nsExec::ExecToLog/);
+  assert.match(hooks, /-InstallDir "\$INSTDIR\\\."/);
+  assert.match(hooks, /Pop \$0/);
+
+  const psFile = path.join(path.dirname(hooksFile), 'stop-helpers.ps1');
+  assert.equal(fs.existsSync(psFile), true, `missing PowerShell helper at ${psFile}`);
+  const ps = fs.readFileSync(psFile, 'utf8');
+  assert.match(ps, /\$root\\resources\\/);
+  assert.match(ps, /\$root\\Brosr\.exe/);
+  assert.match(ps, /taskkill\.exe/);
+  assert.doesNotMatch(
+    ps,
+    /\/IM\s+node\.exe/i,
+    'stop-helpers.ps1 must only stop processes under $INSTDIR, never unrelated system node.exe'
+  );
+
+  const updateTs = fs.readFileSync(path.join(repo, 'app/src/lib/update.ts'), 'utf8');
+  const downloadIdx = updateTs.indexOf('update.download(');
+  const prepareIdx = updateTs.indexOf("invoke('prepare_update')");
+  const installIdx = updateTs.indexOf('update.install(');
+  const resumeIdx = updateTs.indexOf("invoke('resume_host')");
+  assert.notEqual(downloadIdx, -1, 'update.ts must call update.download before stopping helpers');
+  assert.notEqual(prepareIdx, -1, 'update.ts must invoke prepare_update before update.install');
+  assert.notEqual(installIdx, -1, 'update.ts must call update.install after prepare_update');
+  assert.notEqual(resumeIdx, -1, 'update.ts must invoke resume_host if install fails');
+  assert.equal(downloadIdx < prepareIdx && prepareIdx < installIdx, true);
+});
+
+test('host/cli.mjs shutdown stops a live detached invite lobby and removes lobby.json', async () => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'brosr-shutdown-'));
+  const port = 43000 + Math.floor(Math.random() * 10000);
+  const env = {
+    ...process.env,
+    BROSR_STATE: scratch,
+    BROSR_LOBBY_PORT: String(port),
+  };
+  let lobbyPid = null;
+  try {
+    const startRes = spawnSync(process.execPath, [path.join(repo, 'host/cli.mjs'), 'friends'], {
+      cwd: repo,
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(startRes.status, 0, startRes.stderr || startRes.stdout);
+    const started = JSON.parse(startRes.stdout.trim().split('\n').at(-1));
+    assert.equal(started.ok, true);
+    assert.equal(started.lobby.running, true);
+    lobbyPid = started.lobby.pid;
+    assert.equal(Number.isInteger(lobbyPid), true);
+    assert.doesNotThrow(() => process.kill(lobbyPid, 0), 'detached lobby should be alive before shutdown');
+
+    const stopRes = spawnSync(process.execPath, [path.join(repo, 'host/cli.mjs'), 'shutdown'], {
+      cwd: repo,
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(stopRes.status, 0, stopRes.stderr || stopRes.stdout);
+    const stopped = JSON.parse(stopRes.stdout.trim().split('\n').at(-1));
+    assert.equal(stopped.ok, true);
+    assert.equal(stopped.lobby.stopped, true);
+    assert.equal(stopped.lobby.pid, lobbyPid);
+    assert.throws(() => process.kill(lobbyPid, 0), 'detached lobby should be dead after shutdown');
+    assert.equal(fs.existsSync(path.join(scratch, 'lobby.json')), false, 'lobby.json should be removed');
+    lobbyPid = null;
+  } finally {
+    if (lobbyPid) {
+      try {
+        process.kill(lobbyPid, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }
+    await rm(scratch, { recursive: true, force: true });
+  }
+});

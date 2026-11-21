@@ -27,7 +27,7 @@ import {
   removeInvite,
   sendInvite,
 } from './friends.mjs';
-import { ensureLobby } from './lobby.mjs';
+import { ensureLobby, stopLobbyProcess } from './lobby.mjs';
 import { discoverRooms } from './discovery.mjs';
 import { makeInvite } from '../core/friends.mjs';
 
@@ -146,6 +146,14 @@ const COMMANDS = {
 
   async stop() {
     return stop();
+  },
+
+  // Stop any running room and the detached invite lobby together so an
+  // in-place update releases every handle on the bundled Node and relay files.
+  async shutdown() {
+    const room = stop();
+    const lobby = await stopLobbyProcess();
+    return { ok: true, room, lobby };
   },
 
   // The friend list, the pending invites and the address this machine offers.
